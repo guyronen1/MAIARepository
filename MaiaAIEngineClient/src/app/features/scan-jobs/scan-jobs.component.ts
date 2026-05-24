@@ -67,10 +67,6 @@ interface ScanRun { job: MonitoredJob; result: ScanResult | null; running: boole
                       <span class="stat-value">{{ run.result.recommendations }}</span>
                       <span class="stat-label">Recommended</span>
                     </div>
-                    <div class="result-stat">
-                      <span class="stat-value">{{ run.result.fixesExecuted }}</span>
-                      <span class="stat-label">Fixed</span>
-                    </div>
                   </div>
                   <p class="result-detail text-muted text-sm">{{ run.result.detail }}</p>
                 </div>

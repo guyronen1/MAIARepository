@@ -4,6 +4,5 @@ export interface ScanResult {
   failuresDetected:  number;
   classifications:   number;
   recommendations:   number;
-  fixesExecuted:     number;
   detail:            string;
 }
