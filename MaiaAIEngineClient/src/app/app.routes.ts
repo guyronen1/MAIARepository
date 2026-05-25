@@ -15,6 +15,7 @@ export const routes: Routes = [
       { path: 'scan-jobs',    loadComponent: () => import('./features/scan-jobs/scan-jobs.component').then(m => m.ScanJobsComponent) },
       { path: 'config/monitored-jobs', loadComponent: () => import('./features/config/monitored-jobs/monitored-jobs.component').then(m => m.MonitoredJobsComponent) },
       { path: 'config/classification-rules', loadComponent: () => import('./features/config/classification-rules/classification-rules.component').then(m => m.ClassificationRulesComponent) },
+      { path: 'config/error-types',          loadComponent: () => import('./features/config/error-types/error-types.component').then(m => m.ErrorTypesComponent) },
     ]
   },
   { path: '**', redirectTo: '' }

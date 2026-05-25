@@ -197,7 +197,7 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
                     <div class="tab-content">
                       <div class="section-header">
                         <span class="section-desc">
-                          Regex patterns that map detected errors to known error types for this job
+                          Substring patterns (with optional <code>*</code> wildcards) that map detected errors to known error types for this job
                         </span>
                         <div style="display:flex;gap:6px">
                           <button class="btn btn-ghost btn-sm" (click)="openLinkClassRuleDrawer(j)">
@@ -507,10 +507,10 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
           </div>
           <div class="form-grid">
             <div class="form-group span2">
-              <label>Regex Pattern *</label>
+              <label>Match Pattern *</label>
               <input [(ngModel)]="classRuleForm.pattern"
-                     placeholder="e.g. FileNotFoundException|Cannot open file" />
-              <span class="field-hint">Matched against error message text. Supports .NET regex.</span>
+                     placeholder="e.g. FileNotFoundException  or  Error code * occurred" />
+              <span class="field-hint">Case-insensitive substring of the error message. Use <code>*</code> as a wildcard for any text. Other regex characters are matched literally.</span>
             </div>
             <div class="form-group span2">
               <label>Error Type *</label>

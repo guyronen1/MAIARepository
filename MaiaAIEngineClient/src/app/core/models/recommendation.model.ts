@@ -1,17 +1,21 @@
-export type FixCategory = 'AutoFix' | 'Manual' | 'Notify' | 'Escalate';
+export type FixCategory = 'Retry' | 'FileRepair' | 'DbFix' | 'Manual';
 
 export interface Recommendation {
-  recommendationId:  number;
-  failureId:         number;
-  errorTypeCode:     string;
-  suggestedAction:   string;
-  fixCategory:       FixCategory;
-  confidenceScore:   number;
-  explanation:       string | null;
-  autoFixAvailable:  boolean;
-  operatorApproved:  boolean | null;
-  isExecuted:        boolean;
-  recommendedAt:     string;
+  recommendationId:         number;
+  failureId:                number;
+  errorTypeCode:            string | null;
+  errorTypeId:              number;
+  jobTypeId:                number | null;
+  suggestedAction:          string;
+  fixCategory:              FixCategory;
+  confidenceScore:          number;
+  explanation:              string | null;
+  autoFixAvailable:         boolean;        // frozen snapshot from generation time
+  operatorApproved:         boolean | null;
+  isExecuted:               boolean;
+  recommendedAt:            string;
+  fixPolicyRuleId:          number | null;  // null when no enabled policy matches
+  policyIsAutoHealEligible: boolean | null; // live value on the matching policy
   // UI-only state
   stepName?:         string | null;
   monitoredJobName?: string | null;

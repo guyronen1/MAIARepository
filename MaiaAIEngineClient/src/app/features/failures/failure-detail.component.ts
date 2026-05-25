@@ -98,16 +98,16 @@ import { FailureStatus, Recommendation } from '../../core/models';
                       <span class="bar-value">{{ rec.confidenceScore | percent }}</span>
                     </div>
 
-                    <!-- Auto-heal toggle -->
+                    <!-- Auto-run snapshot (read-only — toggle the policy from the Recommendations screen) -->
                     <div class="rec-footer">
-                      <label class="autoheal-label">
-                        <span class="text-sm text-muted">Auto-heal next time</span>
-                        <label class="toggle" style="margin-left:8px">
-                          <input type="checkbox" [checked]="rec.autoFixAvailable"
-                                 (change)="toggleAutoHeal(rec, $any($event.target).checked)" />
-                          <span class="slider"></span>
-                        </label>
-                      </label>
+                      <span class="text-sm text-muted">
+                        Auto-run on next drain:
+                        @if (rec.autoFixAvailable) {
+                          <span class="badge badge-info">Yes</span>
+                        } @else {
+                          <span class="badge badge-muted">No</span>
+                        }
+                      </span>
 
                       @if (!rec.isExecuted && rec.operatorApproved === null) {
                         <div class="rec-actions">
@@ -212,7 +212,7 @@ export class FailureDetailComponent implements OnInit {
   }
 
   approve(rec: Recommendation) {
-    this.recSvc.approveRecommendation(rec.recommendationId).subscribe({
+    this.recSvc.approveRecommendation(rec.recommendationId, 'operator').subscribe({
       next: () => this.loadDetail(),
       error: () => rec.operatorApproved = true
     });
@@ -220,17 +220,13 @@ export class FailureDetailComponent implements OnInit {
   }
 
   reject(rec: Recommendation) {
-    this.recSvc.rejectRecommendation(rec.recommendationId).subscribe({
+    this.recSvc.rejectRecommendation(rec.recommendationId, 'operator').subscribe({
       next: () => this.loadDetail(),
       error: () => rec.operatorApproved = false
     });
     rec.operatorApproved = false;
   }
 
-  toggleAutoHeal(rec: Recommendation, enabled: boolean) {
-    rec.autoFixAvailable = enabled;
-    this.recSvc.setAutoHeal(rec.recommendationId, enabled).subscribe();
-  }
 }
 
 const percent = (v: number) => `${Math.round(v * 100)}%`;

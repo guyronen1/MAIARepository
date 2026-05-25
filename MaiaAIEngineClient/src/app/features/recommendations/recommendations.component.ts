@@ -1,9 +1,10 @@
-import { Component, OnInit, inject, signal, computed } from '@angular/core';
+import { Component, OnInit, inject, signal } from '@angular/core';
 import { DatePipe, PercentPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Router, ActivatedRoute } from '@angular/router';
+import { Router } from '@angular/router';
 import { RecommendationsService } from '../../core/services/recommendations.service';
 import { ScanService } from '../../core/services/scan.service';
+import { ConfigService, FixPolicyRule, UpsertFixPolicyRuleRequest } from '../../core/services/config.service';
 import { Recommendation, PagedResult } from '../../core/models';
 
 @Component({
@@ -56,10 +57,10 @@ import { Recommendation, PagedResult } from '../../core/models';
         @if (!isOperatorMode()) {
           <select [(ngModel)]="filterCategory" (change)="applyFilter()">
             <option value="">All categories</option>
-            <option value="AutoFix">AutoFix</option>
+            <option value="Retry">Retry</option>
+            <option value="FileRepair">FileRepair</option>
+            <option value="DbFix">DbFix</option>
             <option value="Manual">Manual</option>
-            <option value="Notify">Notify</option>
-            <option value="Escalate">Escalate</option>
           </select>
           <select [(ngModel)]="filterApproved" (change)="applyFilter()">
             <option value="">All states</option>
@@ -88,7 +89,8 @@ import { Recommendation, PagedResult } from '../../core/models';
                 <th>Category</th>
                 <th>Suggested Action</th>
                 <th>Confidence</th>
-                <th>Auto-heal</th>
+                <th title="Toggles FixPolicyRule.IsAutoHealEligible — affects future recommendations for this ErrorType">Auto-heal policy</th>
+                <th title="Whether this specific recommendation will run on the next drain (frozen at generation time)">Auto-run</th>
                 <th>State</th>
                 <th>Date</th>
                 <th></th>
@@ -114,11 +116,30 @@ import { Recommendation, PagedResult } from '../../core/models';
                     </div>
                   </td>
                   <td>
-                    <label class="toggle">
-                      <input type="checkbox" [checked]="r.autoFixAvailable"
-                             (change)="toggleAutoHeal(r, $any($event.target).checked)" />
-                      <span class="slider"></span>
-                    </label>
+                    @if (policyMissing(r)) {
+                      <div class="policy-missing">
+                        <label class="toggle disabled" title="No enabled FixPolicyRule for this error">
+                          <input type="checkbox" disabled [checked]="false" />
+                          <span class="slider"></span>
+                        </label>
+                        <button class="btn-link btn-sm" (click)="configurePolicy(r)">Configure policy</button>
+                      </div>
+                    } @else {
+                      <label class="toggle">
+                        <input type="checkbox"
+                               [checked]="!!r.policyIsAutoHealEligible"
+                               [disabled]="togglingRule() === r.fixPolicyRuleId"
+                               (change)="toggleAutoHeal(r, $any($event.target).checked)" />
+                        <span class="slider"></span>
+                      </label>
+                    }
+                  </td>
+                  <td>
+                    @if (r.autoFixAvailable) {
+                      <span class="badge badge-info">Yes</span>
+                    } @else {
+                      <span class="badge badge-muted">No</span>
+                    }
                   </td>
                   <td>
                     @if (r.isExecuted) {
@@ -166,12 +187,17 @@ import { Recommendation, PagedResult } from '../../core/models';
     .rec-action-cell { max-width: 280px; font-size: 12px; line-height: 1.5; }
     .row-executed td { opacity: 0.65; }
     .pagination { display:flex; align-items:center; justify-content:center; gap:16px; padding:12px; border-top:1px solid var(--border); }
+    .policy-missing { display:flex; align-items:center; gap:6px; }
+    .toggle.disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-link { background:none; border:none; color:var(--primary); cursor:pointer; padding:0; font-size:11px; text-decoration:underline; }
+    .btn-link:hover { color:var(--accent); }
+    .badge-muted { background: var(--badge-muted-bg, #2a2f3a); color: var(--text-muted, #94a3b8); }
   `]
 })
 export class RecommendationsComponent implements OnInit {
   private svc     = inject(RecommendationsService);
   private scanSvc = inject(ScanService);
-  private route   = inject(ActivatedRoute);
+  private cfgSvc  = inject(ConfigService);
   router          = inject(Router);
 
   loading        = signal(false);
@@ -180,6 +206,7 @@ export class RecommendationsComponent implements OnInit {
   filtered       = signal<Recommendation[]>([]);
   page           = signal(1);
   banner         = signal<string | null>(null);
+  togglingRule   = signal<number | null>(null); // ruleId currently being toggled
   filterText     = '';
   filterCategory = '';
   filterApproved = '';
@@ -206,7 +233,7 @@ export class RecommendationsComponent implements OnInit {
     const items = this.paged()?.items ?? [];
     const text  = this.filterText.toLowerCase();
     this.filtered.set(items.filter(r => {
-      const textMatch = !text || r.suggestedAction.toLowerCase().includes(text) || r.errorTypeCode.toLowerCase().includes(text);
+      const textMatch = !text || r.suggestedAction.toLowerCase().includes(text) || (r.errorTypeCode?.toLowerCase().includes(text) ?? false);
       const catMatch  = !this.filterCategory || r.fixCategory === this.filterCategory;
       const stateMatch = !this.filterApproved ||
         (this.filterApproved === 'pending'   && r.operatorApproved === null && !r.isExecuted) ||
@@ -219,17 +246,77 @@ export class RecommendationsComponent implements OnInit {
 
   approve(rec: Recommendation) {
     rec.operatorApproved = true;
-    this.svc.approveRecommendation(rec.recommendationId).subscribe();
+    this.svc.approveRecommendation(rec.recommendationId, 'operator').subscribe();
   }
 
   reject(rec: Recommendation) {
     rec.operatorApproved = false;
-    this.svc.rejectRecommendation(rec.recommendationId).subscribe();
+    this.svc.rejectRecommendation(rec.recommendationId, 'operator').subscribe();
   }
 
+  /**
+   * Toggle FixPolicyRule.IsAutoHealEligible — affects FUTURE recommendations
+   * generated for this ErrorType. Does NOT mutate AutoFixAvailable on existing
+   * recs (frozen snapshot — see /api/recommendations/{id}/approve to execute
+   * this specific recommendation now).
+   *
+   * Two-step: GET the full policy → mutate one flag → PUT full body.
+   */
   toggleAutoHeal(rec: Recommendation, enabled: boolean) {
-    rec.autoFixAvailable = enabled;
-    this.svc.setAutoHeal(rec.recommendationId, enabled).subscribe();
+    if (rec.fixPolicyRuleId == null) return; // disabled state — guard against rogue clicks
+
+    const ruleId   = rec.fixPolicyRuleId;
+    const previous = rec.policyIsAutoHealEligible;
+
+    // Optimistic: flip every visible rec that shares this policy
+    this.applyPolicyChange(ruleId, enabled);
+    this.togglingRule.set(ruleId);
+
+    this.cfgSvc.getFixPolicyRuleById(ruleId).subscribe({
+      next: policy => {
+        const body: UpsertFixPolicyRuleRequest = {
+          jobTypeId:          policy.jobTypeId,
+          errorTypeId:        policy.errorTypeId,
+          actionToApply:      policy.actionToApply,
+          fixCategory:        policy.fixCategory,
+          actionType:         policy.actionType,
+          actionPayload:      policy.actionPayload,
+          isAutoHealEligible: enabled,
+          enabled:            policy.enabled,
+        };
+        this.cfgSvc.updateFixPolicyRule(ruleId, body).subscribe({
+          next: () => this.togglingRule.set(null),
+          error: () => {
+            this.applyPolicyChange(ruleId, previous);
+            this.togglingRule.set(null);
+            this.banner.set('Failed to update auto-heal policy. Reverted.');
+          }
+        });
+      },
+      error: () => {
+        this.applyPolicyChange(ruleId, previous);
+        this.togglingRule.set(null);
+        this.banner.set('Failed to load policy. Reverted.');
+      }
+    });
+  }
+
+  private applyPolicyChange(ruleId: number, value: boolean | null) {
+    const all = this.paged()?.items ?? [];
+    for (const r of all) if (r.fixPolicyRuleId === ruleId) r.policyIsAutoHealEligible = value;
+    this.applyFilter();
+  }
+
+  policyMissing(rec: Recommendation): boolean {
+    return rec.fixPolicyRuleId == null;
+  }
+
+  configurePolicy(rec: Recommendation) {
+    // No fix-policy-rules config screen yet — surface guidance for now.
+    const where = rec.jobTypeId != null
+      ? `JobTypeId=${rec.jobTypeId}, ErrorTypeId=${rec.errorTypeId}`
+      : `ErrorTypeId=${rec.errorTypeId}`;
+    this.banner.set(`No enabled FixPolicyRule for this error (${where}). Add one in Config → Fix Policy Rules.`);
   }
 
   classifyPending() {

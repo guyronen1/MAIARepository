@@ -1,0 +1,23 @@
+# ── .NET build output (in submodule + anywhere else) ──────────────────────
+**/bin/
+**/obj/
+
+# ── Frontend ─────────────────────────────────────────────────────────────
+**/node_modules/
+MaiaAIEngineClient/dist/
+MaiaAIEngineClient/.angular/
+
+# ── IDE / tooling ────────────────────────────────────────────────────────
+.vs/
+.vscode/
+.idea/
+.claude/
+*.user
+*.suo
+
+# ── OS ───────────────────────────────────────────────────────────────────
+Thumbs.db
+.DS_Store
+
+# ── Logs ─────────────────────────────────────────────────────────────────
+*.log

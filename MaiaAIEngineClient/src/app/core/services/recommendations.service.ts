@@ -15,16 +15,12 @@ export class RecommendationsService {
     );
   }
 
-  approveRecommendation(id: number): Observable<unknown> {
-    return this.http.patch(`${this.base}/data/recommendations/${id}/approve`, {});
+  approveRecommendation(id: number, operatorId: string): Observable<unknown> {
+    return this.http.post(`${this.base}/recommendations/${id}/approve`, { operatorId });
   }
 
-  rejectRecommendation(id: number): Observable<unknown> {
-    return this.http.patch(`${this.base}/data/recommendations/${id}/reject`, {});
-  }
-
-  setAutoHeal(id: number, enabled: boolean): Observable<unknown> {
-    return this.http.patch(`${this.base}/data/recommendations/${id}/auto-heal`, { enabled });
+  rejectRecommendation(id: number, operatorId: string): Observable<unknown> {
+    return this.http.post(`${this.base}/recommendations/${id}/reject`, { operatorId });
   }
 
   generateSuggestions(): Observable<{ generated: number }> {

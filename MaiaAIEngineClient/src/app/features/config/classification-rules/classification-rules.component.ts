@@ -16,7 +16,7 @@ import {
         <div>
           <h1>Classification Rules</h1>
           <p class="text-muted text-sm">
-            Regex patterns that map error messages to job type + error type combinations
+            Substring patterns (with optional <code>*</code> wildcards) that map error messages to job type + error type combinations
           </p>
         </div>
         <button class="btn btn-primary" (click)="openDrawer(null)">+ Add Rule</button>
@@ -131,10 +131,10 @@ import {
           <div class="form-grid">
 
             <div class="form-group span2">
-              <label>Regex Pattern *</label>
+              <label>Match Pattern *</label>
               <input [(ngModel)]="form.pattern"
-                     placeholder="e.g. FileNotFoundException|Cannot open file" />
-              <span class="field-hint">Matched against the full error message. Supports .NET regex syntax.</span>
+                     placeholder="e.g. FileNotFoundException  or  Error code * occurred" />
+              <span class="field-hint">Case-insensitive substring of the error message. Use <code>*</code> as a wildcard for any text (e.g. <code>Login failed for user *</code>). Other regex characters are matched literally.</span>
             </div>
 
             <div class="form-group">

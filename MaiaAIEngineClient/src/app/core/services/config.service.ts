@@ -5,7 +5,15 @@ import { environment } from '../../../environments/environment';
 import { MonitoredJob, ScanCheckRule } from '../models';
 
 export interface JobType    { jobTypeId: number; name: string; description: string; }
-export interface ErrorType  { errorTypeId: number; code: string; displayName: string; severity: string; }
+export interface ErrorType  {
+  errorTypeId: number; code: string; displayName: string;
+  description?: string | null; severity: string; isActive?: boolean;
+}
+
+export interface UpsertErrorTypeRequest {
+  code: string; displayName: string; description: string | null;
+  severity: string; isActive: boolean;
+}
 
 export interface ClassificationRule {
   ruleId: number; jobTypeId: number; jobTypeName: string;
@@ -58,7 +66,19 @@ export class ConfigService {
 
   // ── Lookups ────────────────────────────────────────────────────────────────
   getJobTypes():   Observable<JobType[]>   { return this.http.get<JobType[]>(`${this.base}/job-types`); }
-  getErrorTypes(): Observable<ErrorType[]> { return this.http.get<ErrorType[]>(`${this.base}/error-types`); }
+  getErrorTypes(includeInactive = false): Observable<ErrorType[]> {
+    const params = includeInactive ? new HttpParams().set('includeInactive', 'true') : undefined;
+    return this.http.get<ErrorType[]>(`${this.base}/error-types`, { params });
+  }
+  createErrorType(req: UpsertErrorTypeRequest): Observable<{ errorTypeId: number }> {
+    return this.http.post<{ errorTypeId: number }>(`${this.base}/error-types`, req);
+  }
+  updateErrorType(id: number, req: UpsertErrorTypeRequest): Observable<void> {
+    return this.http.put<void>(`${this.base}/error-types/${id}`, req);
+  }
+  deleteErrorType(id: number): Observable<void> {
+    return this.http.delete<void>(`${this.base}/error-types/${id}`);
+  }
 
   // ── Monitored Jobs ─────────────────────────────────────────────────────────
   getAllJobs(): Observable<MonitoredJob[]> {
@@ -114,6 +134,9 @@ export class ConfigService {
   getFixPolicyRules(jobTypeId?: number): Observable<FixPolicyRule[]> {
     const params = jobTypeId ? new HttpParams().set('jobTypeId', jobTypeId) : undefined;
     return this.http.get<FixPolicyRule[]>(`${this.base}/fix-policy-rules`, { params });
+  }
+  getFixPolicyRuleById(id: number): Observable<FixPolicyRule> {
+    return this.http.get<FixPolicyRule>(`${this.base}/fix-policy-rules/${id}`);
   }
   createFixPolicyRule(req: UpsertFixPolicyRuleRequest): Observable<{ ruleId: number }> {
     return this.http.post<{ ruleId: number }>(`${this.base}/fix-policy-rules`, req);
