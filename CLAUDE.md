@@ -102,10 +102,23 @@ All backend engines, APIs, and config UI are built:
 - **DB scan watermark** — advances within rule-filtered rows only (`QueryFilteredMaxAsync`), and stores ISO-format strings (`CONVERT(NVARCHAR(50), col, 121)`). Fixes the prior bug where a single future-dated healthy row poisoned the baseline.
 - **FixPolicyRule lookup is (JobTypeId, ErrorTypeId)-keyed everywhere** — `IFixPolicyRepository.GetForAsync(jobTypeId, errorTypeId)`, `IFixCatalogue(Repository).GetEntryAsync(errorTypeCode, jobTypeId)`, and the policy-snapshot projection in `SqlRecommendationRepository.GetPagedAsync` all filter by both columns. The wildcard `JobTypeId IS NULL` arm was rejected — column is non-nullable in the schema, so a "generic" policy doesn't exist as a concept. To cover multiple JobTypes for the same ErrorType, add separate `FixPolicyRule` rows. `DefaultFixEngine` emits `Policy lookup miss: jobTypeId={} errorTypeId={} recommendationId={}` at Information level so operators can grep for unconfigured pairs.
 - **ErrorType CRUD via API** — `POST/PUT/DELETE /api/config/error-types[/{id}]` in `ConfigController`. Delete is a soft-delete (`IsActive=false`) because four tables (`JobFailures`, `ClassificationRules`, `FixPolicyRules`, `AiRecommendations`) reference `ErrorTypeId` with `RESTRICT` cascade. Code must be unique; rename collisions return 409. UI screen at `/config/error-types` (`ErrorTypesComponent`) mirrors the Classification Rules screen layout.
+- **Classification patterns support `*` wildcards** — `RuleBasedClassifier` treats `*` as "any text" while every other character (including regex metacharacters like `.`, `+`, `[`, `\`) is literal. Patterns without `*` keep the fast `string.Contains` path; patterns with `*` compile to a regex (`.*` per `*`, every other character `Regex.Escape`d) with a 50ms timeout. UI labels updated from "Regex Pattern" to "Match Pattern" with hint copy reflecting the wildcard semantics. Same matcher used regardless of scan type (FS/DB/API).
+- **File-system keyword-mode scan now emits a failure per new error line** — `FileSystemScanStrategy` iterates every line in the post-watermark chunk and creates a separate `JobFailure` per match (cap 100 per keyword per scan; exact-text dedup within the same batch). The previous `IJobRepository.HasOpenFailureAsync` dedup that blocked all new failures while an earlier one was still `Status=Failed` has been removed — the watermark already prevents replays of old content, so the dedup was harmful for tail-following logs.
+- **Classifier consumes `JobFailure.ErrorMessage`, not the log file** — `ClassifyJobsUseCase` no longer re-reads `SourceLogPath`. The scan strategy is authoritative for what error was detected (the captured line for FS, the synthetic row message for DB); the classifier just labels it. `SqlJobRepository.UpdateClassificationAsync` updates `ErrorTypeId` only — it no longer overwrites `ErrorMessage` with the classifier's `RawError`. `RawError` still flows into the recommendation's `Explanation` field for diagnostic visibility.
+- **Phase 1 dashboard upgrade** — 4 KPI tiles (Active / Awaiting Action / Resolved Today / Manual Required) with `Auto: N · Manual: N` breakdown under Resolved Today. Errors Over Time stacked-area chart powered by chart.js@^4 directly (no ng2-charts wrapper). Deterministic per-`errorTypeId` color hash so the same error class gets the same color across page loads. `?range=24h|7d|30d` toggle, legend at bottom (prepares for Phase 2 side-by-side layout). Inline status strip folded into the page title row (no full-width banner); auto-dismiss 30s with hover-pause / mouseleave-restart. Compact single-line Monitored Jobs rows with click-to-expand detail. "Run All Scans" dropped from dashboard. `dir="auto"` on all user-data text (job/step names, error messages, recommendation actions, descriptions) for RTL content.
+- **Single 4-endpoint dashboard coordinator (`WorkerStatusService`)** — one 5s timer fires four independent fetches per tick (`/worker-status`, `/dashboard-stats`, `/failures?page=1&pageSize=10`, `/monitored-jobs`). Each endpoint has its own `PolledData<T>` `BehaviorSubject` and its own in-flight gate; a slow request blocks only its own endpoint, never the others. On failure the slice keeps its prior `value`, flips `isStale=true`, and stores `lastError` — no subject ever errors out, so the timer survives all failure modes. `takeUntil(cancel$)` aborts in-flight requests on `stop()`. Refcounted start/stop unchanged; 5s cadence configurable via `environment.dashboardRefreshIntervalMs`. The dashboard's manual Refresh button is gone — vestigial once polling covers every panel.
+- **Failures drawer (replaces standalone detail page)** — clicking a failure on `/failures`, `/dashboard` recent-failures, or `/recommendations` opens a 760px right-anchored drawer overlay (slide-in 220ms, click-outside + ✕ + Esc close). Drawer hosts `<app-failure-detail>` as a child via input-driven `failureId = input.required<number>()` — no remount when ↑/↓ navigates between adjacent failures. Detail polls `/api/data/failures/{id}/status` every 5s while open; refreshes are silent (no spinner, no scroll jump). If an Approve/Reject becomes inapplicable mid-review (background drain resolves the rec), buttons stay present-but-disabled with an "Already executed / approved / rejected" note rather than vanishing under the operator's cursor.
+- **Drawer keyboard navigation** — Esc closes (drawer-only); ↑/↓ moves between rows of the current filtered page with `scrollIntoView({ block: 'nearest' })`; Enter on a focused row opens the drawer; Tab cycles drawer's actionable controls (browser default). At page boundary: ↓ on last row auto-loads next page + focuses its first row, ↑ on first row of page ≥ 2 auto-loads previous page + focuses its last row, with a 1.3s "Page N of M" toast. ↓ at the last row of the last page shows a 1.8s "End of list" toast and stops — never wraps.
+- **URL as source of truth on /failures** — `view`, `status`, `q`, `page`, `selected` round-trip via `route.queryParamMap` ↔ `patchUrl()`. Default values are stripped from the URL (`page=1`, empty `q`/`status`/`view`, `selected=null`) so shareable links stay clean: `/failures?status=Failed&selected=123` not `/failures?q=&status=Failed&page=1&selected=123`. Search debounced 250ms; filter/page changes use `replaceUrl: true` to avoid stacking history entries. Filter drift (selected failure no longer matches the filter) shows a "no longer in filter" hint in the drawer header; drawer stays open until operator closes.
+- **Legacy detail URL preserved** — `/failures/:id` is a function redirect to `/failures?selected=:id` (Angular 17+ redirect function form). External bookmarks / shared Slack links keep working. The dedicated `FailureDetailComponent` route is gone; the component itself lives on as the drawer's child content.
+- **`NavigationHistoryService` + smart back button** — singleton service subscribes to `NavigationEnd` and tracks the previous *distinct* path (query-param-only changes don't shift the referrer, so ↑/↓ drawer navigation doesn't lose the back-target). Drawer header renders `← Back to {Label}` on the leftmost edge when the referrer is a known top-level destination (Dashboard / Recommendations / Operator Actions / Scan Jobs / Monitored Jobs / Classification Rules / Error Types / Failures); hides otherwise. Click → `Location.back()`. Eagerly instantiated in `ShellComponent` so history tracking starts at app boot.
+- **`GET /api/data/analytics/failures-over-time`** — time-bucketed failure counts broken out by `ErrorTypeId`, for the dashboard's Errors Over Time chart. `?range=24h|7d|30d&bucketSize=hour|day`; 24h defaults to hour buckets, 7d/30d to day buckets. Unclassified failures (`ErrorTypeId IS NULL`) collapse into a synthetic `errorTypeId=0 / "(unclassified)"` series so the frontend can stack them alongside named series.
+- **`/api/data/dashboard-stats` extended with today fields** — `resolvedToday`, `autoFixedToday`, `manuallyFixedToday`. "Today" = `DateTime.Today` (server-local midnight), consistent with the local-time convention. Used by the Resolved Today KPI and its breakdown line.
+- **`/api/data/failures` view filters extended** — added `view=resolved` and `view=manual-required` to support the Resolved Today and Manual Required KPI drill-downs from the dashboard.
 
 # Active Goals / What We're Working On
 
-(Nothing in flight. Last completed: scan-run history + retention worker + admin cleanup endpoint.)
+(Nothing in flight. Last completed: Failures drawer + URL-driven state + keyboard nav + smart back button.)
 
 # Known follow-ups (not blocking)
 
@@ -114,6 +127,10 @@ All backend engines, APIs, and config UI are built:
 - **AuditLog coverage gap on config changes.** `PUT /api/config/fix-policy-rules/{id}` (and likely the other `ConfigController` PUTs/POSTs/DELETEs) may not write to `AuditLog`. Config changes that affect auto-execution behavior should be auditable. Verify and close the gaps.
 - **`DbFixHandler.HandleAsync` is a TODO stub returning `false`.** Surfaced during the JobTypeId fix — when a `DbFix`-category recommendation has no matching `FixPolicyRule`, execution falls through to this handler and silently fails. Either implement it or flip those failures to `ManualRequired` explicitly with a clearer message.
 - **Frontend `monitored-jobs.service.ts` is GET-only** while the backend has full CRUD on `/api/config/monitored-jobs`. The config UI uses `config.service.ts`, so this isn't broken — just inconsistent. Consolidate or remove.
+- **`ILogReader` / `FileLogReader` are no longer consumed.** `ClassifyJobsUseCase` was the only caller; it now classifies against `JobFailure.ErrorMessage`. The interface, implementation, and DI registration in `AddMaiaAI` can be removed once we're sure nothing external relies on them.
+- **Recommendations screen drawer (Phase 2).** Same `?selected=` overlay pattern as the failures drawer; deferred so operators get a few days of feedback on the failures version first.
+- **Sort UI on failures-list.** None today. URL hygiene reserves the slot but no UI is wired up.
+- **Style budget warnings.** `features/dashboard/dashboard.component.ts` (~4.79kB vs 4kB budget) and `features/config/monitored-jobs/monitored-jobs.component.ts` (~4.34kB) exceed the Angular per-component SCSS budget. Pre-existing pattern in this codebase, not regressions from current work; raise the budget or extract shared styles.
 
 # Important Decisions Made
 
@@ -121,7 +138,7 @@ All backend engines, APIs, and config UI are built:
 - Angular uses standalone components with `inject()` functional DI (not constructor injection).
 - `operator-actions` route reuses `RecommendationsComponent`; `/config/classification-rules` has its own dedicated `ClassificationRulesComponent`.
 - Auto-heal flag (`IsAutoHealEligible` on FixPolicyRule) drives whether ExecuteFixesUseCase runs a recommendation automatically.
-- `FileSystemScanStrategy`: if a job has `ErrorKeyword` scan rules, it scans log files line-by-line for the keyword; if no keyword rules, falls back to full pipeline over all log lines.
+- `FileSystemScanStrategy`: if a job has `ErrorKeyword` scan rules, it scans log files line-by-line for the keyword and creates one failure per matching line in the new-bytes chunk (post-watermark); if no keyword rules, falls back to full pipeline over all log lines.
 - Keyword TargetField values may contain glob wildcards (`*keyword*`) — always strip `*` before `Contains()` matching.
 - `Observable<any>` cast used on conditional create/update calls in Angular to avoid TypeScript union type subscribe errors.
 - **Per-job lease over leader election** — `MonitoredJobLeases` row per MonitoredJob, atomic `UPDATE TOP(N) ... OUTPUT inserted.* WITH (READPAST, UPDLOCK, ROWLOCK)` for claim. Survives restarts (`NextEligibleAt` is durable) and allows multiple worker instances.
@@ -133,7 +150,7 @@ All backend engines, APIs, and config UI are built:
 - **`POST /api/pipeline/run-directory` semantic change** — response no longer reflects executed fixes; drain happens on the next worker tick. Callers expecting synchronous fix counts must poll.
 - **"Already classified" is `ErrorTypeId IS NOT NULL`, not a status transition** — `JobStatus` only has Failed/Resolved/ManualRequired. `ClassifyJobsUseCase.ExecuteAsync()` filters by `Status=Failed AND ErrorTypeId IS NULL` (`IJobRepository.GetUnclassifiedAsync`) so re-running classify never re-classifies the same failure. Failures stay `Failed` until executor flips them to Resolved or ManualRequired.
 - **`GenerateSuggestionsUseCase` is idempotent per FailureId** — calls `IRecommendationRepository.ExistsForFailureAsync` and skips failures that already have any recommendation. Prevents pile-up when classify/suggest is re-run on the same set.
-- **`FileSystemScanStrategy` keyword mode uses watermarks** — each file is read from `IScanWatermarkRepository.GetFileOffsetAsync(monitoredJobId, file)` and the offset is advanced per scan. Whole-file rescan only happens after rotation/truncation (offset > stream.Length).
+- **`FileSystemScanStrategy` keyword mode uses watermarks AS the only dedup primitive** — each file is read from `IScanWatermarkRepository.GetFileOffsetAsync(monitoredJobId, file)` and the offset is advanced per scan. Whole-file rescan only happens after rotation/truncation (offset > stream.Length). There is intentionally NO `HasOpenFailureAsync` check on top — that would block new errors any time an older one was still pending. Every matching line in the new chunk becomes a `JobFailure` (capped at 100 per keyword per scan, dedup by exact text within the batch).
 - **`SqlScriptExecutor` resolves the target connection from the failure** — opens a raw `SqlConnection` against (priority order): `ConnectionName|SQL` payload prefix → `failure.MonitoredJob.ConnectionName` → `DefaultConnection`. So DB-scan jobs that monitor an external DB also fix it (no need to encode 3-part names in the SQL). Supports `{failureId}` (int PK) and `{sourceId}` (string — the source row's natural key, e.g. `Files.id` GUID); replace is case-insensitive. Returns false when `rowsAffected == 0` so a no-op fix surfaces as ManualRequired.
 - **Timestamps are local time** — `DateTime.Now` in C# and `DEFAULT GETDATE()` in SQL across all migrations and code. JSON serializes without a `Z` suffix → browser parses as local. Pre-2026-05-24 rows still hold UTC clock values; a one-time `DATEADD(HOUR, +offset, …)` script can shift historical data if needed.
 - **Lease-claim SQL must use local time, not UTC** — `SqlMonitoredJobLeaseRepository.ClaimSql` declares `@now = SYSDATETIME()` (local). `ReleaseAsync` writes `NextEligibleAt = DateTime.Now.AddSeconds(...)` (also local). A previous `SYSUTCDATETIME()` mismatch wedged the worker for ~3 hours per restart on Israel local time.
@@ -148,6 +165,20 @@ All backend engines, APIs, and config UI are built:
   - Two nonclustered indexes: `IX_ScanRunHistory_Job_StartedAt (MonitoredJobId, StartedAt DESC) INCLUDE (counts + outcome + duration)` covers "last N runs of job X" without bookmark lookups. `IX_ScanRunHistory_Failures (StartedAt DESC) INCLUDE (job, outcome, error) WHERE Outcome <> 'Success'` is a filtered index for "recent failures across all jobs" — tiny because most rows are Success.
   - `Outcome` stored as `nvarchar(50)` via `HasConversion<string>()` (matches all other enum-as-string columns in this schema). Filter on the index is `[Outcome] <> 'Success'`, not `<> 0`.
 - **Retention sweep logic lives in a shared service, not the worker** — `IScanHistoryRetentionService` is invoked by both `ScanHistoryRetentionWorker` (scheduled) and `AdminController.RunScanHistoryCleanup` (on-demand). Config (`Enabled`, `RetentionDays`, `CleanupBatchSize`, `InterBatchDelayMs`) is re-read every invocation so changes to `appsettings.json` take effect on the next sweep without restart.
+- **Failure detail is a drawer, not a separate page.** Operators triage queues, not page-at-a-time. The drawer keeps the list visible, preserves filter/sort/pagination/scroll state, and enables ↑/↓ keyboard nav through the queue. Standalone full-page detail was rejected — `Location.back()` worked but lost list context every drill-down.
+- **Drawer lives on /failures, not as a global shell-level overlay.** Considered making the drawer page-agnostic (open from dashboard → drawer overlays dashboard, close → stay on dashboard). Rejected because: (a) `↑/↓` keyboard nav only makes sense when there's a filtered list behind the drawer, and only `/failures` has that — on dashboard the "Recent Failures" panel is just the top 10; (b) operator's mental model is one place for failure investigation; (c) the underlying complaint was "I can't get back," which a smart back button solves without fragmenting the drawer's location across pages.
+- **URL is the single source of truth for failures-list state.** `view` / `status` / `q` / `page` / `selected` all round-trip via query params. URL hygiene: default values (`page=1`, empty filters, `selected=null`) stripped by the `URL_DEFAULTS` map in `patchUrl()`. Search debounced 250ms; navigates use `replaceUrl: true` so filter typing doesn't stack history entries. The new `?selected=` for the drawer slots into the same model — refresh-safe and shareable.
+- **Drawer detail polls live every 5s while open**, independent of the dashboard's `WorkerStatusService`. Re-fetches are silent (no `loading.set(true)` on the polled tick) so the DOM updates only the bound parts — scroll position, focus, and operator cursor stay put. If a background drain resolves a recommendation mid-review, Approve/Reject stay present-but-disabled with an "Already executed / approved / rejected" note rather than vanishing under the operator's cursor. The poll lives on `FailureDetailComponent`'s `effect` with `onCleanup`; it tears down automatically when `failureId` changes or the component is destroyed.
+- **`FailureDetailComponent` is input-driven and re-used inside the drawer.** `failureId = input.required<number>()` plus an `effect` that re-fetches on every change. Same template, no remount on ↑/↓ navigation — the drawer transition stays smooth and the DOM doesn't flash. The `ActivatedRoute` dependency was removed; the host (drawer in `FailuresListComponent`) owns URL/state.
+- **`/api/data/dashboard-snapshot` was implemented and reverted in the same session.** Tried collapsing the four polled endpoints into one combined endpoint with per-section partial-failure flags. Reverted because the four endpoints each have independent failure modes (network, DB, individual query timeouts) and the snapshot couples them artificially; four parallel requests with per-endpoint in-flight gates is the right model. The `BuildWorkerStatusAsync` / `BuildDashboardStatsAsync` helper extraction was rolled back too — endpoints are inlined again, no dead code.
+- **`PolledData<T>` wrapper exposes `isStale` but no UI renders it yet.** Each `BehaviorSubject` in `WorkerStatusService` emits `{ value, isStale, lastUpdatedAt, lastError? }`. On fetch failure the slice keeps the prior `value`, flips `isStale=true`, and stores `lastError` — no subject ever errors out, so the timer survives all failure modes. Consumers unwrap `.value` via `computed(() => signal().value)`; the stale indicator is reserved for a polish round if operators report seeing stale data.
+- **Chart library: chart.js@^4 directly, no ng2-charts wrapper.** Direct usage gives full control over component registration (only the ones we use — keeps the bundle lean), config, and event handling. Wrapper would add ~30kB and an abstraction layer for no real benefit at this scope.
+- **Errors Over Time legend at bottom, not right.** Wider chart canvas + prepares for a Phase 2 split where Errors Over Time pairs with another chart at ~60% width. Right-side legend works at full width but cramps the canvas when narrower. Bottom legend works at any width — no chart config change needed when the layout shrinks.
+- **Errors Over Time chart colors are deterministic per `errorTypeId`** — `colorFor(errorTypeId)` returns `PALETTE[Math.abs(errorTypeId) % PALETTE.length]` (with a gray for `errorTypeId=0` "unclassified"). Same error class gets the same color across page loads regardless of arrival order, so operators build muscle memory.
+- **Dashboard stats "today" is server-local midnight, not UTC.** `DateTime.Today` (== `CAST(GETDATE() AS DATE)`). Matches the rest of the schema's local-time convention; an operator on Israel time sees their workday-local numbers, not a 7-hour-shifted view.
+- **`NavigationHistoryService` tracks distinct *paths*, not URLs.** Query-param-only navigation (drawer ↑/↓, filter changes, pagination) doesn't shift the previous-route pointer. Without this guard, pressing ↓ once would hide the back button forever — the referrer would become `/failures?selected=124`, no longer a different page.
+- **`NavigationHistoryService` is eagerly instantiated in `ShellComponent`.** Service has to be alive before the first `NavigationEnd` fires, otherwise the initial referrer is lost. `providedIn: 'root'` alone isn't enough — Angular instantiates lazily on first inject, and the first inject might happen after the first navigation. `ShellComponent` has a `private _navHistory = inject(NavigationHistoryService);` field purely for the side effect.
+- **Smart-back label map is hand-maintained, not derived from `app.routes.ts`.** Only top-level menu destinations get labels (Dashboard, Failures, Recommendations, Operator Actions, Scan Jobs, the three Config screens). Other paths (e.g. the legacy `/failures/:id` redirect target) return null → back button hides rather than rendering a confusing label. Auto-derivation from routes was rejected — route paths aren't always human-friendly and the menu's display strings live in `side-menu.component.ts` anyway.
 
 ---
 
@@ -287,29 +318,49 @@ src/app/
 │   │   ├── monitored-job.model.ts  (MonitoredJob, ScanCheckRule, RuleOverride)
 │   │   ├── failure.model.ts
 │   │   ├── recommendation.model.ts
-│   │   └── scan-result.model.ts
+│   │   ├── scan-result.model.ts
+│   │   └── worker-status.model.ts  (WorkerStatus, ActiveScan, RecentScan, JobLastScanRow)
 │   └── services/
-│       ├── failures.service.ts
+│       ├── failures.service.ts       (FailuresOverTimeResponse + getFailuresOverTime here too)
 │       ├── recommendations.service.ts
-│       ├── monitored-jobs.service.ts   (GET only currently — CRUD needed)
+│       ├── monitored-jobs.service.ts (GET only currently — CRUD needed)
 │       ├── scan.service.ts
-│       └── config.service.ts
+│       ├── config.service.ts
+│       ├── worker-status.service.ts  4-endpoint polling coordinator;
+│       │                             emits PolledData<T> on status$ / stats$ /
+│       │                             recentFailures$ / monitoredJobs$.
+│       └── navigation-history.service.ts  tracks previous distinct path for
+│                                          the drawer's smart back button.
+│                                          Eagerly instantiated in ShellComponent.
 ├── layout/
-│   ├── shell/         ShellComponent — root layout
+│   ├── shell/         ShellComponent — root layout; eagerly injects NavigationHistoryService
 │   ├── top-bar/       TopBarComponent
 │   └── side-menu/     SideMenuComponent
 ├── features/
-│   ├── dashboard/                    DashboardComponent
+│   ├── dashboard/
+│   │   ├── dashboard.component.ts          DashboardComponent — 4 KPIs (with Resolved Today
+│   │   │                                   breakdown), inline status strip, compact monitored-
+│   │   │                                   jobs rows with click-to-expand, scan toast
+│   │   └── errors-over-time-chart.component.ts  Stacked-area chart (chart.js@^4, deterministic
+│   │                                            errorTypeId→color hash, 24h/7d/30d toggle)
 │   ├── failures/
-│   │   ├── failures-list.component   paginated list
-│   │   └── failure-detail.component  detail + recommendations
-│   ├── recommendations/              RecommendationsComponent (also handles operator-actions route)
+│   │   ├── failures-list.component   paginated list + drawer host; URL-driven state
+│   │   │                             (?view, ?status, ?q, ?page, ?selected). Keyboard nav,
+│   │   │                             auto-load adjacent page at row boundaries.
+│   │   └── failure-detail.component  pure detail content (input-driven failureId);
+│   │                                 rendered inside the drawer. Polls /failures/{id}/status
+│   │                                 every 5s while mounted; "Already executed/approved/
+│   │                                 rejected" graceful disable when state changes mid-review.
+│   ├── recommendations/              RecommendationsComponent (also handles operator-actions route);
+│   │                                 openFailure(id) → /failures?selected=:id (drawer)
 │   ├── scan-jobs/                    ScanJobsComponent
 │   └── config/
 │       ├── monitored-jobs/           MonitoredJobsComponent — job CRUD + 3-tab panel (Scan Rules / Classification Rules / Fix Options)
 │       ├── classification-rules/     ClassificationRulesComponent — global rules with filter bar + CRUD drawer
 │       └── error-types/              ErrorTypesComponent — ErrorType CRUD (Code, DisplayName, Severity, Active)
-├── app.routes.ts      lazy-loaded routes under ShellComponent
+├── app.routes.ts      lazy-loaded routes under ShellComponent.
+│                      /failures/:id is a function redirect → /failures?selected=:id
+│                      (legacy bookmark support).
 ├── app.config.ts      providers: Router, HttpClient
 └── app.ts             root standalone component
 ```
@@ -382,9 +433,29 @@ Lease semantics:
 
 ```
 GET  /api/data/jobs?page=1&pageSize=50                         → JobFailureDto[]
+GET  /api/data/failures?page=1&pageSize=50&view=               → JobFailureDto[] (paged)
+                                                                 view ∈ active | unclassified |
+                                                                       awaiting-action | auto-fixed |
+                                                                       operator-fixed | resolved |
+                                                                       manual-required
 GET  /api/data/failures/{id}/status                            → failure detail + recommendations
+                                                                 (polled by the drawer every 5s)
 GET  /api/data/recommendations?page=1&pageSize=50              → RecommendationDto[] (+ policy snapshot)
 GET  /api/data/monitored-jobs                                  → MonitoredJobDto[]
+GET  /api/data/worker-status                                   → WorkerStatus payload
+                                                                 (lease state, activeScans,
+                                                                  recentScansLast30s, jobSummary, jobs)
+GET  /api/data/dashboard-stats                                 → KPI aggregates
+                                                                 (total/active/resolved/manualRequired/
+                                                                  unclassified/awaitingAction/autoFixed/
+                                                                  manuallyFixed + today fields:
+                                                                  resolvedToday/autoFixedToday/
+                                                                  manuallyFixedToday)
+GET  /api/data/analytics/failures-over-time?range=24h|7d|30d   → time-bucketed failure counts by
+                                              &bucketSize=        ErrorTypeId for the Errors Over Time
+                                                                  chart. 24h→hour buckets, 7d/30d→day.
+                                                                  Unclassified collapses to
+                                                                  errorTypeId=0 / "(unclassified)".
 GET  /api/data/scan-runs?monitoredJobId=&outcome=              → ScanRunDto[]  (paged, max 200)
                           &fromDate=&toDate=&page=1&pageSize=50
 POST /api/classification/classify                              → IClassifyJobsUseCase
@@ -434,6 +505,31 @@ POST     /api/admin/scan-history/cleanup                        → Run retentio
 5. **`POST /api/jobscan/classify-pending`** — re-classify-then-drain.
 
 `ExecuteFixesUseCase` has no per-recommendation claim; concurrent drains can race and double-execute. `fixEngine` side effects (API call / SP / script) are not idempotent.
+
+### Frontend dashboard polling cadence
+
+`WorkerStatusService` runs a single 5s timer (`environment.dashboardRefreshIntervalMs`)
+that fires four independent fetches per tick. Each endpoint has its own in-flight
+gate; a slow request blocks only its own endpoint, never the others.
+
+```
+every 5s   ─┬─► GET /api/data/worker-status      → status$         (PolledData<WorkerStatus>)
+            ├─► GET /api/data/dashboard-stats    → stats$          (PolledData<DashboardStats>)
+            ├─► GET /api/data/failures?page=1
+            │       &pageSize=10                 → recentFailures$ (PolledData<JobFailure[]>)
+            └─► GET /api/data/monitored-jobs     → monitoredJobs$  (PolledData<MonitoredJob[]>)
+```
+
+On fetch failure the slice keeps its prior `value`, flips `isStale=true`, and stores
+`lastError` — no subject ever errors out, so the timer survives any failure mode.
+Refcounted start/stop — multiple consumers (dashboard, scan-jobs, top-bar) activate
+polling independently; when refcount hits 0 the timer stops and in-flight requests
+abort via `takeUntil(cancel$)`.
+
+The failures drawer's `<app-failure-detail>` runs its own 5s poll on
+`/api/data/failures/{id}/status` while open. Independent of the dashboard service;
+silent re-fetches so the DOM updates only the bound parts (scroll position +
+focus stay put).
 
 ## C — Database Schema
 

@@ -20,6 +20,8 @@ export interface RuleOverride {
   priority:      number;
 }
 
+import type { MonitoredJobLease } from './worker-status.model';
+
 export interface MonitoredJob {
   monitoredJobId:          number;
   name:                    string;
@@ -37,4 +39,6 @@ export interface MonitoredJob {
   createdAt:               string;
   scanCheckRules:          ScanCheckRule[];
   rules:                   RuleOverride[];
+  /** Runtime lease snapshot — null when the job has never been claimed. */
+  lease:                   MonitoredJobLease | null;
 }

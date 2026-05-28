@@ -1,7 +1,8 @@
-import { Component } from '@angular/core';
+import { Component, inject } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { TopBarComponent } from '../top-bar/top-bar.component';
 import { SideMenuComponent } from '../side-menu/side-menu.component';
+import { NavigationHistoryService } from '../../core/services/navigation-history.service';
 
 @Component({
   selector: 'app-shell',
@@ -24,4 +25,9 @@ import { SideMenuComponent } from '../side-menu/side-menu.component';
     .shell-content { flex: 1; overflow-y: auto; background: var(--bg); display: flex; justify-content: flex-start; }
   `]
 })
-export class ShellComponent {}
+export class ShellComponent {
+  // Eager-instantiate so history tracking starts at app boot — the service
+  // needs to be alive before the first NavigationEnd or the very first
+  // referrer is lost.
+  private _navHistory = inject(NavigationHistoryService);
+}

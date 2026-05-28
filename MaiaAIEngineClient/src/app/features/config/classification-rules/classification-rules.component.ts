@@ -5,11 +5,12 @@ import {
   ConfigService, ClassificationRule, JobType, ErrorType,
   UpsertClassificationRuleRequest,
 } from '../../../core/services/config.service';
+import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
 
 @Component({
   selector: 'app-classification-rules',
   standalone: true,
-  imports: [FormsModule],
+  imports: [FormsModule, PluralizePipe],
   template: `
     <div class="page">
       <div class="page-header">
@@ -67,7 +68,7 @@ import {
       } @else {
         <div class="card" style="padding:0;overflow:hidden">
           <div class="table-header">
-            <span class="text-muted text-sm">{{ filtered().length }} rule(s)</span>
+            <span class="text-muted text-sm">{{ filtered().length | pluralize:'rule' }}</span>
           </div>
           <table class="data-table">
             <thead>

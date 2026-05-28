@@ -8,6 +8,7 @@ import {
   UpsertClassificationRuleRequest,
 } from '../../../core/services/config.service';
 import { MonitoredJob, ScanCheckRule, RuleOverride } from '../../../core/models';
+import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
 
 type ActiveTab    = 'scan' | 'class' | 'fix';
 type ActiveDrawer = 'job' | 'scan-rule' | 'class-rule' | 'link-class-rule' | 'fix-rule' | null;
@@ -21,13 +22,13 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
 @Component({
   selector: 'app-monitored-jobs',
   standalone: true,
-  imports: [FormsModule],
+  imports: [FormsModule, PluralizePipe],
   template: `
     <div class="page">
       <div class="page-header">
         <div>
           <h1>Monitored Jobs</h1>
-          <p class="text-muted text-sm">{{ jobs().length }} job(s) configured</p>
+          <p class="text-muted text-sm">{{ jobs().length | pluralize:'job' }} configured</p>
         </div>
         <button class="btn btn-primary" (click)="openJobDrawer(null)">+ Add Job</button>
       </div>

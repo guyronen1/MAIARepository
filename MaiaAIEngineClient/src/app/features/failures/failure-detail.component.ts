@@ -1,24 +1,23 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnDestroy, effect, inject, input, signal } from '@angular/core';
 import { DatePipe, PercentPipe } from '@angular/common';
-import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { FailuresService } from '../../core/services/failures.service';
 import { RecommendationsService } from '../../core/services/recommendations.service';
 import { FailureStatus, Recommendation } from '../../core/models';
+import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
 
+/**
+ * Pure detail-content for a single failure. Input-driven — the host (currently
+ * the drawer in FailuresListComponent) sets `failureId` and the component
+ * re-fetches whenever it changes. No router dependency; the host owns
+ * URL/state. Re-render-without-remount keeps the drawer transition smooth
+ * when navigating via ↑/↓ between adjacent failures.
+ */
 @Component({
   selector: 'app-failure-detail',
   standalone: true,
-  imports: [DatePipe, PercentPipe, RouterLink],
+  imports: [DatePipe, PercentPipe, PluralizePipe],
   template: `
-    <div class="page">
-      <div class="page-header">
-        <div class="breadcrumb">
-          <a routerLink="/failures" class="text-muted text-sm">Failures</a>
-          <span class="text-muted text-sm"> / </span>
-          <span class="text-sm">Failure #{{ failureId }}</span>
-        </div>
-      </div>
-
+    <div class="detail-root">
       @if (loading()) {
         <div class="loading-overlay" style="height:300px"><span class="spinner"></span> Loading…</div>
       } @else if (failure()) {
@@ -43,8 +42,8 @@ import { FailureStatus, Recommendation } from '../../core/models';
               <span class="badge" [class]="'badge-' + failure()!.status.toLowerCase()">{{ failure()!.status }}</span>
             </div>
             <dl class="detail-list">
-              <dt>Job</dt>        <dd>{{ failure()!.monitoredJobName ?? '—' }}</dd>
-              <dt>Step / File</dt><dd>{{ failure()!.stepName ?? '—' }}</dd>
+              <dt>Job</dt>        <dd dir="auto">{{ failure()!.monitoredJobName ?? '—' }}</dd>
+              <dt>Step / File</dt><dd dir="auto">{{ failure()!.stepName ?? '—' }}</dd>
               <dt>Source ID</dt>  <dd class="font-mono">{{ failure()!.sourceId ?? '—' }}</dd>
               <dt>Error Type</dt> <dd>
                 @if (failure()!.errorTypeCode) {
@@ -57,7 +56,7 @@ import { FailureStatus, Recommendation } from '../../core/models';
             @if (failure()!.errorMessage) {
               <div class="error-message-box">
                 <label>Error Message</label>
-                <pre>{{ failure()!.errorMessage }}</pre>
+                <pre dir="auto">{{ failure()!.errorMessage }}</pre>
               </div>
             }
           </div>
@@ -69,7 +68,7 @@ import { FailureStatus, Recommendation } from '../../core/models';
                 <span class="ai-chip">AI</span>
                 Recommendations
               </h3>
-              <span class="text-muted text-sm">{{ failure()!.recommendations.length }} suggestion(s)</span>
+              <span class="text-muted text-sm">{{ failure()!.recommendations.length | pluralize:'suggestion' }}</span>
             </div>
 
             @if (failure()!.recommendations.length === 0) {
@@ -89,7 +88,7 @@ import { FailureStatus, Recommendation } from '../../core/models';
                       @if (rec.operatorApproved === false) { <span class="badge badge-failed">Rejected</span> }
                     </div>
 
-                    <p class="rec-action">{{ rec.suggestedAction }}</p>
+                    <p class="rec-action" dir="auto">{{ rec.suggestedAction }}</p>
 
                     <div class="confidence-bar">
                       <div class="bar-track">
@@ -113,6 +112,20 @@ import { FailureStatus, Recommendation } from '../../core/models';
                         <div class="rec-actions">
                           <button class="btn btn-success btn-sm" (click)="approve(rec)">✓ Approve</button>
                           <button class="btn btn-danger btn-sm"  (click)="reject(rec)">✕ Reject</button>
+                        </div>
+                      } @else {
+                        <!-- Graceful disabled-state. If the rec resolved mid-review (via
+                             background drain), we keep the action buttons present-but-
+                             disabled and label the new state, so the operator doesn't
+                             have controls vanish under their cursor. -->
+                        <div class="rec-actions rec-actions-done">
+                          <button class="btn btn-success btn-sm" disabled>✓ Approve</button>
+                          <button class="btn btn-danger btn-sm"  disabled>✕ Reject</button>
+                          <span class="text-sm text-muted action-note">
+                            @if (rec.isExecuted) { Already executed }
+                            @else if (rec.operatorApproved === true)  { Already approved }
+                            @else { Already rejected }
+                          </span>
                         </div>
                       }
                     </div>
@@ -143,6 +156,14 @@ import { FailureStatus, Recommendation } from '../../core/models';
     .detail-list { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; align-items: start;
       dt { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; padding-top: 2px; }
       dd { font-size: 13px; }
+      /* Source ID value reads as an identifier — monospace + slightly smaller,
+         same body color so it doesn't look "demoted". The label stays as-is. */
+      dd.font-mono {
+        font-family: 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.875em;
+        color: var(--text);
+        word-break: break-all;
+      }
     }
     .error-message-box {
       margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);
@@ -164,19 +185,31 @@ import { FailureStatus, Recommendation } from '../../core/models';
     .rec-action { font-size: 13px; font-weight: 500; color: var(--text); line-height: 1.5; }
     .rec-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
     .autoheal-label { display: flex; align-items: center; gap: 4px; }
-    .rec-actions { display: flex; gap: 6px; }
+    .rec-actions { display: flex; gap: 6px; align-items: center; }
+    .rec-actions-done .action-note { font-style: italic; }
 
     @media (max-width:900px) { .detail-grid { grid-template-columns: 1fr; } }
   `]
 })
-export class FailureDetailComponent implements OnInit {
-  private route     = inject(ActivatedRoute);
+export class FailureDetailComponent implements OnDestroy {
   private failureSvc = inject(FailuresService);
   private recSvc    = inject(RecommendationsService);
 
-  loading   = signal(true);
-  failure   = signal<FailureStatus | null>(null);
-  failureId = 0;
+  /** Host (drawer) sets this; component re-fetches on every change via the
+   *  effect below — so navigating ↑/↓ between failures inside the drawer
+   *  swaps the data without unmounting the component. */
+  failureId = input.required<number>();
+
+  loading = signal(true);
+  failure = signal<FailureStatus | null>(null);
+
+  // Live polling cadence while the drawer is open. Matches the dashboard
+  // service's interval so the operator sees status updates from background
+  // drains (auto-heal resolving a failure mid-review, etc.) without ever
+  // having to refresh. Re-fetches are SILENT — no loading flag, no template
+  // remount — so scroll position and focus stay put.
+  private static readonly POLL_MS = 5000;
+  private pollTimerId: ReturnType<typeof setInterval> | null = null;
 
   stages = [
     { key: 'Failed',      label: 'Detected',    icon: '⚠' },
@@ -185,17 +218,41 @@ export class FailureDetailComponent implements OnInit {
     { key: 'Fixed',       label: 'Fixed',       icon: '✓' },
   ];
 
-  ngOnInit() {
-    this.failureId = +this.route.snapshot.paramMap.get('id')!;
-    this.loadDetail();
+  constructor() {
+    effect((onCleanup) => {
+      const id = this.failureId();
+      this.clearPoll();
+      if (!id) return;
+      // Initial load surfaces a spinner; subsequent polled refreshes are silent.
+      this.loadDetail(id, { silent: false });
+      this.pollTimerId = setInterval(
+        () => this.loadDetail(this.failureId(), { silent: true }),
+        FailureDetailComponent.POLL_MS,
+      );
+      onCleanup(() => this.clearPoll());
+    });
   }
 
-  loadDetail() {
-    this.loading.set(true);
-    this.failureSvc.getFailureStatus(this.failureId).subscribe({
-      next: f => { this.failure.set(f); this.loading.set(false); },
-      error: () => this.loading.set(false)
+  ngOnDestroy() { this.clearPoll(); }
+
+  private clearPoll() {
+    if (this.pollTimerId !== null) {
+      clearInterval(this.pollTimerId);
+      this.pollTimerId = null;
+    }
+  }
+
+  private loadDetail(id: number, opts: { silent: boolean } = { silent: false }) {
+    if (!opts.silent) this.loading.set(true);
+    this.failureSvc.getFailureStatus(id).subscribe({
+      next: f => { this.failure.set(f); if (!opts.silent) this.loading.set(false); },
+      error: () => { if (!opts.silent) this.loading.set(false); }
     });
+  }
+
+  /** Public so the host can force a refresh after an operator action. */
+  reload() {
+    this.loadDetail(this.failureId(), { silent: true });
   }
 
   isStageCompleted(key: string): boolean {
@@ -213,7 +270,7 @@ export class FailureDetailComponent implements OnInit {
 
   approve(rec: Recommendation) {
     this.recSvc.approveRecommendation(rec.recommendationId, 'operator').subscribe({
-      next: () => this.loadDetail(),
+      next: () => this.reload(),
       error: () => rec.operatorApproved = true
     });
     rec.operatorApproved = true;
@@ -221,12 +278,9 @@ export class FailureDetailComponent implements OnInit {
 
   reject(rec: Recommendation) {
     this.recSvc.rejectRecommendation(rec.recommendationId, 'operator').subscribe({
-      next: () => this.loadDetail(),
+      next: () => this.reload(),
       error: () => rec.operatorApproved = false
     });
     rec.operatorApproved = false;
   }
-
 }
-
-const percent = (v: number) => `${Math.round(v * 100)}%`;

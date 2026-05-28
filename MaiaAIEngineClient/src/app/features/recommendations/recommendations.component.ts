@@ -6,11 +6,12 @@ import { RecommendationsService } from '../../core/services/recommendations.serv
 import { ScanService } from '../../core/services/scan.service';
 import { ConfigService, FixPolicyRule, UpsertFixPolicyRuleRequest } from '../../core/services/config.service';
 import { Recommendation, PagedResult } from '../../core/models';
+import { PluralizePipe, pluralize } from '../../core/pipes/pluralize.pipe';
 
 @Component({
   selector: 'app-recommendations',
   standalone: true,
-  imports: [DatePipe, PercentPipe, FormsModule],
+  imports: [DatePipe, PercentPipe, FormsModule, PluralizePipe],
   template: `
     <div class="page">
       <div class="page-header">
@@ -26,7 +27,7 @@ import { Recommendation, PagedResult } from '../../core/models';
           </h1>
           <p class="text-muted text-sm">
             @if (isOperatorMode()) {
-              {{ filtered().length }} pending item(s) awaiting your review
+              {{ filtered().length | pluralize:'pending item' }} awaiting your review
             } @else {
               {{ paged()?.totalCount ?? 0 }} total recommendations
             }
@@ -106,7 +107,7 @@ import { Recommendation, PagedResult } from '../../core/models';
                     </div>
                   </td>
                   <td><span class="badge" [class]="categoryBadge(r.fixCategory)">{{ r.fixCategory }}</span></td>
-                  <td class="rec-action-cell">{{ r.suggestedAction }}</td>
+                  <td class="rec-action-cell" dir="auto">{{ r.suggestedAction }}</td>
                   <td>
                     <div class="confidence-bar" style="min-width:120px">
                       <div class="bar-track">
@@ -323,7 +324,7 @@ export class RecommendationsComponent implements OnInit {
     this.running.set(true);
     this.scanSvc.classifyPending().subscribe({
       next: r => {
-        this.banner.set(`Classified ${r.classified} failure(s), ${r.suggestions} suggestion(s) generated.`);
+        this.banner.set(`Classified ${pluralize(r.classified, 'failure')}, ${pluralize(r.suggestions, 'suggestion')} generated.`);
         this.running.set(false);
         this.load();
       },
@@ -335,7 +336,7 @@ export class RecommendationsComponent implements OnInit {
     this.running.set(true);
     this.svc.runPipeline().subscribe({
       next: r => {
-        this.banner.set(`Pipeline complete — ${r.classifications} classification(s). ${r.message}`);
+        this.banner.set(`Pipeline complete — ${pluralize(r.classifications, 'classification')}. ${r.message}`);
         this.running.set(false);
         this.load();
       },
@@ -350,7 +351,11 @@ export class RecommendationsComponent implements OnInit {
     return map[cat] ?? 'badge-info';
   }
 
-  openFailure(id: number) { this.router.navigate(['/failures', id]); }
+  openFailure(id: number) {
+    // Drives the failures-list drawer via ?selected=. Falls back to the legacy
+    // /failures/:id path via the redirect route, so external bookmarks still work.
+    this.router.navigate(['/failures'], { queryParams: { selected: id } });
+  }
   prevPage() { if (this.page() > 1) { this.page.update(p => p - 1); this.load(); } }
   nextPage() { this.page.update(p => p + 1); this.load(); }
 }

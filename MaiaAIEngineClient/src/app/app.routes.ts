@@ -9,7 +9,9 @@ export const routes: Routes = [
       { path: '', redirectTo: 'dashboard', pathMatch: 'full' },
       { path: 'dashboard',    loadComponent: () => import('./features/dashboard/dashboard.component').then(m => m.DashboardComponent) },
       { path: 'failures',     loadComponent: () => import('./features/failures/failures-list.component').then(m => m.FailuresListComponent) },
-      { path: 'failures/:id', loadComponent: () => import('./features/failures/failure-detail.component').then(m => m.FailureDetailComponent) },
+      // Legacy detail URL — redirect to the drawer-driven list. Preserves any
+      // bookmark or shared link operators have to /failures/123.
+      { path: 'failures/:id', redirectTo: ({ params }) => `/failures?selected=${params['id']}` },
       { path: 'recommendations', loadComponent: () => import('./features/recommendations/recommendations.component').then(m => m.RecommendationsComponent) },
       { path: 'operator-actions', loadComponent: () => import('./features/recommendations/recommendations.component').then(m => m.RecommendationsComponent) },
       { path: 'scan-jobs',    loadComponent: () => import('./features/scan-jobs/scan-jobs.component').then(m => m.ScanJobsComponent) },
