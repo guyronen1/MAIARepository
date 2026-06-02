@@ -8,9 +8,9 @@ import { FormsModule } from '@angular/forms';
 import { Subject } from 'rxjs';
 import { debounceTime, takeUntil } from 'rxjs/operators';
 import { FailuresService } from '../../core/services/failures.service';
-import { NavigationHistoryService } from '../../core/services/navigation-history.service';
 import { JobFailure, PagedResult } from '../../core/models';
 import { FailureDetailComponent } from './failure-detail.component';
+import { DrawerComponent } from '../../shared/drawer/drawer.component';
 
 const VIEW_LABELS: Record<string, string> = {
   'active':          'Active Failures',
@@ -42,7 +42,7 @@ const PAGE_SIZE = 50;
 @Component({
   selector: 'app-failures-list',
   standalone: true,
-  imports: [DatePipe, FormsModule, FailureDetailComponent],
+  imports: [DatePipe, FormsModule, FailureDetailComponent, DrawerComponent],
   template: `
     <div class="page failures-page" [class.drawer-open]="selectedId() !== null">
       <div class="page-header">
@@ -147,45 +147,33 @@ const PAGE_SIZE = 50;
         }
       </div>
 
-      <!-- Drawer overlay — backdrop covers the table area; clicking it closes.
-           Drawer itself is a fixed 760px right-anchored panel. -->
-      @if (selectedId() !== null) {
-        <div class="drawer-backdrop" (click)="closeDrawer()" aria-hidden="true"></div>
-        <aside class="drawer" role="dialog" aria-modal="true" [attr.aria-label]="'Failure ' + selectedId() + ' detail'">
-          <header class="drawer-header">
-            <div class="drawer-title">
-              @if (navHistory.previousLabel(); as backLabel) {
-                <!-- Smart back button — only shown when the previous route is a
-                     known top-level destination. Uses Location.back() so the
-                     browser history stack stays consistent. -->
-                <button class="btn btn-ghost btn-sm drawer-back"
-                        (click)="navHistory.back()"
-                        [title]="'Return to ' + backLabel">← Back to {{ backLabel }}</button>
-                <span class="drawer-title-divider" aria-hidden="true">·</span>
-              }
-              <span class="text-muted text-sm">Failure</span>
-              <strong>#{{ selectedId() }}</strong>
-              @if (selectedIndex() !== -1 && filtered().length > 0) {
-                <span class="text-muted text-sm">· {{ selectedIndex() + 1 }} of {{ filtered().length }} on this page</span>
-              } @else if (filtered().length > 0) {
-                <span class="filter-drift-hint" title="This failure no longer matches the current filter, but the drawer stays open until you close it.">
-                  no longer in filter
-                </span>
-              }
-            </div>
-            <div class="drawer-controls">
-              <button class="btn btn-ghost btn-sm" (click)="navigatePrev()"
-                      [disabled]="!canNavPrev()" title="Previous (↑)">↑</button>
-              <button class="btn btn-ghost btn-sm" (click)="navigateNext()"
-                      [disabled]="!canNavNext()" title="Next (↓)">↓</button>
-              <button class="btn btn-ghost btn-sm btn-close" (click)="closeDrawer()" title="Close (Esc)">✕</button>
-            </div>
-          </header>
-          <div class="drawer-body">
-            <app-failure-detail [failureId]="selectedId()!"></app-failure-detail>
-          </div>
-        </aside>
-      }
+      <!-- Drawer shell is the shared <app-drawer>; this component supplies the
+           title, the ↑/↓ nav controls, and the body (failure detail). -->
+      <app-drawer
+          [open]="selectedId() !== null"
+          [ariaLabel]="'Failure ' + selectedId() + ' detail'"
+          (close)="closeDrawer()">
+        <ng-container drawer-title>
+          <span class="text-muted text-sm">Failure</span>
+          <strong>#{{ selectedId() }}</strong>
+          @if (selectedIndex() !== -1 && filtered().length > 0) {
+            <span class="text-muted text-sm">· {{ selectedIndex() + 1 }} of {{ filtered().length }} on this page</span>
+          } @else if (filtered().length > 0) {
+            <span class="filter-drift-hint" title="This failure no longer matches the current filter, but the drawer stays open until you close it.">
+              no longer in filter
+            </span>
+          }
+        </ng-container>
+        <ng-container drawer-controls>
+          <button class="btn btn-ghost btn-sm nav-arrow" (click)="navigatePrev()"
+                  [disabled]="!canNavPrev()" title="Previous (↑)">↑</button>
+          <button class="btn btn-ghost btn-sm nav-arrow" (click)="navigateNext()"
+                  [disabled]="!canNavNext()" title="Next (↓)">↓</button>
+        </ng-container>
+        @if (selectedId() !== null) {
+          <app-failure-detail [failureId]="selectedId()!"></app-failure-detail>
+        }
+      </app-drawer>
 
       <!-- Transient spatial-awareness toast — fired by arrow-key navigation
            that crosses a page boundary or hits the end of the list. Auto-
@@ -241,71 +229,11 @@ const PAGE_SIZE = 50;
     }
     .view-filter-label { color: var(--text-muted); font-size: 12px; }
 
-    /* ── Drawer ─────────────────────────────────────────────────────────── */
-    .drawer-backdrop {
-      position: fixed; inset: 0;
-      background: rgba(15, 23, 42, 0.28);
-      z-index: 49;
-      animation: backdrop-fade 180ms ease-out;
-    }
-    @keyframes backdrop-fade { from { opacity: 0; } to { opacity: 1; } }
-
-    .drawer {
-      position: fixed;
-      top: 0; right: 0;
-      width: 760px;
-      max-width: 100vw;
-      /* Auto-size to content so short failures don't render a tall empty
-         column. When content > viewport, max-height caps the panel and the
-         body's overflow-y kicks in (see .drawer-body below). */
-      height: auto;
-      max-height: 100vh;
-      background: var(--surface);
-      border-left: 1px solid var(--border);
-      box-shadow: -8px 0 24px rgba(15, 23, 42, 0.12);
-      z-index: 50;
-      display: flex;
-      flex-direction: column;
-      animation: drawer-slide-in 220ms cubic-bezier(0.16, 1, 0.3, 1);
-    }
-    @keyframes drawer-slide-in {
-      from { transform: translateX(100%); }
-      to   { transform: translateX(0); }
-    }
-
-    .drawer-header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 12px 16px;
-      border-bottom: 1px solid var(--border);
-      background: var(--surface);
-      /* Pinned at the top of the drawer regardless of scroll position. */
-      flex-shrink: 0;
-    }
-    .drawer-title { display: flex; align-items: center; gap: 6px; font-size: 14px; flex-wrap: wrap; }
+    /* Drawer shell styles now live in DrawerComponent. The ↑/↓ buttons are
+       projected into its controls slot, so their disabled state is styled
+       here (they belong to this component's view). */
+    .nav-arrow:disabled { opacity: 0.35; cursor: not-allowed; }
     .drawer-title strong { font-weight: 700; color: var(--text); }
-    .drawer-back {
-      font-size: 12px;
-      color: var(--primary, #6366f1);
-      padding: 2px 8px;
-      border-radius: 12px;
-      &:hover { background: var(--primary-glow, rgba(99, 102, 241, 0.08)); }
-    }
-    .drawer-title-divider { color: var(--text-muted); margin: 0 2px; }
-    .drawer-controls { display: flex; gap: 4px; }
-    .drawer-controls .btn-close { font-size: 16px; line-height: 1; }
-    .drawer-controls .btn:disabled { opacity: 0.35; cursor: not-allowed; }
-
-    .drawer-body {
-      /* flex: 1 1 auto + min-height: 0 lets this child scroll when the
-         drawer hits max-height. Without min-height: 0, flex items default to
-         min-content size and the overflow never engages.
-         When content fits, the body takes its natural height and the drawer
-         is content-sized (auto height on the parent). */
-      flex: 1 1 auto;
-      min-height: 0;
-      overflow-y: auto;
-      padding: 14px 16px;
-    }
 
     .row-selected {
       background: var(--primary-glow, rgba(99, 102, 241, 0.08)) !important;
@@ -357,8 +285,6 @@ export class FailuresListComponent implements OnInit, OnDestroy, AfterViewChecke
   private svc   = inject(FailuresService);
   private route = inject(ActivatedRoute);
   router        = inject(Router);
-  /** Public so the drawer header template can call previousLabel() / back(). */
-  navHistory    = inject(NavigationHistoryService);
 
   @ViewChildren('row', { read: ElementRef }) rowRefs!: QueryList<ElementRef<HTMLTableRowElement>>;
 
@@ -612,15 +538,8 @@ export class FailuresListComponent implements OnInit, OnDestroy, AfterViewChecke
     const inField = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
     if (inField) return;
 
-    if (ev.key === 'Escape' && this.selectedId() !== null) {
-      ev.preventDefault();
-      this.closeDrawer();
-      return;
-    }
-
-    // Only intercept arrow keys when the drawer is open (drives the triage
-    // flow). If a row is focused without the drawer, browser default tab
-    // behavior is fine.
+    // Esc-to-close is owned by the shared <app-drawer>. Here we only handle
+    // ↑/↓ row navigation, and only while the drawer is open (the triage flow).
     if (this.selectedId() === null) return;
 
     if (ev.key === 'ArrowDown') {

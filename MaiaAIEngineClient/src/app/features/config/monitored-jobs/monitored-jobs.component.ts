@@ -811,7 +811,7 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
                   </span>
                 } @else if (fixRuleForm.actionType === 'CopyFile') {
                   <input [ngModel]="fixRuleForm.actionPayload" (ngModelChange)="fixRuleForm.actionPayload = $event; syncFixRuleSignal()"
-                         placeholder="{sourceFilePath}|{inputFolder}\reprocess\{sourceId}.dat" />
+                         placeholder="{sourceFilePath}|{inputFolder}\reprocess\{sourceFileName}" />
                   <span class="field-hint">
                     Format <code>SOURCE|DEST</code>. Atomic copy (.tmp + rename), overwrite by default.
                     <code>{{'{'}}sourceFilePath{{'}'}}</code> requires InputPathPattern (FS) or FilePathColumn (DB) on the scan rule.
@@ -910,6 +910,7 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
                     <dt><code>{{'{'}}sourceId{{'}'}}</code></dt><dd>Source row's natural key (DB scan) or matched id.</dd>
                     <dt><code>{{'{'}}sourceLogPath{{'}'}}</code></dt><dd>Log file/source where the error was detected.</dd>
                     <dt><code>{{'{'}}sourceFilePath{{'}'}}</code></dt><dd>Input file path — needs Input File Extraction (FS) or File Path Column (DB).</dd>
+                    <dt><code>{{'{'}}sourceFileName{{'}'}}</code></dt><dd>Filename only, sliced from {{'{'}}sourceFilePath{{'}'}} (e.g. <code>deposit.txt</code>).</dd>
                     <dt><code>{{'{'}}jobFolder{{'}'}}</code></dt><dd>The job's Log Folder.</dd>
                     <dt><code>{{'{'}}inputFolder{{'}'}}</code></dt><dd>The job's Input Folder.</dd>
                   </dl>
@@ -1766,7 +1767,7 @@ export class MonitoredJobsComponent implements OnInit {
       case 'Script':          return 'powershell.exe C:\\scripts\\fix.ps1 {failureId}';
       case 'ApiCall':         return 'http://jobs.internal/api/jobs/{failureId}/retry';
       case 'StoredProcedure': return 'dbo.sp_RetryJob  or  ConnName|dbo.sp_RetryJob';
-      case 'CopyFile':        return '{sourceFilePath}|{inputFolder}\\reprocess\\{sourceId}.dat';
+      case 'CopyFile':        return '{sourceFilePath}|{inputFolder}\\reprocess\\{sourceFileName}';
       default:                return 'payload';
     }
   }

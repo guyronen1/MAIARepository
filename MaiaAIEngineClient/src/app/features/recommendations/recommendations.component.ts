@@ -1,17 +1,20 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, DestroyRef, HostListener, OnInit, computed, inject, signal } from '@angular/core';
 import { DatePipe, PercentPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Router } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { RecommendationsService } from '../../core/services/recommendations.service';
 import { ScanService } from '../../core/services/scan.service';
 import { ConfigService, FixPolicyRule, UpsertFixPolicyRuleRequest } from '../../core/services/config.service';
 import { Recommendation, PagedResult } from '../../core/models';
 import { PluralizePipe, pluralize } from '../../core/pipes/pluralize.pipe';
+import { FailureDetailComponent } from '../failures/failure-detail.component';
+import { DrawerComponent } from '../../shared/drawer/drawer.component';
 
 @Component({
   selector: 'app-recommendations',
   standalone: true,
-  imports: [DatePipe, PercentPipe, FormsModule, PluralizePipe],
+  imports: [DatePipe, PercentPipe, FormsModule, PluralizePipe, FailureDetailComponent, DrawerComponent],
   template: `
     <div class="page">
       <div class="page-header">
@@ -173,6 +176,32 @@ import { PluralizePipe, pluralize } from '../../core/pipes/pluralize.pipe';
           </div>
         }
       </div>
+
+      <!-- Shared drawer hosting the failure detail — opens in-place via
+           ?selected= instead of bouncing to /failures. Same component the
+           failures list uses, so execution history / retry / per-step ✓✗
+           all come along for free. -->
+      <app-drawer
+          [open]="selectedFailureId() !== null"
+          [ariaLabel]="'Failure ' + selectedFailureId() + ' detail'"
+          (close)="closeDrawer()">
+        <ng-container drawer-title>
+          <span class="text-muted text-sm">Failure</span>
+          <strong>#{{ selectedFailureId() }}</strong>
+          @if (selectedRecIndex() !== -1 && filtered().length > 0) {
+            <span class="text-muted text-sm">· {{ selectedRecIndex() + 1 }} of {{ filtered().length }} on this page</span>
+          }
+        </ng-container>
+        <ng-container drawer-controls>
+          <button class="btn btn-ghost btn-sm nav-arrow" (click)="navigatePrev()"
+                  [disabled]="!canNavPrev()" title="Previous (↑)">↑</button>
+          <button class="btn btn-ghost btn-sm nav-arrow" (click)="navigateNext()"
+                  [disabled]="!canNavNext()" title="Next (↓)">↓</button>
+        </ng-container>
+        @if (selectedFailureId() !== null) {
+          <app-failure-detail [failureId]="selectedFailureId()!"></app-failure-detail>
+        }
+      </app-drawer>
     </div>
   `,
   styles: [`
@@ -193,12 +222,17 @@ import { PluralizePipe, pluralize } from '../../core/pipes/pluralize.pipe';
     .btn-link { background:none; border:none; color:var(--primary); cursor:pointer; padding:0; font-size:11px; text-decoration:underline; }
     .btn-link:hover { color:var(--accent); }
     .badge-muted { background: var(--badge-muted-bg, #2a2f3a); color: var(--text-muted, #94a3b8); }
+    /* ↑/↓ buttons projected into the shared drawer's controls slot. */
+    .nav-arrow:disabled { opacity: 0.35; cursor: not-allowed; }
+    .drawer-title strong { font-weight: 700; color: var(--text); }
   `]
 })
 export class RecommendationsComponent implements OnInit {
   private svc     = inject(RecommendationsService);
   private scanSvc = inject(ScanService);
   private cfgSvc  = inject(ConfigService);
+  private route   = inject(ActivatedRoute);
+  private destroyRef = inject(DestroyRef);
   router          = inject(Router);
 
   loading        = signal(false);
@@ -214,11 +248,39 @@ export class RecommendationsComponent implements OnInit {
 
   isOperatorMode = signal(false);
 
+  /** Drawer state — failureId of the rec currently open in the detail drawer.
+   *  Driven by the ?selected query param so it's refresh-safe + shareable,
+   *  same contract as the failures list. */
+  selectedFailureId = signal<number | null>(null);
+
+  /** Index of the open failure within the current filtered page (for the
+   *  "N of M" header hint + ↑/↓ bounds). -1 when not in the current view. */
+  selectedRecIndex = computed(() => {
+    const id = this.selectedFailureId();
+    if (id === null) return -1;
+    return this.filtered().findIndex(r => r.failureId === id);
+  });
+  canNavPrev = computed(() => this.selectedRecIndex() > 0);
+  canNavNext = computed(() => {
+    const i = this.selectedRecIndex();
+    return i !== -1 && i < this.filtered().length - 1;
+  });
+
   ngOnInit() {
     const url = this.router.url;
     const opMode = url.includes('operator-actions');
     this.isOperatorMode.set(opMode);
     if (opMode) this.filterApproved = 'pending';
+
+    // ?selected drives the drawer. Separate from the (locally-paged) list
+    // query, so changing it never re-fetches — it just opens/closes the drawer.
+    this.route.queryParamMap
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe(params => {
+        const sel = params.get('selected');
+        this.selectedFailureId.set(sel ? (parseInt(sel, 10) || null) : null);
+      });
+
     this.load();
   }
 
@@ -352,11 +414,42 @@ export class RecommendationsComponent implements OnInit {
     return map[cat] ?? 'badge-info';
   }
 
-  openFailure(id: number) {
-    // Drives the failures-list drawer via ?selected=. Falls back to the legacy
-    // /failures/:id path via the redirect route, so external bookmarks still work.
-    this.router.navigate(['/failures'], { queryParams: { selected: id } });
+  // ── Drawer open/close + keyboard navigation ────────────────────────────
+  /** Opens the failure detail in-place via ?selected on the CURRENT route
+   *  (/recommendations or /operator-actions) — no longer bounces to /failures. */
+  openFailure(id: number) { this.patchSelected(id); }
+  closeDrawer()           { this.patchSelected(null); }
+
+  private patchSelected(id: number | null) {
+    this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { selected: id },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
+    });
   }
-  prevPage() { if (this.page() > 1) { this.page.update(p => p - 1); this.load(); } }
-  nextPage() { this.page.update(p => p + 1); this.load(); }
+
+  navigatePrev() {
+    const i = this.selectedRecIndex();
+    if (i > 0) this.patchSelected(this.filtered()[i - 1].failureId);
+  }
+  navigateNext() {
+    const i = this.selectedRecIndex();
+    if (i !== -1 && i < this.filtered().length - 1)
+      this.patchSelected(this.filtered()[i + 1].failureId);
+  }
+
+  // ↑/↓ navigate between recs of the current page while the drawer is open.
+  // (No cross-page auto-load here — recommendations paging is manual.)
+  @HostListener('document:keydown', ['$event'])
+  onKey(ev: KeyboardEvent) {
+    const tag = (ev.target as HTMLElement | null)?.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    if (this.selectedFailureId() === null) return;   // Esc is handled by <app-drawer>
+    if (ev.key === 'ArrowDown')    { ev.preventDefault(); this.navigateNext(); }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); this.navigatePrev(); }
+  }
+
+  prevPage() { if (this.page() > 1) { this.page.update(p => p - 1); this.patchSelected(null); this.load(); } }
+  nextPage() { this.page.update(p => p + 1); this.patchSelected(null); this.load(); }
 }
