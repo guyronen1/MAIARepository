@@ -21,9 +21,26 @@ export interface JobFailure {
   hasRecentFixFailure: boolean;
 }
 
+/** One fix-execution attempt. For composite policies there's one row per
+ *  step (executedBy ends in '.Composite') plus a summary row; single-action
+ *  fixes have just the summary row. */
+export interface FixExecution {
+  fixId:            number;
+  recommendationId: number;
+  executedAction:   string;
+  executedBy:       string;
+  success:          boolean;
+  resultDetail:     string | null;
+  executedAt:       string;
+  triggerType:      string;
+}
+
 export interface FailureStatus {
   failureId:        number;
   sourceId:         string | null;
+  /** Input file path captured at scan time (FS InputPathPattern / DB
+   *  FilePathColumn). What {sourceFilePath} resolves to for this failure. */
+  sourceFilePath:   string | null;
   stepName:         string | null;
   errorMessage:     string | null;
   detectedAt:       string;
@@ -32,6 +49,8 @@ export interface FailureStatus {
   errorTypeCode:    string | null;
   monitoredJobName: string | null;
   recommendations:  Recommendation[];
+  /** Fix-execution history, chronological. Empty until a fix has run. */
+  executions:       FixExecution[];
 }
 
 export interface PagedResult<T> {

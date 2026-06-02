@@ -23,6 +23,13 @@ export class RecommendationsService {
     return this.http.post(`${this.base}/recommendations/${id}/reject`, { operatorId });
   }
 
+  /** Re-run a fix that failed to execute (failure is in ManualRequired).
+   *  Re-arms the failure + rec and drains synchronously with the current
+   *  policy — use after fixing the root cause. */
+  retryRecommendation(id: number, operatorId: string): Observable<unknown> {
+    return this.http.post(`${this.base}/recommendations/${id}/retry`, { operatorId });
+  }
+
   generateSuggestions(): Observable<{ generated: number }> {
     return this.http.post<{ generated: number }>(`${this.base}/fix/generate-suggestions`, {});
   }

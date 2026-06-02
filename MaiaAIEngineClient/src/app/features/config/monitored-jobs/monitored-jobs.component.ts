@@ -459,8 +459,10 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
                   Optional. Regex; capture group <code>(...)</code> #1 must be the
                   input file path. Differs from classification patterns — full
                   regex applies here, <em>not</em> the <code>*</code>-wildcard
-                  shorthand. Leave blank if this rule doesn't need to track an
-                  input file.
+                  shorthand. The captured path becomes the
+                  <code>{{'{'}}sourceFilePath{{'}'}}</code> placeholder you can use in
+                  a fix policy's payload (e.g. a <strong>CopyFile</strong> or SQL fix).
+                  Leave blank if no fix on this job needs the input file.
                 </span>
               </div>
             } @else {
@@ -514,8 +516,10 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
                        placeholder="e.g. FilePath  or  j.FilePath" />
                 <span class="field-hint">
                   Optional. Column on the source row holding the input file
-                  path. Captured into <code>JobFailure.SourceFilePath</code> when
-                  this rule matches.
+                  path. The captured path becomes the
+                  <code>{{'{'}}sourceFilePath{{'}'}}</code> placeholder you can use in
+                  a fix policy's payload (e.g. a <strong>CopyFile</strong> or SQL fix).
+                  Leave blank if no fix on this job needs the input file.
                 </span>
               </div>
             }
@@ -664,7 +668,7 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
     <!-- ── Drawer: Add / Edit Fix Option ──────────────────────────────────── -->
     @if (activeDrawer() === 'fix-rule') {
       <div class="drawer-overlay" (click)="closeDrawer()"></div>
-      <div class="drawer">
+      <div class="drawer drawer-wide">
         <div class="drawer-header">
           <h3>{{ editingFixRule() ? 'Edit Fix Option' : 'New Fix Option' }}</h3>
           <button class="btn btn-ghost btn-sm btn-icon" (click)="closeDrawer()">✕</button>
@@ -673,35 +677,36 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
           <div class="drawer-context-banner">
             <span class="banner-icon" aria-hidden="true">i</span>
             <span>
-              Fix policy for <strong>{{ editingFixRuleJob()?.jobTypeName }}</strong> jobs —
-              scope below decides whether it applies to all jobs of this type
-              or just this one.
+              @if (fixRuleForm.monitoredJobId !== null) {
+                Fix policy for <strong>{{ editingFixRuleJob()?.displayName ?? editingFixRuleJob()?.name }}</strong>
+                — applies to this job only.
+              } @else {
+                Fix policy for <strong>all {{ editingFixRuleJob()?.jobTypeName }} jobs</strong>
+                (JobType-wide default) — a per-job policy overrides it.
+              }
             </span>
           </div>
           <div class="form-grid">
-            <!-- Scope radio. Default = JobType-wide (current behavior).
-                 Override = scoped to the host MonitoredJob only — used when
-                 this specific job needs a different recovery procedure than
-                 its JobType siblings. Re-runs the duplicate check on change
-                 so the warning stays in sync with the chosen layer. -->
-            <div class="form-group span2">
-              <label>Scope *</label>
-              <div class="scope-radio">
-                <label class="scope-option" [class.selected]="fixRuleForm.monitoredJobId === null">
-                  <input type="radio" name="fix-scope"
-                         [value]="null"
-                         [ngModel]="fixRuleForm.monitoredJobId === null ? null : 'other'"
-                         (ngModelChange)="setFixRuleScope(null)" />
-                  <span class="scope-text"><strong>All</strong> {{ editingFixRuleJob()?.jobTypeName }} jobs (default)</span>
-                </label>
-                <label class="scope-option" [class.selected]="fixRuleForm.monitoredJobId !== null">
-                  <input type="radio" name="fix-scope"
-                         [value]="editingFixRuleJob()?.monitoredJobId"
-                         [ngModel]="fixRuleForm.monitoredJobId !== null ? 'thisJob' : null"
-                         (ngModelChange)="setFixRuleScope(editingFixRuleJob()?.monitoredJobId ?? null)" />
-                  <span class="scope-text">Just <strong>{{ editingFixRuleJob()?.displayName ?? editingFixRuleJob()?.name }}</strong> (override)</span>
-                </label>
-              </div>
+            <!-- Scope is per-job by default (the common case). The JobType-wide
+                 default layer is still reachable via the inline link below for
+                 the rare "all jobs of this type, same fix" case, and existing
+                 defaults open here showing the "all jobs" state. Flipping the
+                 link re-runs the duplicate check (setFixRuleScope syncs the
+                 form-mirror signal). -->
+            <div class="span2 scope-line">
+              @if (fixRuleForm.monitoredJobId !== null) {
+                <span class="scope-current">Scope: <strong>This job</strong></span>
+                <button type="button" class="link-btn"
+                        (click)="setFixRuleScope(null)">
+                  Apply to all {{ editingFixRuleJob()?.jobTypeName }} jobs instead
+                </button>
+              } @else {
+                <span class="scope-current">Scope: <strong>All {{ editingFixRuleJob()?.jobTypeName }} jobs</strong> (default)</span>
+                <button type="button" class="link-btn"
+                        (click)="setFixRuleScope(editingFixRuleJob()?.monitoredJobId ?? null)">
+                  Scope to just this job instead
+                </button>
+              }
             </div>
             <div class="form-group span2">
               <label>Error Type *</label>
@@ -741,7 +746,7 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
                 </div>
               }
             </div>
-            <div class="form-group span2">
+            <div class="form-group">
               <label>Action Description *</label>
               <input [(ngModel)]="fixRuleForm.actionToApply"
                      placeholder="e.g. Retry DTSX job via management API" />
@@ -759,29 +764,60 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
                 @for (a of actionTypes; track a) { <option [ngValue]="a">{{ a }}</option> }
               </select>
             </div>
+            <!-- Auto-Heal + Enabled share Execution Type's row (half width) —
+                 keeps these behaviour toggles on the same line instead of a
+                 dedicated full-width row at the bottom. Wrapped in a real
+                 form-group (label + inner row) so it aligns with the
+                 Execution Type select beside it. -->
+            <div class="form-group">
+              <label>Behaviour</label>
+              <div class="toggles-row">
+                <label class="toggle-pair">
+                  <span class="toggle">
+                    <input type="checkbox" [(ngModel)]="fixRuleForm.isAutoHealEligible" />
+                    <span class="slider"></span>
+                  </span>
+                  <span class="toggle-text">Auto-Heal</span>
+                </label>
+                <label class="toggle-pair">
+                  <span class="toggle">
+                    <input type="checkbox" [(ngModel)]="fixRuleForm.enabled"
+                           (ngModelChange)="syncFixRuleSignal()" />
+                    <span class="slider"></span>
+                  </span>
+                  <span class="toggle-text">Enabled</span>
+                </label>
+              </div>
+            </div>
             @if (fixRuleForm.actionType !== 'Manual' && fixRuleForm.actionType !== 'Composite') {
               <div class="form-group span2">
                 <label>Action Payload</label>
                 @if (fixRuleForm.actionType === 'ApiCall') {
-                  <input [(ngModel)]="fixRuleForm.actionPayload"
+                  <input [ngModel]="fixRuleForm.actionPayload" (ngModelChange)="fixRuleForm.actionPayload = $event; syncFixRuleSignal()"
                          placeholder="http://jobs.internal/api/jobs/{failureId}/retry" />
                   <span class="field-hint">Use {{'{'}}failureId{{'}'}} as a placeholder — replaced at runtime.</span>
                 } @else if (fixRuleForm.actionType === 'StoredProcedure') {
-                  <input [(ngModel)]="fixRuleForm.actionPayload"
+                  <input [ngModel]="fixRuleForm.actionPayload" (ngModelChange)="fixRuleForm.actionPayload = $event; syncFixRuleSignal()"
                          placeholder="dbo.sp_RetryJob  or  ConnName|dbo.sp_RetryJob" />
                 } @else if (fixRuleForm.actionType === 'SqlScript') {
-                  <textarea [(ngModel)]="fixRuleForm.actionPayload" rows="4"
-                            placeholder="UPDATE dbo.Files SET StatusCode = 0 WHERE Id = {failureId}"></textarea>
-                  <span class="field-hint">Raw SQL executed against the default DB. Use {{'{'}}failureId{{'}'}} as a placeholder.</span>
+                  <textarea [ngModel]="fixRuleForm.actionPayload" (ngModelChange)="fixRuleForm.actionPayload = $event; syncFixRuleSignal()" rows="4"
+                            placeholder="UPDATE dbo.Files SET FileStatusCode = 0 WHERE Id = '{sourceId}'"></textarea>
+                  <span class="field-hint">
+                    Runs against the job's configured connection (DB-scan jobs).
+                    To update the <strong>source row</strong>, key on
+                    <code>'{{'{'}}sourceId{{'}'}}'</code> (the captured source key, quoted) —
+                    <em>not</em> <code>{{'{'}}failureId{{'}'}}</code>, which is MAIA's internal
+                    failure id, not a column in your table.
+                  </span>
                 } @else if (fixRuleForm.actionType === 'CopyFile') {
-                  <input [(ngModel)]="fixRuleForm.actionPayload"
+                  <input [ngModel]="fixRuleForm.actionPayload" (ngModelChange)="fixRuleForm.actionPayload = $event; syncFixRuleSignal()"
                          placeholder="{sourceFilePath}|{inputFolder}\reprocess\{sourceId}.dat" />
                   <span class="field-hint">
                     Format <code>SOURCE|DEST</code>. Atomic copy (.tmp + rename), overwrite by default.
                     <code>{{'{'}}sourceFilePath{{'}'}}</code> requires InputPathPattern (FS) or FilePathColumn (DB) on the scan rule.
                   </span>
                 } @else {
-                  <input [(ngModel)]="fixRuleForm.actionPayload"
+                  <input [ngModel]="fixRuleForm.actionPayload" (ngModelChange)="fixRuleForm.actionPayload = $event; syncFixRuleSignal()"
                          placeholder="powershell.exe C:\scripts\fix.ps1 {failureId}" />
                 }
               </div>
@@ -809,12 +845,12 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
                           <option value="StoredProcedure">StoredProcedure</option>
                         </select>
                         @if (step.actionType === 'SqlScript') {
-                          <textarea [(ngModel)]="step.actionPayload"
+                          <textarea [ngModel]="step.actionPayload" (ngModelChange)="step.actionPayload = $event; syncFixRuleSignal()"
                                     rows="2"
                                     class="step-payload step-payload-sql"
                                     [placeholder]="payloadPlaceholderFor(step.actionType)"></textarea>
                         } @else {
-                          <input [(ngModel)]="step.actionPayload"
+                          <input [ngModel]="step.actionPayload" (ngModelChange)="step.actionPayload = $event; syncFixRuleSignal()"
                                  class="step-payload"
                                  [placeholder]="payloadPlaceholderFor(step.actionType)" />
                         }
@@ -847,25 +883,40 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
                 </span>
               </div>
             }
-            <!-- Two toggles on one row — compact, related controls, no
-                 reason to give each its own row. -->
-            <div class="form-group span2 toggles-row">
-              <label class="toggle-pair">
-                <span class="toggle">
-                  <input type="checkbox" [(ngModel)]="fixRuleForm.isAutoHealEligible" />
-                  <span class="slider"></span>
-                </span>
-                <span class="toggle-text">Auto-Heal</span>
-              </label>
-              <label class="toggle-pair">
-                <span class="toggle">
-                  <input type="checkbox" [(ngModel)]="fixRuleForm.enabled"
-                         (ngModelChange)="syncFixRuleSignal()" />
-                  <span class="slider"></span>
-                </span>
-                <span class="toggle-text">Enabled</span>
-              </label>
-            </div>
+            <!-- Soft config-time warning: the payload references
+                 {sourceFilePath} but no scan rule on this job captures one.
+                 Without a capture the token resolves empty and a CopyFile step
+                 fails at execution time — surface it here, not in the logs. -->
+            @if (fixRuleSourcePathWarning()) {
+              <div class="form-group span2">
+                <div class="dup-warn">
+                  ⚠ This payload uses <code>{{'{'}}sourceFilePath{{'}'}}</code>, but no
+                  scan rule on <strong>{{ editingFixRuleJob()?.displayName ?? editingFixRuleJob()?.name }}</strong>
+                  captures a file path. Set <strong>Input File Extraction</strong> (FS) or
+                  <strong>File Path Column</strong> (DB) on a scan rule for this job,
+                  or the fix will fail at runtime with an empty source path.
+                </div>
+              </div>
+            }
+            <!-- Always-visible token reference for any non-Manual fix. Keeps
+                 the six payload placeholders documented in one place instead
+                 of scattered per-type hints. -->
+            @if (fixRuleForm.actionType !== 'Manual') {
+              <div class="form-group span2">
+                <details class="token-legend">
+                  <summary>Available placeholders</summary>
+                  <dl>
+                    <dt><code>{{'{'}}failureId{{'}'}}</code></dt><dd>This failure's numeric id.</dd>
+                    <dt><code>{{'{'}}sourceId{{'}'}}</code></dt><dd>Source row's natural key (DB scan) or matched id.</dd>
+                    <dt><code>{{'{'}}sourceLogPath{{'}'}}</code></dt><dd>Log file/source where the error was detected.</dd>
+                    <dt><code>{{'{'}}sourceFilePath{{'}'}}</code></dt><dd>Input file path — needs Input File Extraction (FS) or File Path Column (DB).</dd>
+                    <dt><code>{{'{'}}jobFolder{{'}'}}</code></dt><dd>The job's Log Folder.</dd>
+                    <dt><code>{{'{'}}inputFolder{{'}'}}</code></dt><dd>The job's Input Folder.</dd>
+                  </dl>
+                  <span class="token-note">Unknown tokens are left as-is. Matching is case-insensitive.</span>
+                </details>
+              </div>
+            }
             <!-- Step 7 disclosure: about to disable an enabled default rule.
                  Overrides on other jobs of the same JobType still apply;
                  jobs WITHOUT overrides for this errorType will fall back to
@@ -979,6 +1030,12 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
       box-shadow: -4px 0 24px rgba(0,0,0,0.12); z-index: 201;
       display: flex; flex-direction: column; animation: slideIn 0.2s ease;
     }
+    /* The Fix Options drawer carries more fields (scope, payload/steps,
+       toggles, warnings) than the others. Widening it lets the 2-column
+       grid actually pair fields side-by-side and gives the payload /
+       SQL textarea / warnings room to breathe — trading width for height
+       so the form stops scrolling. Capped at 94vw for small screens. */
+    .drawer.drawer-wide { width: min(720px, 94vw); }
     @keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
 
     .drawer-header {
@@ -1014,39 +1071,21 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
     .toggle-label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
     .field-hint   { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
 
-    /* Scope radio in the Fix Options drawer — stacked vertically but tight.
-       Horizontal pills were tried and rejected: at the 500px drawer width
-       the labels (which include interpolated job/jobtype names) didn't fit
-       on one line and wrapped vertically, making the pills *taller*, not
-       shorter. Vertical single-line rows with compact padding give the
-       smallest total height.
-
-       Important: the global 'input, select, textarea' rule in styles.scss
-       (width:100%, padding, border, background) also matches radio inputs.
-       Left as-is, the radio inflates to fill the pill, shoves the label off
-       the right edge of the drawer, and forces per-character wrap. The
-       input[type=radio] override below undoes that global styling for
-       the radios specifically. */
-    .scope-radio { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
-    .scope-option {
-      display: flex; align-items: center; gap: 8px;
-      padding: 6px 10px;
-      border: 1px solid var(--border); border-radius: var(--radius-sm);
-      cursor: pointer;
-      transition: background var(--transition), border-color var(--transition);
-      font-size: 13px; line-height: 1.3;
-      input[type="radio"] {
-        width: auto; padding: 0; margin: 0;
-        background: none; border: none; box-shadow: none;
-        flex-shrink: 0;
-      }
-      .scope-text { flex: 1 1 auto; }
+    /* Compact scope line in the Fix Options drawer. Replaces the old two-row
+       scope radio: per-job is now the default, so the common case needs zero
+       interaction. The current scope reads as plain text; the JobType-wide
+       default is one inline link away for the rare shared-fix case. */
+    .scope-line {
+      display: flex; align-items: baseline; flex-wrap: wrap;
+      gap: 4px 10px; font-size: 12px; color: var(--text-muted);
     }
-    .scope-option:hover { background: var(--surface-2); }
-    .scope-option.selected {
-      border-color: var(--primary);
-      background: var(--primary-light);
+    .scope-current strong { color: var(--text); }
+    .link-btn {
+      background: transparent; border: none; padding: 0;
+      color: var(--primary); font-weight: 600; cursor: pointer;
+      text-decoration: underline; font-size: inherit;
     }
+    .link-btn:hover { color: var(--primary-dark); }
 
     /* Inline info icon for drawer-context-banner. Static, non-spinning —
        previously used a gear emoji that looked spinner-ish at this size. */
@@ -1136,6 +1175,29 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
       margin-top: 12px;
     }
 
+    /* Collapsible placeholder reference under the payload field. Closed by
+       default so it doesn't crowd the form; one click reveals all six tokens. */
+    .token-legend {
+      margin-top: 6px; font-size: 12px;
+      border: 1px solid var(--border-light); border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+    .token-legend > summary {
+      cursor: pointer; padding: 6px 10px; font-weight: 600;
+      color: var(--text-muted); user-select: none;
+    }
+    .token-legend[open] > summary { border-bottom: 1px solid var(--border-light); }
+    .token-legend dl {
+      margin: 0; padding: 8px 10px;
+      display: grid; grid-template-columns: auto 1fr; gap: 4px 12px;
+    }
+    .token-legend dt { margin: 0; }
+    .token-legend dd { margin: 0; color: var(--text-muted); }
+    .token-legend code { font-size: 11px; }
+    .token-note {
+      display: block; padding: 0 10px 8px; font-size: 11px; color: var(--text-dim);
+    }
+
     .scan-info-notice {
       display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px;
       background: var(--surface-2); border: 1px solid var(--border-light);
@@ -1210,6 +1272,24 @@ export class MonitoredJobsComponent implements OnInit {
         ? p.monitoredJobId === form.monitoredJobId          // override layer match
         : p.monitoredJobId === null && p.jobTypeId === form.jobTypeId; // default layer match
     }) ?? null;
+  });
+
+  /** Soft config-time warning: a fix payload (single-action or any composite
+   *  step) references {sourceFilePath}, but no scan rule on the host job
+   *  captures one — i.e. no InputPathPattern (FS) and no FilePathColumn (DB)
+   *  is set on any of the job's scan rules. Without a capture, the token
+   *  resolves to empty at fix time and a CopyFile step fails. Surfacing it
+   *  here turns a runtime failure into a config-time hint. */
+  fixRuleSourcePathWarning = computed<boolean>(() => {
+    const form = this.fixRuleFormSignal();
+    const usesToken = (s: string | null | undefined) => !!s && /\{sourceFilePath\}/i.test(s);
+    const referenced = usesToken(form.actionPayload)
+      || (form.steps ?? []).some(s => usesToken(s.actionPayload));
+    if (!referenced) return false;
+    const job = this.editingFixRuleJob();
+    const captures = (job?.scanCheckRules ?? []).some(r =>
+      !!r.inputPathPattern?.trim() || !!r.filePathColumn?.trim());
+    return !captures;
   });
 
   /** Mirrors fixRuleForm into a signal so the computed above re-evaluates
@@ -1483,13 +1563,14 @@ export class MonitoredJobsComponent implements OnInit {
         })),
       };
     } else {
-      // New rule defaults to JobType-level (monitoredJobId=null) — same as
-      // the historical behavior. Operator opts into per-job scope via the
-      // scope radio in the drawer.
+      // New rule defaults to THIS job (per-job override) — the common case:
+      // each configured job typically has its own classification + fix.
+      // Operator can widen to a JobType-wide default via the inline scope
+      // link in the drawer for the rare "all jobs of this type" case.
       this.fixRuleForm = {
         ...this.blankFixRule(),
         jobTypeId      : this.getJobTypeId(job),
-        monitoredJobId : null,
+        monitoredJobId : job.monitoredJobId,
       };
     }
     // Seed the form-mirror signal so the inline-warning computed evaluates

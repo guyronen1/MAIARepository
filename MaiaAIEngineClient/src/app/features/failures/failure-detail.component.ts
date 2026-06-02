@@ -3,7 +3,7 @@ import { DatePipe, PercentPipe } from '@angular/common';
 import { FailuresService } from '../../core/services/failures.service';
 import { RecommendationsService } from '../../core/services/recommendations.service';
 import { ConfigService, FixPolicyRuleStep } from '../../core/services/config.service';
-import { FailureStatus, Recommendation } from '../../core/models';
+import { FailureStatus, FixExecution, Recommendation } from '../../core/models';
 import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
 
 /**
@@ -35,6 +35,20 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
           </div>
         </div>
 
+        <!-- Prominent banner when any fix attempt failed to execute. The
+             per-step ✓/✗ breakdown lives in the Execution History card below. -->
+        @if (hasFixFailure()) {
+          <div class="fix-failure-alert" role="alert">
+            <span class="alert-icon">✕</span>
+            <span>
+              A fix <strong>failed to execute</strong> for this failure —
+              {{ failedExecutionCount() }} of {{ executions().length }}
+              {{ executions().length === 1 ? 'action' : 'actions' }} did not complete.
+              See <strong>Execution History</strong> below for which step failed.
+            </span>
+          </div>
+        }
+
         <div class="detail-grid">
           <!-- Failure info -->
           <div class="card">
@@ -63,6 +77,10 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
               <dt>Job</dt>        <dd dir="auto">{{ failure()!.monitoredJobName ?? '—' }}</dd>
               <dt>Step / File</dt><dd dir="auto">{{ failure()!.stepName ?? '—' }}</dd>
               <dt>Source ID</dt>  <dd class="font-mono">{{ failure()!.sourceId ?? '—' }}</dd>
+              @if (failure()!.sourceFilePath) {
+                <dt>Source File</dt>
+                <dd class="font-mono" dir="auto" title="Captured input file path — what {sourceFilePath} resolves to">{{ failure()!.sourceFilePath }}</dd>
+              }
               <dt>Error Type</dt> <dd>
                 @if (failure()!.errorTypeCode) {
                   <span class="badge badge-medium">{{ failure()!.errorTypeCode }}</span>
@@ -145,9 +163,10 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
                                is empty so the bullet is never blank. -->
                           <ul class="rec-steps-list">
                             @for (step of stepsFor(rec); track step.stepId; let idx = $index) {
-                              <li class="rec-step" dir="auto">
-                                {{ step.description?.trim()
-                                    || 'Step ' + (idx + 1) + ' (' + step.actionType + ')' }}
+                              <li class="rec-step" dir="auto" [class]="'step-' + stepStatus(rec, step.stepOrder)">
+                                <span class="step-icon">{{ stepIcon(stepStatus(rec, step.stepOrder)) }}</span>
+                                <span class="step-text">{{ step.description?.trim()
+                                    || 'Step ' + (idx + 1) + ' (' + step.actionType + ')' }}</span>
                               </li>
                             }
                           </ul>
@@ -193,6 +212,18 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
                              disabled and label the new state, so the operator doesn't
                              have controls vanish under their cursor. -->
                         <div class="rec-actions rec-actions-done">
+                          <!-- Retry: only when THIS rec failed to execute and
+                               the failure is in ManualRequired. After fixing
+                               the root cause (e.g. a bad policy), re-run the
+                               same failure. Re-arms + drains synchronously. -->
+                          @if (recFailedToExecute(rec) && failure()!.status === 'ManualRequired') {
+                            <button class="btn btn-primary btn-sm" (click)="retry(rec)"
+                                    [disabled]="retrying() === rec.recommendationId"
+                                    title="Re-run this fix now (use after fixing the root cause)">
+                              @if (retrying() === rec.recommendationId) { <span class="spinner"></span> }
+                              ↻ Retry Fix
+                            </button>
+                          }
                           @if (rec.fixCategory === 'Manual') {
                             <button class="btn btn-success btn-sm" disabled>✓ Acknowledge</button>
                           } @else {
@@ -214,12 +245,41 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
             }
           </div>
         </div>
+
+        <!-- Execution History — chronological fix-attempt log. For composite
+             policies each step is its own ✓/✗ row (indented), followed by the
+             overall summary row. Failed rows are highlighted red so the
+             operator sees exactly which action needs manual cleanup. -->
+        @if (executions().length > 0) {
+          <div class="card exec-history">
+            <div class="card-header">
+              <h3>Execution History</h3>
+              <span class="text-muted text-sm">{{ executions().length | pluralize:'action' }}</span>
+            </div>
+            <ul class="exec-list">
+              @for (e of executions(); track e.fixId) {
+                <!-- Single line per attempt: ✓/✗ · action · time. Full
+                     result detail + trigger live in the hover title so the
+                     row stays one line. -->
+                <li class="exec-row" [class.failed]="!e.success" [class.step]="isStepRow(e)"
+                    [attr.title]="(e.resultDetail || '') + (e.resultDetail ? '  —  ' : '') + e.triggerType">
+                  <span class="exec-status" [class.ok]="e.success" [class.bad]="!e.success">{{ e.success ? '✓' : '✗' }}</span>
+                  <span class="exec-action" dir="auto">{{ e.executedAction }}</span>
+                  <span class="exec-time">{{ e.executedAt | date:'short' }}</span>
+                </li>
+              }
+            </ul>
+          </div>
+        }
       }
     </div>
   `,
   styles: [`
     h1 { font-size: 22px; font-weight: 700; }
     .page-header { display: flex; align-items: center; gap: 16px; }
+    /* Stack the detail sections (stage card, fix-failure banner, detail grid,
+       execution history) with consistent spacing. .card carries no margin. */
+    .detail-root { display: flex; flex-direction: column; gap: 16px; }
     .breadcrumb { display: flex; align-items: center; gap: 4px; }
 
     .stage-pipeline { display: flex; align-items: center; justify-content: center; padding: 8px 0; }
@@ -255,6 +315,39 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
        drawer's rest-of-app spacing. */
     .header-actions { display: inline-flex; align-items: center; gap: 8px; }
 
+    /* Prominent banner when a fix failed to execute — sits above the detail
+       grid so the operator can't miss it. Red family matches the error box. */
+    .fix-failure-alert {
+      display: flex; align-items: center; gap: 10px;
+      background: var(--danger-bg); border: 1px solid var(--danger);
+      color: var(--danger); border-radius: var(--radius-sm);
+      padding: 10px 14px; font-size: 13px; line-height: 1.4;
+      .alert-icon { font-weight: 700; font-size: 15px; flex-shrink: 0; }
+      strong { font-weight: 700; }
+    }
+
+    /* Execution History — chronological ✓/✗ list. Composite step rows are
+       indented under the summary; failed rows are tinted red. */
+    .exec-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+    .exec-row {
+      display: flex; gap: 8px; align-items: center;
+      padding: 5px 10px; border-radius: var(--radius-sm);
+      background: var(--surface-2); border: 1px solid var(--border-light);
+      &.failed { background: var(--danger-bg); border-color: var(--danger); }
+      &.step   { margin-left: 20px; }
+    }
+    .exec-status {
+      flex-shrink: 0; width: 14px; text-align: center;
+      font-weight: 700; font-size: 13px;
+      &.ok  { color: var(--success); }
+      &.bad { color: var(--danger); }
+    }
+    .exec-action {
+      flex: 1; min-width: 0; font-size: 12px; font-weight: 600;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .exec-time { flex-shrink: 0; font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+
     .ai-panel .card-header h3 { display: flex; align-items: center; gap: 8px; }
     .ai-chip { background: linear-gradient(135deg, var(--primary), var(--accent)); color: #fff; font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 4px; letter-spacing: 0.06em; }
 
@@ -275,11 +368,19 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
     .rec-steps         { margin: 4px 0 8px; }
     .rec-steps-loading { padding: 4px 0; }
     .rec-steps-list    {
-      margin: 0; padding-left: 20px;
+      margin: 0; padding-left: 0;
       display: flex; flex-direction: column; gap: 6px;
-      list-style: disc;
+      list-style: none;
     }
-    .rec-step { font-size: 12px; line-height: 1.5; color: var(--text); }
+    .rec-step {
+      font-size: 12px; line-height: 1.5; color: var(--text);
+      display: flex; gap: 6px; align-items: baseline;
+      .step-icon { flex-shrink: 0; width: 14px; text-align: center; font-weight: 700; }
+      .step-text { flex: 1; min-width: 0; }
+      &.step-ok      .step-icon { color: var(--success); }
+      &.step-fail    .step-icon { color: var(--danger); }
+      &.step-pending .step-icon { color: var(--text-dim); }
+    }
     .rec-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
     .autoheal-label { display: flex; align-items: center; gap: 4px; }
     .rec-actions { display: flex; gap: 6px; align-items: center; }
@@ -338,6 +439,35 @@ export class FailureDetailComponent implements OnDestroy {
       { key: 'Fixed',       label: 'Fixed',       icon: '✓' },
     ];
   });
+
+  /** Fix-execution history from the status payload, chronological. */
+  executions = computed<FixExecution[]>(() => this.failure()?.executions ?? []);
+  /** A fix attempt failed (any execution row with success=false). Drives the
+   *  prominent failure banner + per-row highlighting. */
+  hasFixFailure = computed(() => this.executions().some(e => !e.success));
+  failedExecutionCount = computed(() => this.executions().filter(e => !e.success).length);
+
+  /** Composite step rows are written by DefaultFixEngine.Composite; the
+   *  single overall summary row is written by ExecuteFixesUseCase. Used to
+   *  indent the per-step rows under the summary in the history list. */
+  isStepRow(e: FixExecution): boolean { return e.executedBy.endsWith('.Composite'); }
+
+  /** Execution outcome of a composite step, matched by recommendation + step
+   *  order against the per-step execution rows (ExecutedAction = "Step N: …").
+   *  'pending' = no execution row yet (not run, or single-action). Latest
+   *  matching attempt wins. Drives the ✓/✗/• icon on the rec-card step list. */
+  stepStatus(rec: Recommendation, stepOrder: number): 'ok' | 'fail' | 'pending' {
+    const prefix = `Step ${stepOrder}:`;
+    const matches = this.executions().filter(e =>
+      e.recommendationId === rec.recommendationId
+      && this.isStepRow(e)
+      && e.executedAction.startsWith(prefix));
+    if (matches.length === 0) return 'pending';
+    return matches[matches.length - 1].success ? 'ok' : 'fail';
+  }
+  stepIcon(s: 'ok' | 'fail' | 'pending'): string {
+    return s === 'ok' ? '✓' : s === 'fail' ? '✗' : '•';
+  }
 
   /** Inflight flag for the Mark Resolved button so we can disable + spinner. */
   markingResolved = signal(false);
@@ -464,5 +594,25 @@ export class FailureDetailComponent implements OnDestroy {
       error: () => rec.operatorApproved = false
     });
     rec.operatorApproved = false;
+  }
+
+  /** True when THIS rec has a failed execution row — i.e. its fix tried and
+   *  failed. Drives the "Retry Fix" button (only meaningful in ManualRequired). */
+  recFailedToExecute(rec: Recommendation): boolean {
+    return this.executions().some(e => e.recommendationId === rec.recommendationId && !e.success);
+  }
+
+  /** Inflight guard for the retry button so a double-click can't double-fire. */
+  retrying = signal<number | null>(null);
+
+  /** Re-run a fix that failed to execute (after the operator fixed the root
+   *  cause). Backend re-arms the failure + rec and drains synchronously, then
+   *  we reload to show the new outcome. */
+  retry(rec: Recommendation) {
+    this.retrying.set(rec.recommendationId);
+    this.recSvc.retryRecommendation(rec.recommendationId, 'operator').subscribe({
+      next:  () => { this.retrying.set(null); this.reload(); },
+      error: () => { this.retrying.set(null); },
+    });
   }
 }
