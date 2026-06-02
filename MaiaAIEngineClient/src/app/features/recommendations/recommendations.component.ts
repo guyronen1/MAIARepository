@@ -278,6 +278,7 @@ export class RecommendationsComponent implements OnInit {
         const body: UpsertFixPolicyRuleRequest = {
           jobTypeId:          policy.jobTypeId,
           errorTypeId:        policy.errorTypeId,
+          monitoredJobId:     policy.monitoredJobId,  // preserve scope on auto-heal toggle
           actionToApply:      policy.actionToApply,
           fixCategory:        policy.fixCategory,
           actionType:         policy.actionType,

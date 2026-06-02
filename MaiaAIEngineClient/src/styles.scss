@@ -203,6 +203,14 @@ select option { background: #fff; }
   &.badge-medium      { background: var(--warning-bg); color: var(--warning); border: 1px solid #fcd34d; }
   &.badge-low         { background: var(--info-bg);    color: var(--info);    border: 1px solid #93c5fd; }
   &.badge-info        { background: var(--info-bg);    color: var(--info);    border: 1px solid #93c5fd; }
+
+  // JobStatus enum values rendered via `'badge-' + status.toLowerCase()`.
+  // Failed and Resolved are already covered above; these fill the gap.
+  &.badge-manualrequired       { background: var(--warning-bg); color: var(--warning); border: 1px solid #fcd34d; }
+  // "Operator approved, performing manual action off-system" — blue tone
+  // distinct from amber manual-required ("system stuck, needs you") and
+  // green resolved ("done"). Reads as "in progress on your side".
+  &.badge-awaitingmanualaction { background: var(--info-bg);    color: var(--info);    border: 1px solid #93c5fd; }
 }
 
 // ── Empty state ────────────────────────────────────────────────────────────

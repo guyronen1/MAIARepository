@@ -21,29 +21,50 @@ export interface ClassificationRule {
   pattern: string; confidence: number; priority: number; isActive: boolean; createdBy: string | null;
 }
 
+export interface FixPolicyRuleStep {
+  stepId:        number;
+  stepOrder:     number;
+  actionType:    string;
+  actionPayload: string;
+  description:   string | null;
+}
+
 export interface FixPolicyRule {
   ruleId: number;
   jobTypeId: number;
   errorTypeId: number;
+  /** NULL = JobType-level default; set = override scoped to that MonitoredJob.
+   *  Override wins over default for the same (JobType, ErrorType) when evaluating
+   *  recommendations for a failure on the scoped job. */
+  monitoredJobId: number | null;
   errorTypeCode: string;
   actionToApply: string;
   fixCategory: string;
   actionType: string;
+  /** Null for Composite rules — payload lives on each step instead. */
   actionPayload: string | null;
   isAutoHealEligible: boolean;
   enabled: boolean;
+  /** Empty array for non-composite rules. Ordered by StepOrder ascending. */
+  steps: FixPolicyRuleStep[];
 }
 
 export interface UpsertJobRequest {
   name: string; displayName: string | null; jobTypeId: number; scanTypeId: number;
   logFolder: string | null; searchPatterns: string | null; connectionName: string | null;
   logSourceUrl: string | null; pollingIntervalSeconds: number; isActive: boolean; description: string | null;
+  /** Optional base folder for relative InputPathPattern captures (FS jobs). */
+  inputFolder: string | null;
 }
 export interface UpsertScanRuleRequest {
   checkType: string; sourceTable: string | null; targetField: string;
   minValue: number | null; maxValue: number | null; expectedValue: string | null;
   watermarkColumn: string | null; sourceIdColumn: string | null;
   severity: string; description: string | null; isActive: boolean;
+  /** DB scans only — column on the source row holding the input file path. */
+  filePathColumn:   string | null;
+  /** FS scans only — regex (capture group #1 = input file path). */
+  inputPathPattern: string | null;
 }
 export interface UpsertClassificationRuleRequest {
   jobTypeId: number; errorTypeId: number; pattern: string;
@@ -53,16 +74,44 @@ export interface UpsertJobClassificationRuleRequest {
   errorTypeId: number; pattern: string;
   confidence: number; priority: number; isActive: boolean;
 }
+export interface FixPolicyStepDto {
+  stepOrder:     number;
+  actionType:    string;
+  actionPayload: string;
+  description:   string | null;
+}
+
 export interface UpsertFixPolicyRuleRequest {
   jobTypeId: number; errorTypeId: number;
+  /** Optional override scope. NULL → JobType-level default (default behavior). */
+  monitoredJobId: number | null;
   actionToApply: string; fixCategory: string; actionType: string;
+  /** Must be null when actionType === 'Composite'. Backend rejects otherwise. */
   actionPayload: string | null; isAutoHealEligible: boolean; enabled: boolean;
+  /** Required when actionType === 'Composite'. Must be null/empty otherwise.
+   *  Backend normalises StepOrder to 1..N before persist, so gaps are fine. */
+  steps?: FixPolicyStepDto[];
 }
 
 @Injectable({ providedIn: 'root' })
 export class ConfigService {
   private http = inject(HttpClient);
   private base = `${environment.apiUrl}/config`;
+
+  /** Operator identity attached to every config write. Backend rejects writes
+   *  with no operatorId. Hardcoded for now — when authn lands, this becomes
+   *  the authenticated user (single point of change). */
+  private readonly actor = 'operator';
+
+  /** Spread the actor into a request body. Used by POST/PUT calls. */
+  private withActor<T extends object>(req: T): T & { operatorId: string } {
+    return { ...req, operatorId: this.actor };
+  }
+
+  /** Query-string variant for DELETE / link endpoints that have no body. */
+  private actorParams(): HttpParams {
+    return new HttpParams().set('operatorId', this.actor);
+  }
 
   // ── Lookups ────────────────────────────────────────────────────────────────
   getJobTypes():   Observable<JobType[]>   { return this.http.get<JobType[]>(`${this.base}/job-types`); }
@@ -71,13 +120,13 @@ export class ConfigService {
     return this.http.get<ErrorType[]>(`${this.base}/error-types`, { params });
   }
   createErrorType(req: UpsertErrorTypeRequest): Observable<{ errorTypeId: number }> {
-    return this.http.post<{ errorTypeId: number }>(`${this.base}/error-types`, req);
+    return this.http.post<{ errorTypeId: number }>(`${this.base}/error-types`, this.withActor(req));
   }
   updateErrorType(id: number, req: UpsertErrorTypeRequest): Observable<void> {
-    return this.http.put<void>(`${this.base}/error-types/${id}`, req);
+    return this.http.put<void>(`${this.base}/error-types/${id}`, this.withActor(req));
   }
   deleteErrorType(id: number): Observable<void> {
-    return this.http.delete<void>(`${this.base}/error-types/${id}`);
+    return this.http.delete<void>(`${this.base}/error-types/${id}`, { params: this.actorParams() });
   }
 
   // ── Monitored Jobs ─────────────────────────────────────────────────────────
@@ -85,35 +134,40 @@ export class ConfigService {
     return this.http.get<MonitoredJob[]>(`${this.base}/monitored-jobs`);
   }
   createJob(req: UpsertJobRequest): Observable<{ monitoredJobId: number }> {
-    return this.http.post<{ monitoredJobId: number }>(`${this.base}/monitored-jobs`, req);
+    return this.http.post<{ monitoredJobId: number }>(`${this.base}/monitored-jobs`, this.withActor(req));
   }
   updateJob(id: number, req: UpsertJobRequest): Observable<void> {
-    return this.http.put<void>(`${this.base}/monitored-jobs/${id}`, req);
+    return this.http.put<void>(`${this.base}/monitored-jobs/${id}`, this.withActor(req));
   }
   deleteJob(id: number): Observable<void> {
-    return this.http.delete<void>(`${this.base}/monitored-jobs/${id}`);
+    return this.http.delete<void>(`${this.base}/monitored-jobs/${id}`, { params: this.actorParams() });
   }
 
   // ── Scan Check Rules ───────────────────────────────────────────────────────
   createScanRule(jobId: number, req: UpsertScanRuleRequest): Observable<{ checkRuleId: number }> {
-    return this.http.post<{ checkRuleId: number }>(`${this.base}/monitored-jobs/${jobId}/scan-rules`, req);
+    return this.http.post<{ checkRuleId: number }>(`${this.base}/monitored-jobs/${jobId}/scan-rules`, this.withActor(req));
   }
   updateScanRule(id: number, req: UpsertScanRuleRequest): Observable<void> {
-    return this.http.put<void>(`${this.base}/scan-rules/${id}`, req);
+    return this.http.put<void>(`${this.base}/scan-rules/${id}`, this.withActor(req));
   }
   deleteScanRule(id: number): Observable<void> {
-    return this.http.delete<void>(`${this.base}/scan-rules/${id}`);
+    return this.http.delete<void>(`${this.base}/scan-rules/${id}`, { params: this.actorParams() });
   }
 
   // ── Per-job Classification Rules ───────────────────────────────────────────
   createJobClassificationRule(jobId: number, req: UpsertJobClassificationRuleRequest): Observable<{ ruleId: number }> {
-    return this.http.post<{ ruleId: number }>(`${this.base}/monitored-jobs/${jobId}/classification-rules`, req);
+    return this.http.post<{ ruleId: number }>(`${this.base}/monitored-jobs/${jobId}/classification-rules`, this.withActor(req));
   }
   linkJobClassificationRule(jobId: number, ruleId: number): Observable<{ ruleId: number }> {
-    return this.http.post<{ ruleId: number }>(`${this.base}/monitored-jobs/${jobId}/classification-rules/${ruleId}/link`, {});
+    return this.http.post<{ ruleId: number }>(
+      `${this.base}/monitored-jobs/${jobId}/classification-rules/${ruleId}/link`,
+      null,
+      { params: this.actorParams() });
   }
   deleteJobClassificationRule(jobId: number, ruleId: number): Observable<void> {
-    return this.http.delete<void>(`${this.base}/monitored-jobs/${jobId}/classification-rules/${ruleId}`);
+    return this.http.delete<void>(
+      `${this.base}/monitored-jobs/${jobId}/classification-rules/${ruleId}`,
+      { params: this.actorParams() });
   }
 
   // ── Global Classification Rules ────────────────────────────────────────────
@@ -121,30 +175,40 @@ export class ConfigService {
     return this.http.get<ClassificationRule[]>(`${this.base}/classification-rules`);
   }
   createClassificationRule(req: UpsertClassificationRuleRequest): Observable<{ ruleId: number }> {
-    return this.http.post<{ ruleId: number }>(`${this.base}/classification-rules`, req);
+    return this.http.post<{ ruleId: number }>(`${this.base}/classification-rules`, this.withActor(req));
   }
   updateClassificationRule(id: number, req: UpsertClassificationRuleRequest): Observable<void> {
-    return this.http.put<void>(`${this.base}/classification-rules/${id}`, req);
+    return this.http.put<void>(`${this.base}/classification-rules/${id}`, this.withActor(req));
   }
   deleteClassificationRule(id: number): Observable<void> {
-    return this.http.delete<void>(`${this.base}/classification-rules/${id}`);
+    return this.http.delete<void>(`${this.base}/classification-rules/${id}`, { params: this.actorParams() });
   }
 
   // ── Fix Policy Rules ───────────────────────────────────────────────────────
-  getFixPolicyRules(jobTypeId?: number): Observable<FixPolicyRule[]> {
-    const params = jobTypeId ? new HttpParams().set('jobTypeId', jobTypeId) : undefined;
-    return this.http.get<FixPolicyRule[]>(`${this.base}/fix-policy-rules`, { params });
+  /**
+   * @param jobTypeId       Filter to a JobType's policies.
+   * @param monitoredJobId  When set, additionally returns the override scoped
+   *                        to this MonitoredJob (lookup priority: override
+   *                        wins over default at evaluation time). Used by the
+   *                        per-job Fix Options tab to show effective config.
+   */
+  getFixPolicyRules(jobTypeId?: number, monitoredJobId?: number): Observable<FixPolicyRule[]> {
+    let params = new HttpParams();
+    if (jobTypeId      !== undefined) params = params.set('jobTypeId',      jobTypeId);
+    if (monitoredJobId !== undefined) params = params.set('monitoredJobId', monitoredJobId);
+    return this.http.get<FixPolicyRule[]>(`${this.base}/fix-policy-rules`,
+      { params: params.keys().length ? params : undefined });
   }
   getFixPolicyRuleById(id: number): Observable<FixPolicyRule> {
     return this.http.get<FixPolicyRule>(`${this.base}/fix-policy-rules/${id}`);
   }
   createFixPolicyRule(req: UpsertFixPolicyRuleRequest): Observable<{ ruleId: number }> {
-    return this.http.post<{ ruleId: number }>(`${this.base}/fix-policy-rules`, req);
+    return this.http.post<{ ruleId: number }>(`${this.base}/fix-policy-rules`, this.withActor(req));
   }
   updateFixPolicyRule(id: number, req: UpsertFixPolicyRuleRequest): Observable<void> {
-    return this.http.put<void>(`${this.base}/fix-policy-rules/${id}`, req);
+    return this.http.put<void>(`${this.base}/fix-policy-rules/${id}`, this.withActor(req));
   }
   deleteFixPolicyRule(id: number): Observable<void> {
-    return this.http.delete<void>(`${this.base}/fix-policy-rules/${id}`);
+    return this.http.delete<void>(`${this.base}/fix-policy-rules/${id}`, { params: this.actorParams() });
   }
 }

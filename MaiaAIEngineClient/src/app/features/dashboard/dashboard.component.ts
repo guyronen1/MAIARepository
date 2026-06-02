@@ -7,6 +7,10 @@ import { ScanService } from '../../core/services/scan.service';
 import { PolledData, WorkerStatusService } from '../../core/services/worker-status.service';
 import { JobFailure, JobLastScanRow, MonitoredJob, ScanResult, WorkerStatus } from '../../core/models';
 import { ErrorsOverTimeChartComponent } from './errors-over-time-chart.component';
+import { FailuresByJobChartComponent } from './failures-by-job-chart.component';
+import { ResolutionMixChartComponent } from './resolution-mix-chart.component';
+
+type ChartRange = '24h' | '7d' | '30d';
 
 type LastScanRecord = NonNullable<JobLastScanRow['lastScan']>;
 type JobIconState   = 'spinner' | 'success' | 'failed' | 'gray';
@@ -15,7 +19,12 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [DatePipe, ErrorsOverTimeChartComponent],
+  imports: [
+    DatePipe,
+    ErrorsOverTimeChartComponent,
+    FailuresByJobChartComponent,
+    ResolutionMixChartComponent,
+  ],
   template: `
     <div class="page">
       <div class="page-header">
@@ -82,10 +91,30 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
             <div class="kpi-label">Manual Required</div>
           </div>
         </button>
+        <button class="kpi-card danger alarm" (click)="drill('fix-failed')"
+                title="Failures whose automated fix attempts failed today — operator review needed">
+          <div class="kpi-icon kpi-icon-alarm">🚨</div>
+          <div class="kpi-body">
+            <div class="kpi-value">{{ stats().fixFailedToday }}</div>
+            <div class="kpi-label">Fix Failures Today</div>
+          </div>
+        </button>
       </div>
 
-      <!-- Errors Over Time — full-width analytics chart -->
-      <app-errors-over-time-chart></app-errors-over-time-chart>
+      <!-- Analytics row 1: Errors Over Time + Failures by Job side-by-side at
+           ~60/40. The range toggle lives inside the Errors Over Time card but
+           drives both charts via the chartRange signal below. Resolution Mix
+           on row 2 has its own fixed 7-day window (different semantic). -->
+      <div class="analytics-row-1">
+        <app-errors-over-time-chart
+            [range]="chartRange()"
+            (rangeChange)="chartRange.set($event)"></app-errors-over-time-chart>
+        <app-failures-by-job-chart
+            [range]="chartRange()"></app-failures-by-job-chart>
+      </div>
+      <div class="analytics-row-2">
+        <app-resolution-mix-chart></app-resolution-mix-chart>
+      </div>
 
       <div class="row-2col">
         <!-- Recent Failures -->
@@ -273,7 +302,39 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
     .kpi-label { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
     .kpi-breakdown { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
 
+    /* Fix Failures Today tile — system-problem signal. Full-opacity icon
+       (vs the 0.7 default) so the alarm visually pops above the other
+       danger tile (Active Failures). Thicker red left border doubles the
+       semantic weight. Pulse runs whenever the icon is present — operators
+       on a quiet day see a "0" count which already reads as "no problem",
+       so the pulse on top of "0" is informational, not harassment. On a
+       noisy day the count + pulse together demand attention. Respects
+       prefers-reduced-motion. */
+    .kpi-card.alarm        { border-left-width: 4px; }
+    .kpi-icon-alarm        { opacity: 1; animation: alarm-pulse 2.4s ease-in-out infinite; }
+    @keyframes alarm-pulse {
+      0%, 100% { transform: scale(1);    filter: drop-shadow(0 0 0 rgba(220,38,38,0)); }
+      50%      { transform: scale(1.08); filter: drop-shadow(0 0 4px rgba(220,38,38,0.6)); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .kpi-icon-alarm { animation: none; opacity: 1; }
+    }
+
     .row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+    /* Phase 2 analytics rows. Row 1 splits at 60/40 (Errors Over Time wider
+       since it carries the range toggle + multi-series legend). Row 2 hosts
+       the full-width Resolution Mix.
+       3fr / 2fr is mathematically the same as 1.5fr / 1fr but the explicit
+       form is easier to reason about. Items get min-width: 0 so the right-
+       column's Chart.js canvas can shrink with the grid instead of forcing
+       its parent wider via intrinsic content size (which was causing the
+       visual to look 55/45 instead of the intended 60/40). */
+    .analytics-row-1 {
+      display: grid; grid-template-columns: 3fr 2fr; gap: 16px;
+      > * { min-width: 0; }
+    }
+    .analytics-row-2 { display: block; }
 
     .job-list { display: flex; flex-direction: column; gap: 1px; }
 
@@ -381,6 +442,12 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
     @keyframes spin { to { transform: rotate(360deg); } }
 
     @media (max-width: 1400px) { .kpi-grid { grid-template-columns: repeat(3, 1fr); } }
+    /* Collapse row 1 to stacked full-width below ~1200px — at that width the
+       40% column would be too narrow for top-10 horizontal bars to stay
+       readable. Resolution Mix on row 2 is already full-width. */
+    @media (max-width: 1200px) {
+      .analytics-row-1 { grid-template-columns: 1fr; }
+    }
     @media (max-width: 900px) {
       .kpi-grid { grid-template-columns: repeat(2,1fr); }
       .row-2col { grid-template-columns: 1fr; }
@@ -393,6 +460,12 @@ export class DashboardComponent implements OnInit, OnDestroy {
   private statusSvc = inject(WorkerStatusService);
 
   lastScan = signal<ScanResult | null>(null);
+
+  /** Shared time-range for the row-1 analytics charts (Errors Over Time and
+   *  Failures by Job). Owned here so a single toggle in the Errors Over Time
+   *  card updates both. Resolution Mix on row 2 has its own fixed 7-day
+   *  window and ignores this signal. */
+  chartRange = signal<ChartRange>('24h');
 
   // Raw PolledData<T> from the service — each slice is independent and tracks
   // its own isStale / lastUpdatedAt. The component-facing getters below unwrap
@@ -428,6 +501,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
     totalFailures: 0, active: 0, resolved: 0, manualRequired: 0,
     unclassified: 0, awaitingAction: 0, autoFixed: 0, manuallyFixed: 0,
     resolvedToday: 0, autoFixedToday: 0, manuallyFixedToday: 0,
+    fixFailedToday: 0,
   };
   stats = computed<DashboardStats>(() => this.statsPolled().value ?? DashboardComponent.EMPTY_STATS);
 
@@ -626,7 +700,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
   drill(view:
     | 'active' | 'unclassified' | 'awaiting-action'
     | 'resolved' | 'manual-required'
-    | 'auto-fixed' | 'operator-fixed' | 'all') {
+    | 'auto-fixed' | 'operator-fixed'
+    | 'fix-failed' | 'all') {
     this.router.navigate(['/failures'], { queryParams: view === 'all' ? {} : { view } });
   }
 

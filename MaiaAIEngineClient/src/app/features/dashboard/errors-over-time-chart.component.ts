@@ -1,6 +1,6 @@
 import {
   AfterViewInit, Component, ElementRef, OnDestroy, ViewChild,
-  computed, inject, signal,
+  computed, effect, inject, input, output, signal,
 } from '@angular/core';
 import {
   Chart, Filler, Legend, LineController, LineElement, LinearScale,
@@ -51,6 +51,8 @@ function withAlpha(hex: string, alpha: number): string {
     <div class="card chart-card">
       <div class="chart-header">
         <h3>Errors Over Time</h3>
+        <!-- Toggle stays visually attached here but emits to the dashboard
+             parent via rangeChange, so Failures by Job re-fetches in lockstep. -->
         <div class="range-toggle" role="tablist">
           @for (r of ranges; track r) {
             <button type="button"
@@ -118,8 +120,20 @@ export class ErrorsOverTimeChartComponent implements AfterViewInit, OnDestroy {
 
   @ViewChild('canvas') canvasRef?: ElementRef<HTMLCanvasElement>;
 
+  /** Time range is now owned by the dashboard parent. The toggle button row
+   *  in this component's template emits rangeChange when an operator picks
+   *  a different window; the parent updates its signal which flows back as
+   *  an updated input, and any sibling charts bound to the same parent
+   *  signal re-fetch in lockstep. */
+  rangeInput   = input<Range>('24h', { alias: 'range' });
+  rangeChange  = output<Range>();
+
   ranges: Range[] = ['24h', '7d', '30d'];
-  range    = signal<Range>('24h');
+  /** Local mirror of the input — used by the template for active-state
+   *  highlighting and by the fetch effect for the API call. Kept as a
+   *  signal so the active-button styling reacts immediately. */
+  range = computed<Range>(() => this.rangeInput());
+
   loading  = signal(true);
   payload  = signal<FailuresOverTimeResponse | null>(null);
   hasData  = computed(() => (this.payload()?.buckets.length ?? 0) > 0);
@@ -127,8 +141,18 @@ export class ErrorsOverTimeChartComponent implements AfterViewInit, OnDestroy {
   private chart?: Chart;
   private pendingRender = false;
 
+  constructor() {
+    // Re-fetch on every range change driven from the parent. First emit
+    // happens at construction time before AfterViewInit; the renderIfReady
+    // retry covers the case where the canvas isn't in the DOM yet.
+    effect(() => {
+      const r = this.range();
+      this.fetch(r);
+    });
+  }
+
   ngAfterViewInit(): void {
-    this.fetch();
+    // No-op: fetch is driven by the effect above.
   }
 
   ngOnDestroy(): void {
@@ -137,17 +161,18 @@ export class ErrorsOverTimeChartComponent implements AfterViewInit, OnDestroy {
 
   setRange(r: Range): void {
     if (r === this.range()) return;
-    this.range.set(r);
-    this.fetch();
+    // Emit upward — the parent will update its signal and the input will
+    // round-trip back, triggering the effect that calls fetch().
+    this.rangeChange.emit(r);
   }
 
-  private fetch(): void {
+  private fetch(r: Range): void {
     this.loading.set(true);
     // Destroy any existing chart so the skeleton can show in its place
     this.chart?.destroy();
     this.chart = undefined;
 
-    this.svc.getFailuresOverTime(this.range()).subscribe({
+    this.svc.getFailuresOverTime(r).subscribe({
       next: res => {
         this.payload.set(res);
         this.loading.set(false);

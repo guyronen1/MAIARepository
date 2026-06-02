@@ -1,7 +1,8 @@
-import { Component, OnDestroy, effect, inject, input, signal } from '@angular/core';
+import { Component, OnDestroy, computed, effect, inject, input, signal } from '@angular/core';
 import { DatePipe, PercentPipe } from '@angular/common';
 import { FailuresService } from '../../core/services/failures.service';
 import { RecommendationsService } from '../../core/services/recommendations.service';
+import { ConfigService, FixPolicyRuleStep } from '../../core/services/config.service';
 import { FailureStatus, Recommendation } from '../../core/models';
 import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
 
@@ -24,7 +25,7 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
         <!-- Stage pipeline -->
         <div class="card">
           <div class="stage-pipeline">
-            @for (s of stages; track s.key) {
+            @for (s of stages(); track s.key) {
               <div class="stage" [class.active]="s.key === failure()!.stage" [class.done]="isStageCompleted(s.key)">
                 <div class="stage-dot">{{ s.icon }}</div>
                 <span class="stage-label">{{ s.label }}</span>
@@ -39,7 +40,24 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
           <div class="card">
             <div class="card-header">
               <h3>Failure Details</h3>
-              <span class="badge" [class]="'badge-' + failure()!.status.toLowerCase()">{{ failure()!.status }}</span>
+              <div class="header-actions">
+                <span class="badge" [class]="'badge-' + failure()!.status.toLowerCase()">{{ statusLabel(failure()!.status) }}</span>
+                @if (failure()!.status === 'AwaitingManualAction' || failure()!.status === 'ManualRequired') {
+                  <!-- Exit ramp for the off-system manual flow. Visible when:
+                         • Status = AwaitingManualAction → operator approved a
+                           Manual rec; clicking confirms the off-system work done
+                         • Status = ManualRequired       → operator rejected or
+                           auto-heal failed; clicking confirms operator handled
+                           it manually some other way
+                       Same backend endpoint (idempotent: already-Resolved → 204). -->
+                  <button class="btn btn-success btn-sm"
+                          [disabled]="markingResolved()"
+                          (click)="markResolved()">
+                    @if (markingResolved()) { <span class="spinner"></span> }
+                    ✓ Mark Resolved
+                  </button>
+                }
+              </div>
             </div>
             <dl class="detail-list">
               <dt>Job</dt>        <dd dir="auto">{{ failure()!.monitoredJobName ?? '—' }}</dd>
@@ -83,12 +101,59 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
                   <div class="rec-card" [class.executed]="rec.isExecuted">
                     <div class="rec-header">
                       <span class="badge" [class]="categoryBadge(rec.fixCategory)">{{ rec.fixCategory }}</span>
-                      @if (rec.isExecuted) { <span class="badge badge-fixed">Executed</span> }
+                      @if (rec.isExecuted) {
+                        @if (rec.fixCategory === 'Manual') {
+                          <!-- IsExecuted=true on a Manual rec means the
+                               operator acknowledged it (the action is happening
+                               off-system). Don't claim "Executed" — it would
+                               read as "the system ran the fix" which is false. -->
+                          <span class="badge badge-awaitingmanualaction">Acknowledged</span>
+                        } @else {
+                          <span class="badge badge-fixed">Executed</span>
+                        }
+                      }
                       @if (rec.operatorApproved === true)  { <span class="badge badge-resolved">Approved</span> }
                       @if (rec.operatorApproved === false) { <span class="badge badge-failed">Rejected</span> }
                     </div>
 
-                    <p class="rec-action" dir="auto">{{ rec.suggestedAction }}</p>
+                    <p class="rec-action" dir="auto">
+                      {{ rec.suggestedAction }}
+                      @if (rec.policyStepCount > 0) {
+                        <span class="badge badge-info composite-badge"
+                              title="Composite policy: this approval triggers multiple ordered actions. Best-effort: any step failure routes the failure to ManualRequired, remaining steps still run.">
+                          Composite · {{ rec.policyStepCount }} steps
+                        </span>
+                      }
+                    </p>
+
+                    @if (rec.policyStepCount > 0) {
+                      <!-- Inline composite step list — operator reads BEFORE
+                           clicking Approve so they know what they're committing
+                           to. Lazy-fetched once per ruleId on load (and on
+                           every poll-refresh, to pick up edits operators
+                           made elsewhere); cached locally. -->
+                      <div class="rec-steps">
+                        @if (stepsFor(rec).length === 0) {
+                          <div class="rec-steps-loading text-sm text-muted">
+                            Loading steps…
+                          </div>
+                        } @else {
+                          <!-- Description-only view. Operators read the human
+                               summary, not the raw payloads — the scripts /
+                               SQL / URLs are for the config screen. Falls
+                               back to "Step N (ActionType)" when description
+                               is empty so the bullet is never blank. -->
+                          <ul class="rec-steps-list">
+                            @for (step of stepsFor(rec); track step.stepId; let idx = $index) {
+                              <li class="rec-step" dir="auto">
+                                {{ step.description?.trim()
+                                    || 'Step ' + (idx + 1) + ' (' + step.actionType + ')' }}
+                              </li>
+                            }
+                          </ul>
+                        }
+                      </div>
+                    }
 
                     <div class="confidence-bar">
                       <div class="bar-track">
@@ -110,7 +175,16 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
 
                       @if (!rec.isExecuted && rec.operatorApproved === null) {
                         <div class="rec-actions">
-                          <button class="btn btn-success btn-sm" (click)="approve(rec)">✓ Approve</button>
+                          <!-- Manual recs have no automated step — operator's
+                               approval IS the action ("yes, I'll do this thing").
+                               Honest verb. Same backend endpoint (approve still
+                               flips OperatorApproved=true); the use case routes
+                               the failure to AwaitingManualAction. -->
+                          @if (rec.fixCategory === 'Manual') {
+                            <button class="btn btn-success btn-sm" (click)="approve(rec)">✓ Acknowledge</button>
+                          } @else {
+                            <button class="btn btn-success btn-sm" (click)="approve(rec)">✓ Approve</button>
+                          }
                           <button class="btn btn-danger btn-sm"  (click)="reject(rec)">✕ Reject</button>
                         </div>
                       } @else {
@@ -119,12 +193,17 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
                              disabled and label the new state, so the operator doesn't
                              have controls vanish under their cursor. -->
                         <div class="rec-actions rec-actions-done">
-                          <button class="btn btn-success btn-sm" disabled>✓ Approve</button>
+                          @if (rec.fixCategory === 'Manual') {
+                            <button class="btn btn-success btn-sm" disabled>✓ Acknowledge</button>
+                          } @else {
+                            <button class="btn btn-success btn-sm" disabled>✓ Approve</button>
+                          }
                           <button class="btn btn-danger btn-sm"  disabled>✕ Reject</button>
                           <span class="text-sm text-muted action-note">
-                            @if (rec.isExecuted) { Already executed }
-                            @else if (rec.operatorApproved === true)  { Already approved }
-                            @else { Already rejected }
+                            @if (rec.isExecuted && rec.fixCategory === 'Manual')   { Already acknowledged }
+                            @else if (rec.isExecuted)                              { Already executed }
+                            @else if (rec.operatorApproved === true)               { Already approved }
+                            @else                                                  { Already rejected }
                           </span>
                         </div>
                       }
@@ -171,6 +250,11 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
       pre { font-family: 'Fira Code', monospace; font-size: 11px; color: var(--danger); background: var(--danger-bg); border-radius: var(--radius-sm); padding: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
     }
 
+    /* Card-header right side: status badge + optional Mark Resolved button.
+       Inline-flex keeps them on one row aligned right; gap matches the
+       drawer's rest-of-app spacing. */
+    .header-actions { display: inline-flex; align-items: center; gap: 8px; }
+
     .ai-panel .card-header h3 { display: flex; align-items: center; gap: 8px; }
     .ai-chip { background: linear-gradient(135deg, var(--primary), var(--accent)); color: #fff; font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 4px; letter-spacing: 0.06em; }
 
@@ -183,6 +267,19 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
     }
     .rec-header { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
     .rec-action { font-size: 13px; font-weight: 500; color: var(--text); line-height: 1.5; }
+    .composite-badge { margin-left: 6px; font-size: 10px; vertical-align: middle; cursor: help; }
+
+    /* Inline composite step list — description-only bullets so the operator
+       reads the human summary, not the raw payload. The full action details
+       (SQL / scripts / URLs) live in the Fix Options config drawer. */
+    .rec-steps         { margin: 4px 0 8px; }
+    .rec-steps-loading { padding: 4px 0; }
+    .rec-steps-list    {
+      margin: 0; padding-left: 20px;
+      display: flex; flex-direction: column; gap: 6px;
+      list-style: disc;
+    }
+    .rec-step { font-size: 12px; line-height: 1.5; color: var(--text); }
     .rec-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
     .autoheal-label { display: flex; align-items: center; gap: 4px; }
     .rec-actions { display: flex; gap: 6px; align-items: center; }
@@ -194,6 +291,16 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
 export class FailureDetailComponent implements OnDestroy {
   private failureSvc = inject(FailuresService);
   private recSvc    = inject(RecommendationsService);
+  private configSvc = inject(ConfigService);
+
+  /** Cache of composite policy step lists, keyed by ruleId. Lazy-fetched on
+   *  failure load and on every silent refresh — but cached per ruleId so a
+   *  poll tick doesn't re-fetch what we already have. Steps are static once
+   *  the policy is loaded (editing the policy doesn't mutate already-issued
+   *  recs' snapshot, but the live policy projection used here CAN change if
+   *  the operator edits steps between polls — fetching on every load keeps
+   *  the displayed step list in sync). */
+  policySteps = signal<Map<number, FixPolicyRuleStep[]>>(new Map());
 
   /** Host (drawer) sets this; component re-fetches on every change via the
    *  effect below — so navigating ↑/↓ between failures inside the drawer
@@ -211,12 +318,47 @@ export class FailureDetailComponent implements OnDestroy {
   private static readonly POLL_MS = 5000;
   private pollTimerId: ReturnType<typeof setInterval> | null = null;
 
-  stages = [
-    { key: 'Failed',      label: 'Detected',    icon: '⚠' },
-    { key: 'Classified',  label: 'Classified',  icon: '🔍' },
-    { key: 'Recommended', label: 'Recommended', icon: '💡' },
-    { key: 'Fixed',       label: 'Fixed',       icon: '✓' },
-  ];
+  // After "Recommended" the failure branches: either Acknowledged (operator
+  // approved a Manual rec, off-system action pending) OR Manual (operator
+  // rejected, or auto-heal failed → operator must handle manually). Both
+  // converge at Fixed. Render whichever middle stage the failure is actually
+  // in — never both — so the pipeline doesn't pretend the operator did
+  // contradictory things.
+  private static readonly STAGE_ACK    = { key: 'Acknowledged', label: 'Acknowledged', icon: '👤' };
+  private static readonly STAGE_MANUAL = { key: 'Manual',       label: 'Manual',       icon: '⚙' };
+  stages = computed(() => {
+    const middle = this.failure()?.status === 'ManualRequired'
+      ? FailureDetailComponent.STAGE_MANUAL
+      : FailureDetailComponent.STAGE_ACK;
+    return [
+      { key: 'Failed',      label: 'Detected',    icon: '⚠' },
+      { key: 'Classified',  label: 'Classified',  icon: '🔍' },
+      { key: 'Recommended', label: 'Recommended', icon: '💡' },
+      middle,
+      { key: 'Fixed',       label: 'Fixed',       icon: '✓' },
+    ];
+  });
+
+  /** Inflight flag for the Mark Resolved button so we can disable + spinner. */
+  markingResolved = signal(false);
+
+  /** Human-friendly status label — adds a space to the camel-cased enum
+   *  values so "AwaitingManualAction" reads as "Awaiting Manual Action". */
+  statusLabel(status: string): string {
+    return status.replace(/([A-Z])/g, ' $1').trim();
+  }
+
+  /** Operator confirms the off-system work is done. Backend is idempotent
+   *  (re-marking an already-Resolved failure returns 204), so a double-click
+   *  doesn't error. Reload the detail to pull the new Status + Stage. */
+  markResolved() {
+    this.markingResolved.set(true);
+    // Operator id hardcoded for now — same convention as approve/reject.
+    this.failureSvc.markResolved(this.failureId(), 'operator').subscribe({
+      next:  () => { this.markingResolved.set(false); this.reload(); },
+      error: () => { this.markingResolved.set(false); },
+    });
+  }
 
   constructor() {
     effect((onCleanup) => {
@@ -245,9 +387,42 @@ export class FailureDetailComponent implements OnDestroy {
   private loadDetail(id: number, opts: { silent: boolean } = { silent: false }) {
     if (!opts.silent) this.loading.set(true);
     this.failureSvc.getFailureStatus(id).subscribe({
-      next: f => { this.failure.set(f); if (!opts.silent) this.loading.set(false); },
+      next: f => {
+        this.failure.set(f);
+        if (!opts.silent) this.loading.set(false);
+        this.loadStepsForComposites(f.recommendations);
+      },
       error: () => { if (!opts.silent) this.loading.set(false); }
     });
+  }
+
+  /** For every recommendation backed by a Composite policy, fetch the policy
+   *  once and cache its steps so the rec card can render them inline. Skips
+   *  recs already in the cache (poll ticks won't re-fetch). Per-rec fire-and-
+   *  forget; one slow policy fetch doesn't block another. */
+  private loadStepsForComposites(recs: Recommendation[]) {
+    const cache = this.policySteps();
+    for (const rec of recs) {
+      if (rec.policyStepCount <= 0 || rec.fixPolicyRuleId == null) continue;
+      if (cache.has(rec.fixPolicyRuleId)) continue;
+      const ruleId = rec.fixPolicyRuleId;
+      this.configSvc.getFixPolicyRuleById(ruleId).subscribe({
+        next: policy => {
+          const next = new Map(this.policySteps());
+          next.set(ruleId, policy.steps ?? []);
+          this.policySteps.set(next);
+        },
+        // Swallow — a failed fetch just means the badge shows without the
+        // expanded step list. Not worth a UI banner.
+        error: () => {},
+      });
+    }
+  }
+
+  /** Template helper: returns the cached step list for a rec, or empty. */
+  stepsFor(rec: Recommendation): FixPolicyRuleStep[] {
+    if (rec.fixPolicyRuleId == null) return [];
+    return this.policySteps().get(rec.fixPolicyRuleId) ?? [];
   }
 
   /** Public so the host can force a refresh after an operator action. */
@@ -256,7 +431,14 @@ export class FailureDetailComponent implements OnDestroy {
   }
 
   isStageCompleted(key: string): boolean {
-    const order = ['Failed', 'Classified', 'Recommended', 'Fixed'];
+    // Acknowledged and Manual are alternative middle stages at the same
+    // position — only one is in the rendered `stages()` array for any given
+    // failure. Use the actual rendered keys (via stages()) to drive the
+    // ordering so this stays in sync with whichever middle stage was
+    // picked. Without this, indexOf for the missing alternative would
+    // return -1 and falsely mark it as a completed/past step (see the
+    // earlier Acknowledged bug — same trap, two alternatives now).
+    const order = this.stages().map(s => s.key);
     const current = this.failure()?.stage ?? 'Failed';
     return order.indexOf(key) < order.indexOf(current);
   }

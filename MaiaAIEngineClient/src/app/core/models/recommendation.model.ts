@@ -16,6 +16,7 @@ export interface Recommendation {
   recommendedAt:            string;
   fixPolicyRuleId:          number | null;  // null when no enabled policy matches
   policyIsAutoHealEligible: boolean | null; // live value on the matching policy
+  policyStepCount:          number;         // 0 for non-composite or no policy
   // UI-only state
   stepName?:         string | null;
   monitoredJobName?: string | null;

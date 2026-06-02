@@ -123,7 +123,18 @@ const PAGE_SIZE = 50;
                     {{ f.errorMessage ?? '—' }}
                   </td>
                   <td class="text-muted text-sm">{{ f.detectedAt | date:'MM/dd/yy HH:mm' }}</td>
-                  <td><span class="badge" [class]="'badge-' + f.status.toLowerCase()">{{ f.status }}</span></td>
+                  <td>
+                    <span class="badge" [class]="'badge-' + f.status.toLowerCase()">{{ f.status }}</span>
+                    @if (f.hasRecentFixFailure) {
+                      <!-- Auto-fix or operator approval tried + failed today.
+                           Distinct from a plain ManualRequired (operator hasn't
+                           taken any action yet) — this is "system tried, failed". -->
+                      <span class="badge badge-failed fix-failed-badge"
+                            title="A fix attempt failed today — operator review needed">
+                        Failed to Execute
+                      </span>
+                    }
+                  </td>
                 </tr>
               }
             </tbody>
@@ -189,6 +200,11 @@ const PAGE_SIZE = 50;
   styles: [`
     h1 { font-size: 22px; font-weight: 700; }
     .page-header { display: flex; justify-content: space-between; align-items: flex-start; }
+
+    /* Secondary marker shown alongside the status badge when a fix attempt
+       failed today. Tighter and slightly smaller than the status badge so
+       it reads as supplementary info, not a parallel status. */
+    .fix-failed-badge { margin-left: 4px; font-size: 10px; padding: 2px 6px; }
 
     /* List min-width so narrow viewports scroll horizontally rather than crushing
        either side. With the 760px drawer, total fitting width is ~720 (table) +

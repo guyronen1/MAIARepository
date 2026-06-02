@@ -8,6 +8,13 @@ export interface ScanCheckRule {
   expectedValue:    string | null;
   watermarkColumn:  string | null;
   sourceIdColumn:   string | null;
+  /** DB scans: column on the source row that holds the input file path.
+   *  Captured into JobFailure.SourceFilePath when this rule matches. */
+  filePathColumn:   string | null;
+  /** FS scans: regex with capture group #1 = input file path extracted
+   *  from the matching error line. Differs from classification patterns:
+   *  full regex applies here (capture groups required). */
+  inputPathPattern: string | null;
   severity:         string;
   description:      string | null;
 }
@@ -31,6 +38,9 @@ export interface MonitoredJob {
   scanTypeName:            string;
   logFolder:               string | null;
   searchPatterns:          string | null;
+  /** Optional base folder for relative InputPathPattern captures.
+   *  FS-scan jobs only; ignored when the regex captures an absolute path. */
+  inputFolder:             string | null;
   connectionName:          string | null;
   logSourceUrl:            string | null;
   pollingIntervalSeconds:  number;
