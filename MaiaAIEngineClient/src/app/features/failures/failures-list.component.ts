@@ -448,7 +448,11 @@ export class FailuresListComponent implements OnInit, OnDestroy, AfterViewChecke
 
   onFilterTextChange(v: string) {
     this.filterText.set(v);   // optimistic local update so the input doesn't lag
-    this.searchInput$.next(v);
+    // Filter NOW (client-side) — don't wait for the debounced URL round-trip.
+    // The queryParamMap handler can't drive this: it compares q against the
+    // already-updated filterText signal, sees no change, and skips applyFilter.
+    this.applyFilter();
+    this.searchInput$.next(v);   // debounced ?q= push, purely for shareable links
   }
 
   setFilterStatus(v: string) {

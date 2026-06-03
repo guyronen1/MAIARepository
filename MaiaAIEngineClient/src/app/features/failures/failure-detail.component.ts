@@ -42,9 +42,9 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
             <span class="alert-icon">✕</span>
             <span>
               A fix <strong>failed to execute</strong> for this failure —
-              {{ failedExecutionCount() }} of {{ executions().length }}
-              {{ executions().length === 1 ? 'action' : 'actions' }} did not complete.
-              See <strong>Execution History</strong> below for which step failed.
+              {{ lastCycleFailedCount() }} of {{ lastCycleTotal() }}
+              {{ lastCycleTotal() === 1 ? 'action' : 'actions' }} in the latest attempt did not complete.
+              The step breakdown is on the recommendation; expand <strong>Execution History</strong> for earlier attempts.
             </span>
           </div>
         }
@@ -254,21 +254,34 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
           <div class="card exec-history">
             <div class="card-header">
               <h3>Execution History</h3>
-              <span class="text-muted text-sm">{{ executions().length | pluralize:'action' }}</span>
+              <button type="button" class="history-toggle"
+                      (click)="historyExpanded.set(!historyExpanded())">
+                {{ historyExpanded() ? 'Hide' : 'Show' }} · {{ cyclesNewestFirst().length | pluralize:'attempt' }}
+              </button>
             </div>
-            <ul class="exec-list">
-              @for (e of executions(); track e.fixId) {
-                <!-- Single line per attempt: ✓/✗ · action · time. Full
-                     result detail + trigger live in the hover title so the
-                     row stays one line. -->
-                <li class="exec-row" [class.failed]="!e.success" [class.step]="isStepRow(e)"
-                    [attr.title]="(e.resultDetail || '') + (e.resultDetail ? '  —  ' : '') + e.triggerType">
-                  <span class="exec-status" [class.ok]="e.success" [class.bad]="!e.success">{{ e.success ? '✓' : '✗' }}</span>
-                  <span class="exec-action" dir="auto">{{ e.executedAction }}</span>
-                  <span class="exec-time">{{ e.executedAt | date:'short' }}</span>
-                </li>
+            <!-- Collapsed by default; the rec card carries the latest per-step
+                 ✓/✗. Expanded shows every attempt newest-first, steps in order
+                 within each. Result detail + trigger are on the row's hover. -->
+            @if (historyExpanded()) {
+              @for (cycle of cyclesNewestFirst(); track cycle.attempt) {
+                <div class="exec-cycle">
+                  <div class="exec-cycle-head">
+                    <span class="exec-attempt">Attempt {{ cycle.attempt }}</span>
+                    <span class="exec-cycle-time">{{ cycle.at | date:'short' }} · {{ cycle.trigger }}</span>
+                  </div>
+                  <ul class="exec-list">
+                    @for (e of cycle.rows; track e.fixId) {
+                      <li class="exec-row" [class.failed]="!e.success" [class.step]="isStepRow(e)"
+                          [attr.title]="(e.resultDetail || '') + (e.resultDetail ? '  —  ' : '') + e.triggerType">
+                        <span class="exec-status" [class.ok]="e.success" [class.bad]="!e.success">{{ e.success ? '✓' : '✗' }}</span>
+                        <span class="exec-action" dir="auto">{{ e.executedAction }}</span>
+                        <span class="exec-time">{{ e.executedAt | date:'short' }}</span>
+                      </li>
+                    }
+                  </ul>
+                </div>
               }
-            </ul>
+            }
           </div>
         }
       }
@@ -328,7 +341,16 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
 
     /* Execution History — chronological ✓/✗ list. Composite step rows are
        indented under the summary; failed rows are tinted red. */
-    .exec-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+    .history-toggle {
+      background: none; border: none; cursor: pointer; padding: 0;
+      color: var(--primary, #6366f1); font-size: 12px; font-weight: 600;
+      text-decoration: underline;
+    }
+    .exec-cycle { margin-top: 10px; }
+    .exec-cycle-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+    .exec-attempt { font-size: 12px; font-weight: 700; color: var(--text); }
+    .exec-cycle-time { font-size: 11px; color: var(--text-dim); }
+    .exec-list { display: flex; flex-direction: column; gap: 4px; }
     .exec-row {
       display: flex; gap: 8px; align-items: center;
       padding: 5px 10px; border-radius: var(--radius-sm);
@@ -442,15 +464,47 @@ export class FailureDetailComponent implements OnDestroy {
 
   /** Fix-execution history from the status payload, chronological. */
   executions = computed<FixExecution[]>(() => this.failure()?.executions ?? []);
-  /** A fix attempt failed (any execution row with success=false). Drives the
-   *  prominent failure banner + per-row highlighting. */
-  hasFixFailure = computed(() => this.executions().some(e => !e.success));
-  failedExecutionCount = computed(() => this.executions().filter(e => !e.success).length);
 
-  /** Composite step rows are written by DefaultFixEngine.Composite; the
-   *  single overall summary row is written by ExecuteFixesUseCase. Used to
-   *  indent the per-step rows under the summary in the history list. */
+  /** Composite step rows are written by DefaultFixEngine.Composite; the single
+   *  overall summary row is written by ExecuteFixesUseCase and CLOSES a cycle.
+   *  Used to indent per-step rows and to split history into attempts. */
   isStepRow(e: FixExecution): boolean { return e.executedBy.endsWith('.Composite'); }
+
+  /** Group the flat execution log into attempts (cycles), newest first. Each
+   *  cycle = the run of composite-step rows terminated by the summary row a
+   *  drain writes; a Retry produces a fresh cycle. */
+  cyclesNewestFirst = computed(() => {
+    const groups: FixExecution[][] = [];
+    let cur: FixExecution[] = [];
+    for (const e of this.executions()) {
+      cur.push(e);
+      if (!this.isStepRow(e)) { groups.push(cur); cur = []; }
+    }
+    if (cur.length) groups.push(cur);   // trailing steps with no summary (rare/mid-flight)
+    return groups
+      .map((rows, i) => ({
+        attempt: i + 1,
+        rows,
+        at:      rows[rows.length - 1].executedAt,
+        trigger: rows[rows.length - 1].triggerType,
+      }))
+      .reverse();
+  });
+
+  /** Banner reflects only the LATEST attempt, not the lifetime total across
+   *  every retry — "3 of 4 actions failed" should mean this rerun, not 22/28. */
+  private lastCyclePool = computed<FixExecution[]>(() => {
+    const rows  = this.cyclesNewestFirst()[0]?.rows ?? [];
+    const steps = rows.filter(e => this.isStepRow(e));
+    return steps.length > 0 ? steps : rows;   // composite → its steps; single-action → the summary row
+  });
+  lastCycleFailedCount = computed(() => this.lastCyclePool().filter(e => !e.success).length);
+  lastCycleTotal       = computed(() => this.lastCyclePool().length);
+  hasFixFailure        = computed(() => this.lastCycleFailedCount() > 0);
+
+  /** History list is collapsed by default — the rec card already shows the
+   *  latest per-step ✓/✗, so the full audit trail of past attempts is opt-in. */
+  historyExpanded = signal(false);
 
   /** Execution outcome of a composite step, matched by recommendation + step
    *  order against the per-step execution rows (ExecutedAction = "Step N: …").

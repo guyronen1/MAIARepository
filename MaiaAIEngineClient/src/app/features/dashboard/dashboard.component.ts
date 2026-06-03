@@ -9,6 +9,8 @@ import { JobFailure, JobLastScanRow, MonitoredJob, ScanResult, WorkerStatus } fr
 import { ErrorsOverTimeChartComponent } from './errors-over-time-chart.component';
 import { FailuresByJobChartComponent } from './failures-by-job-chart.component';
 import { ResolutionMixChartComponent } from './resolution-mix-chart.component';
+import { FailureDetailComponent } from '../failures/failure-detail.component';
+import { DrawerComponent } from '../../shared/drawer/drawer.component';
 
 type ChartRange = '24h' | '7d' | '30d';
 
@@ -24,6 +26,8 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
     ErrorsOverTimeChartComponent,
     FailuresByJobChartComponent,
     ResolutionMixChartComponent,
+    FailureDetailComponent,
+    DrawerComponent,
   ],
   template: `
     <div class="page">
@@ -135,7 +139,7 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
               <tbody>
                 @for (f of recentFailures()!; track f.failureId) {
                   <tr class="clickable"
-                      (click)="router.navigate(['/failures'], { queryParams: { selected: f.failureId } })"
+                      (click)="selectedFailureId.set(f.failureId)"
                       [title]="f.errorMessage ?? ''">
                     <td dir="auto">{{ f.monitoredJobName ?? '—' }}</td>
                     <td class="truncate" style="max-width:120px" dir="auto">{{ f.stepName ?? '—' }}</td>
@@ -248,6 +252,21 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
           <button class="btn btn-ghost btn-sm" (click)="lastScan.set(null)">✕</button>
         </div>
       }
+
+      <!-- Recent-failure detail opens in-place via the shared drawer — stays
+           on the dashboard instead of routing to /failures. -->
+      <app-drawer
+          [open]="selectedFailureId() !== null"
+          [ariaLabel]="'Failure ' + selectedFailureId() + ' detail'"
+          (close)="selectedFailureId.set(null)">
+        <ng-container drawer-title>
+          <span class="text-muted text-sm">Failure</span>
+          <strong>#{{ selectedFailureId() }}</strong>
+        </ng-container>
+        @if (selectedFailureId() !== null) {
+          <app-failure-detail [failureId]="selectedFailureId()!"></app-failure-detail>
+        }
+      </app-drawer>
     </div>
   `,
   styles: [`
@@ -486,6 +505,11 @@ export class DashboardComponent implements OnInit, OnDestroy {
   private monitoredJobsPolled = toSignal(
     this.statusSvc.monitoredJobs$,
     { initialValue: DashboardComponent.EMPTY_POLLED as PolledData<MonitoredJob[]> });
+
+  /** Failure currently open in the in-place detail drawer (local, not URL —
+   *  the dashboard is a live view, not a deep-link surface). Clicking a recent
+   *  failure opens it here instead of routing to /failures. */
+  selectedFailureId = signal<number | null>(null);
 
   /** Top-10 recent failures; null while the first response is in flight. */
   recentFailures  = computed(() => this.recentFailuresPolled().value);
