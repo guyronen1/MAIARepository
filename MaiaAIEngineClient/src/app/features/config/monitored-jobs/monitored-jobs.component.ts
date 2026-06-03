@@ -288,8 +288,13 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
                                        at evaluation time. -->
                                   @if (r.monitoredJobId !== null) {
                                     <span class="badge badge-info scope-override-badge"
-                                          title="This rule overrides the JobType default for this specific job only.">
-                                      ⤷ Override
+                                          title="Overrides the JobType default for this job — this is the one that runs.">
+                                      ⤷ Override · active
+                                    </span>
+                                  } @else if (isShadowedDefault(r)) {
+                                    <span class="badge badge-muted scope-default-badge"
+                                          title="A per-job override exists for this Error Type — that override runs instead of this default.">
+                                      Default · shadowed
                                     </span>
                                   } @else {
                                     <span class="badge badge-muted scope-default-badge"
@@ -708,6 +713,22 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
                 </button>
               }
             </div>
+            <!-- Shortcut: pick a classification rule (symptom) and the Error Type
+                 below is set from it. Fixes are keyed to ErrorType, so this also
+                 covers any sibling rule with the same type (shown under the
+                 select). Listed rules are the job's effective classifier set. -->
+            @if (effectiveClassRules().length > 0) {
+              <div class="form-group span2">
+                <label>Target a classification rule <span class="text-muted">(shortcut)</span></label>
+                <select [ngModel]="null" (ngModelChange)="pickClassificationRuleById($event)">
+                  <option [ngValue]="null" disabled>Pick a symptom to target…</option>
+                  @for (cr of effectiveClassRules(); track cr.ruleId) {
+                    <option [ngValue]="cr.ruleId">{{ cr.pattern }} → {{ cr.errorTypeCode }}</option>
+                  }
+                </select>
+                <span class="field-hint">Sets the Error Type below from the rule's type.</span>
+              </div>
+            }
             <div class="form-group span2">
               <label>Error Type *</label>
               <select [(ngModel)]="fixRuleForm.errorTypeId"
@@ -744,6 +765,25 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
                     Open existing policy
                   </button>
                 </div>
+              }
+              <!-- Reachability + fan-in clarity. A fix is keyed to an ErrorType,
+                   which this job only reaches via its classification rules. -->
+              @if (selectedErrorTypeCode(); as code) {
+                @if (classRulesForSelectedErrorType().length > 0) {
+                  <span class="field-hint covers-hint">
+                    Covers {{ classRulesForSelectedErrorType().length }} classification
+                    {{ classRulesForSelectedErrorType().length === 1 ? 'rule' : 'rules' }} on this job:
+                    @for (cr of classRulesForSelectedErrorType(); track cr.ruleId; let last = $last) {
+                      <code>{{ cr.pattern }}</code>{{ last ? '' : ', ' }}
+                    }
+                  </span>
+                } @else {
+                  <div class="dup-warn reachability-warn">
+                    ⚠ No classification rule on this job maps to <strong>{{ code }}</strong> —
+                    this fix won't trigger until one exists. Add a matching rule in the
+                    <strong>Classification Rules</strong> tab.
+                  </div>
+                }
               }
             </div>
             <div class="form-group">
@@ -1293,6 +1333,37 @@ export class MonitoredJobsComponent implements OnInit {
     return !captures;
   });
 
+  /** The classification rules the classifier would actually use for the
+   *  drawer's job — the job's linked rules when it has any, else the JobType
+   *  globals (mirrors SqlMonitoredJobRepository.GetEffectiveRulesAsync).
+   *  Drives the rule picker + the reachability / "covers" clarity. */
+  effectiveClassRules = computed<{ ruleId: number; pattern: string; errorTypeCode: string }[]>(() => {
+    const job = this.editingFixRuleJob();
+    if (!job) return [];
+    if (job.rules?.length) {
+      return job.rules.map(r => ({ ruleId: r.ruleId, pattern: r.pattern, errorTypeCode: r.errorTypeCode }));
+    }
+    const jt = this.getJobTypeId(job);
+    return this.allClassRules()
+      .filter(r => r.jobTypeId === jt && r.isActive)
+      .map(r => ({ ruleId: r.ruleId, pattern: r.pattern, errorTypeCode: r.errorTypeCode }));
+  });
+
+  /** Code of the currently-selected ErrorType in the fix form (null = none). */
+  selectedErrorTypeCode = computed<string | null>(() => {
+    const id = this.fixRuleFormSignal().errorTypeId;
+    if (!id) return null;
+    return this.errorTypes().find(e => e.errorTypeId === id)?.code ?? null;
+  });
+
+  /** Effective classification rules on this job that produce the selected
+   *  ErrorType. Empty while an ErrorType is chosen ⇒ the fix is unreachable. */
+  classRulesForSelectedErrorType = computed(() => {
+    const code = this.selectedErrorTypeCode();
+    if (!code) return [];
+    return this.effectiveClassRules().filter(r => r.errorTypeCode === code);
+  });
+
   /** Mirrors fixRuleForm into a signal so the computed above re-evaluates
    *  on every form change. ngModel binds to fixRuleForm directly; we sync
    *  via setFixRuleFormField helpers below to keep the signal current. */
@@ -1541,6 +1612,11 @@ export class MonitoredJobsComponent implements OnInit {
   openFixRuleDrawer(job: MonitoredJob, rule: FixPolicyRule | null) {
     this.editingFixRuleJob.set(job);
     this.editingFixRule.set(rule);
+    // Needed for the rule picker / reachability fallback when this job has no
+    // linked classification rules (classifier then uses JobType globals).
+    if (this.allClassRules().length === 0) {
+      this.svc.getAllClassificationRules().subscribe({ next: r => this.allClassRules.set(r) });
+    }
     this.fixRuleSaveConflict.set(null);  // clear stale 409 from a prior session
     this.fixRuleSaveError.set(null);     // and any stale 400 message too
     if (rule) {
@@ -1649,6 +1725,24 @@ export class MonitoredJobsComponent implements OnInit {
    *  captures it in the initial seed. */
   syncFixRuleSignal() {
     this.fixRuleFormSignal.set({ ...this.fixRuleForm });
+  }
+
+  /** Rule-picker shortcut: set the form's ErrorType from the chosen
+   *  classification rule (fixes are keyed to ErrorType, not the rule). */
+  pickClassificationRuleById(ruleId: number | null) {
+    if (ruleId == null) return;
+    const cr = this.effectiveClassRules().find(r => r.ruleId === ruleId);
+    const et = cr ? this.errorTypes().find(e => e.code === cr.errorTypeCode) : null;
+    if (et) { this.fixRuleForm.errorTypeId = et.errorTypeId; this.syncFixRuleSignal(); }
+  }
+
+  /** A JobType default (MonitoredJobId null) is shadowed when an enabled
+   *  per-job override for the same ErrorType exists in the effective list —
+   *  the override is what actually runs. */
+  isShadowedDefault(r: FixPolicyRule): boolean {
+    if (r.monitoredJobId !== null) return false;
+    return this.fixPolicies().some(p =>
+      p.monitoredJobId !== null && p.enabled && p.errorTypeCode === r.errorTypeCode);
   }
 
   /** Scope radio handler — flips fixRuleForm.monitoredJobId between
