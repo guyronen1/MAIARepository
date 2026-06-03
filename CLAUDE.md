@@ -144,39 +144,79 @@ ERROR in log lines"), `FileContentScanStrategy` does structured extraction
 from a file's actual contents — initial extractor is XML, others added when
 concrete cases demand them (JSON, CSV, fixed-width, etc.).
 
-Open design questions to resolve at the start of that conversation:
+Design notes (decided in conversation) + remaining open questions:
 
-- **Extractor as plugin vs. enum-cased switch.** Per the existing
-  `IFixActionExecutor` shape, an `IFileContentExtractor` interface with one
-  implementation per format is the natural fit. Operator picks the extractor
-  via a new `ScanCheckRule.ExtractorType` (or `MonitoredJob`-level — TBD).
-- **Where the "what to extract" config lives.** XPath / JsonPath / column
-  index on `ScanCheckRule` directly, or in a `ScanCheckRule.ExtractorConfig`
-  blob (`nvarchar(max)` JSON)? The blob is more extensible; per-column
-  fields are more queryable. Lean towards blob — different extractors need
-  wildly different config shapes.
-- **Watermarking by content.** `ScanFileWatermarks` today stores byte offset
-  (per-line-scan friendly). For content extraction, "did I already process
-  this file" is the right granularity — a file-modified-at watermark plus
-  a hash-of-content for tamper detection. New table `ScanContentWatermarks`?
+- **Extractor as plugin — DECIDED.** An `IFileContentExtractor` interface with
+  one implementation per format (XML first), mirroring the `IFixActionExecutor`
+  shape — NOT an enum-cased switch. Operator picks it via a new
+  `ScanCheckRule.ExtractorType`.
+- **Config via two locator strings (dual-locator) — DECIDED, replaces the
+  earlier JSON-blob lean.** Two simple string columns on `ScanCheckRule`:
+  `ExtractorLocator` (what to pull out — an XPath for XML, JsonPath for JSON,
+  column index for CSV, …) and `IdentifierLocator` (how to derive the extracted
+  row's identity / `SourceId`). Each is a single polymorphic string that the
+  *chosen extractor* interprets — the extractor owns the meaning of its own
+  locator, so there's no shared blob schema to version/parse and the two values
+  stay queryable as plain columns. The previously-leaned `ExtractorConfig`
+  `nvarchar(max)` JSON blob was rejected: a blob forces a structured config
+  format onto every extractor and is opaque in ad-hoc SQL; one polymorphic
+  string per locator is simpler and each extractor already knows how to read it.
+- **Identifier-extraction failure → fall back to filename, but COUNT it —
+  DECIDED.** When `IdentifierLocator` yields nothing for a finding, use the
+  source filename as the identifier (don't drop the finding), but increment an
+  identifier-extraction-failure counter on that scan's `ScanRunHistory` row
+  rather than only logging a warning. Keeps the silent fallback visible in scan
+  history (same surface as the existing per-tick counts), so a misconfigured
+  `IdentifierLocator` reads as "N fell back" instead of hiding in the log file.
+- **Watermarking by content (OPEN).** `ScanFileWatermarks` today stores byte
+  offset (per-line-scan friendly). For content extraction, "did I already
+  process this file" is the right granularity — a file-modified-at watermark
+  plus a hash-of-content for tamper detection. New table `ScanContentWatermarks`?
   Reuse `ScanFileWatermarks` with a polymorphic value column?
-- **Output shape.** Each extracted "row" becomes a `JobFailure` (consistent
-  with DB scan strategy's row-per-match)? Or a new `JobFinding` entity
-  upstream of the failure? Lean towards JobFailure to keep the downstream
-  pipeline (classify → suggest → execute) unchanged.
+- **Output shape (OPEN, leaning `JobFailure`).** Each extracted "row" becomes a
+  `JobFailure` (consistent with DB scan strategy's row-per-match)? Or a new
+  `JobFinding` entity upstream of the failure? Lean towards JobFailure to keep
+  the downstream pipeline (classify → suggest → execute) unchanged.
 
 **Backlog (already documented in Known follow-ups below):**
 
 - Authn / authz on controllers + real operator identity replacing hardcoded
   `'operator'`
-- Recommendations drawer (Phase 2 — `?selected=` overlay on `/recommendations`
-  matching the failures drawer pattern)
 - Audit-viewing UI (per-entity tab + global `/audit` screen)
 - Small cleanup items: `DbFixHandler` TODO stub, `ILogReader` removal,
   `monitored-jobs.service.ts` consolidation, analytics endpoint shape
   consistency, sort UI on failures-list, style budget warnings,
   CHECK constraints for composite invariants, `FixExecutionLog` retention
   worker, dashboard surface for unclassified failures / unmatched recs
+
+**Last completed (2026-06-03):**
+
+- **Shared `DrawerComponent`** (`shared/drawer/`) — extracted the failures-list
+  drawer shell (backdrop, slide-in panel, smart back button, ✕, Esc/click-outside
+  close) into a reusable component with `[drawer-title]` / `[drawer-controls]` /
+  body projection slots. Three consumers now: failures list, **recommendations**
+  (Phase 2 — in-place `?selected=` drawer, no longer routes to `/failures`), and
+  **dashboard** Recent Failures (local `selectedFailureId`, not URL — live view).
+- **Execution History** in the failure drawer — backend `/failures/{id}/status`
+  returns an `Executions` array (per-step composite rows + summary); UI shows a
+  collapsible, newest-attempt-first list grouped into attempts, a one-line ✓/✗
+  per row, and a red banner counting only the **latest attempt**. Rec-card
+  composite steps render ✓/✗/• per step (matched to execution results).
+- **Retry Fix** — `POST /api/recommendations/{id}/retry` re-arms a failure stuck
+  in `ManualRequired` (clears IsExecuted/claim, OperatorApproved=true, Status→
+  Failed) and drains synchronously with the CURRENT policy; explicit operator
+  override for "I fixed the root cause, run it again". UI button on the rec card
+  when that rec failed to execute.
+- **`{sourceFileName}` placeholder** — `Path.GetFileName({sourceFilePath})`;
+  added to legend + CopyFile examples.
+- **Fix Options ErrorType-join clarity** — classification-rule picker (pick a
+  symptom → sets ErrorType), reachability warning (ErrorType with no
+  classification rule on the job won't trigger), "Covers N rules" fan-in line,
+  and Override·active / Default·shadowed badges. Mirrors `GetEffectiveRulesAsync`.
+- **Bug fixes** — Job/Step filter on `/failures` now applies on keystroke (was a
+  no-op via the query-param round-trip); single-action SqlScript example fixed to
+  `WHERE Id = '{sourceId}'` (quoted) with a hint that `{failureId}` is MAIA's
+  internal id, not a source-table column.
 
 **Last completed (2026-06-01):**
 
@@ -318,6 +358,12 @@ Open design questions to resolve at the start of that conversation:
 - **`ApiCallExecutor` finally moved to `IPlaceholderResolver`.** Was the last executor still doing inline `string.Replace("{failureId}", ...)`. Now gets the full `{sourceId}` / `{sourceFilePath}` / `{jobFolder}` / `{inputFolder}` token set for free. Composite chains can now mix CopyFile + ApiCall + SqlScript steps that all reference the same `{sourceFilePath}` consistently.
 - **"Failed to Execute" marker is Status-agnostic, but the "Fix Failures Today" KPI + drill-down are NOT.** Two surfaces, slightly different predicates by design. The KPI counts (and the `view=fix-failed` filter returns) only failures currently in `ManualRequired` — these are the rows the operator should triage right now. The per-row marker on the failures list fires for ANY row with a `Success=false` `FixExecutionLog` since today-midnight, regardless of current status. Why the asymmetry: a row may be `Failed` momentarily between an executor failing and `UpdateStatusAsync(ManualRequired)` committing (or just after, before the polled UI refreshes). Surfacing the marker on those rows tells the operator "this row had a fix failure" even when the status transition hasn't propagated. The KPI stays on `ManualRequired` only because operators want a stable, actionable count — not a momentarily-double-counting one. Tests pin both behaviours (`GetPagedAsync_FixFailedView_OnlyReturnsManualRequiredWithRecentFailedLog` + `GetIdsWithRecentFixFailureAsync_ReturnsOnlyIdsWithFailedLogSinceCutoff`).
 - **FS-scan filename matching uses the same wildcard DSL as classification rules**, NOT `Directory.GetFiles`'s native glob. Lives in `Core/Scanning/FilenamePattern.cs`; reused by `FileSystemScanStrategy` (keyword-mode file enumeration) and `Application/Pipeline/DirectoryPipelineUseCase` (full-pipeline-mode). DSL: `*` is the ONLY wildcard, every other character is literal (`.`, `?`, `[`, `+` all match themselves), no-`*` patterns are case-insensitive SUBSTRING match, matching is case-insensitive cross-platform, empty/whitespace pattern returns false. Closes four bugs the previous `Directory.GetFiles(folder, pattern)` had: (a) no-`*` patterns were exact-filename match instead of substring, so `WARNING` matched only a file literally named "WARNING" not "log_WARNING.txt"; (b) `?` was accepted as single-char wildcard, diverging from classification-rule semantics; (c) `*` alone hit the Win32 legacy quirk where it matched only files with no extension; (d) case-sensitivity was OS-dependent (Windows insensitive, Linux/macOS sensitive). `Path.GetFileName(...)` is matched (never full path). 50ms regex timeout matches the classification-pattern hardening. Deliberately NOT supported (v2 conversation): `?`, `[abc]`, `**`, regex-as-mode. `FilenamePattern` lives in `Core/` (not `Infrastructure/`) so the Application-layer `DirectoryPipelineUseCase` can reach it without an upward dependency.
+- **Drawer shell extracted to a shared `DrawerComponent` (`shared/drawer/`), consumed by three screens.** The failures-list drawer's generic chrome (backdrop + click-outside, 760px slide-in, smart back button, ✕, Esc-to-close) moved into one component with `[drawer-title]` / `[drawer-controls]` / body projection slots. Host-specific concerns stay in each consumer: failures keeps ↑/↓ row nav + page-boundary auto-load + nav toast + `?selected` URL; recommendations adds within-page ↑/↓ + `?selected`; dashboard uses a plain local signal. Esc-to-close lives in the drawer (hosts only handle arrows). The earlier "drawer lives only on /failures" decision was reversed once a reusable shell made in-place drawers cheap on every screen.
+- **Recommendations + dashboard open the failure detail in-place, not by routing to `/failures`.** Recommendations uses `?selected=` on its own route (refresh-safe/shareable, mirrors failures). Dashboard uses a **local** `selectedFailureId` signal, NOT a query param — it's a live-polling overview, not a deep-link surface, so URL plumbing would be overkill. Both reuse `<app-failure-detail>`, so execution history / per-step ✓✗ / Retry Fix come along for free.
+- **Fix-execution history is grouped into attempts; the failure banner counts only the LATEST attempt.** The flat `FixExecutionLog` rows split into cycles (composite step rows terminated by the `ExecuteFixesUseCase` summary row; a Retry opens a new cycle). The drawer banner reports "N of M actions in the latest attempt", not the lifetime total across retries (which read as a misleading "22 of 28"). History is collapsed by default (the rec card already shows the latest per-step ✓/✗) and ordered newest-attempt-first.
+- **Retry re-arms from `ManualRequired` rather than relaxing the drain guard.** `POST /api/recommendations/{id}/retry` flips the failure back to `Failed`, clears `IsExecuted`/claim, sets `OperatorApproved=true`, then drains synchronously — so the fix re-runs with whatever policy is configured NOW. The drain's `Failure.Status='Failed'` claim guard (the infinite-retry fix) is left intact; Retry is the explicit, audited (`FixRetried`) operator override that re-qualifies the rec.
+- **Fix↔classification connection is surfaced as UI clarity, not a new constraint.** Fixes are keyed to ErrorType (never the classification rule); multiple rules → one ErrorType → one fix, and the only blocking constraint that matters (one enabled policy per layer per ErrorType) already exists at three layers. So instead of new blocks: a classification-rule picker (pick a symptom → sets ErrorType), a reachability warning (fix for an ErrorType no rule produces for the job won't fire), a "Covers N rules" fan-in line, and Override·active / Default·shadowed badges. All computed from the job's effective classifier rules (linked rules, else JobType globals — mirrors `GetEffectiveRulesAsync`). To get *different* fixes per symptom, split into distinct ErrorTypes.
+- **`{sourceFileName}` is derived, not stored.** `Path.GetFileName({sourceFilePath})` — empty when no path was captured. No new column; it's a pure projection of the existing `{sourceFilePath}` so a CopyFile dest can reuse the original name.
 
 ---
 
@@ -449,7 +495,7 @@ AIEngineAPI/
 │   ├── ProcessController          POST /process
 │   ├── LogParserController        POST /parse
 │   ├── JobScanController          on-demand scan triggers + classify-pending
-│   ├── RecommendationsController  POST /api/recommendations/{id}/approve|reject
+│   ├── RecommendationsController  POST /api/recommendations/{id}/approve|reject|retry
 │   │                              (approve drains synchronously)
 │   └── AdminController            POST /api/admin/scan-history/cleanup (manual retention sweep)
 ├── Contracts/ (DTOs)
@@ -646,6 +692,14 @@ POST     /api/recommendations/{id}/approve                     → OperatorAppro
 POST     /api/recommendations/{id}/reject                      → OperatorApproved=false + write
                                                                  OperatorAction + AuditLog
                                                                  (no execute)
+POST     /api/recommendations/{id}/retry                       → re-run a fix that failed to execute.
+                                                                 Only valid while the failure is
+                                                                 ManualRequired: re-arms it (IsExecuted=
+                                                                 false, OperatorApproved=true, claim
+                                                                 cleared, Status→Failed) + SYNCHRONOUS
+                                                                 drain with the CURRENT policy. Writes
+                                                                 OperatorAction + FixRetried audit.
+                                                                 body: { "operatorId": "<name>" }
 
 POST     /api/admin/scan-history/cleanup                        → Run retention sweep on demand.
                                                                  Returns { rowsDeleted, durationMs,
