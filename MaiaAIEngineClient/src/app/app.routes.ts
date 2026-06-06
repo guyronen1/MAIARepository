@@ -12,6 +12,7 @@ export const routes: Routes = [
       // Legacy detail URL — redirect to the drawer-driven list. Preserves any
       // bookmark or shared link operators have to /failures/123.
       { path: 'failures/:id', redirectTo: ({ params }) => `/failures?selected=${params['id']}` },
+      { path: 'unconfigured',  loadComponent: () => import('./features/unconfigured/unconfigured.component').then(m => m.UnconfiguredComponent) },
       { path: 'recommendations', loadComponent: () => import('./features/recommendations/recommendations.component').then(m => m.RecommendationsComponent) },
       { path: 'operator-actions', loadComponent: () => import('./features/recommendations/recommendations.component').then(m => m.RecommendationsComponent) },
       { path: 'scan-jobs',    loadComponent: () => import('./features/scan-jobs/scan-jobs.component').then(m => m.ScanJobsComponent) },

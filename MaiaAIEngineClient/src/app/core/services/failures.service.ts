@@ -22,6 +22,13 @@ export interface DashboardStats {
    *  Failures Today" KPI tile; clicking it drills into /failures?view=fix-failed
    *  with the same predicate, so KPI count and drill-down list always agree. */
   fixFailedToday:       number;
+  /** Active (Failed) failures the system can't act on for lack of config:
+   *  unclassified (no ErrorType) OR classified with no enabled FixPolicyRule
+   *  for its scope. Drives the "Unconfigured" KPI; drill-down is
+   *  /failures?view=unconfigured (same predicate). `unconfiguredNoPolicy` is
+   *  the no-fix-policy half; the no-classification half is `unclassified`. */
+  unconfigured:         number;
+  unconfiguredNoPolicy: number;
 }
 
 @Injectable({ providedIn: 'root' })

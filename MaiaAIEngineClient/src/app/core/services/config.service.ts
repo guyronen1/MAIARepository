@@ -19,6 +19,9 @@ export interface ClassificationRule {
   ruleId: number; jobTypeId: number; jobTypeName: string;
   errorTypeId: number; errorTypeCode: string;
   pattern: string; confidence: number; priority: number; isActive: boolean; createdBy: string | null;
+  /** Names of MonitoredJobs this rule is actively linked to. Empty = JobType
+   *  default (applies to all jobs of jobTypeName); non-empty = scoped to those jobs. */
+  linkedJobNames: string[];
 }
 
 export interface FixPolicyRuleStep {
@@ -69,6 +72,10 @@ export interface UpsertScanRuleRequest {
 export interface UpsertClassificationRuleRequest {
   jobTypeId: number; errorTypeId: number; pattern: string;
   confidence: number; priority: number; isActive: boolean;
+  // Suggestion provenance — set when accepted from an /unconfigured cluster.
+  suggestedBy?: string | null;
+  suggestedFromHash?: string | null;
+  suggestedConfidence?: number | null;
 }
 export interface UpsertJobClassificationRuleRequest {
   errorTypeId: number; pattern: string;

@@ -103,6 +103,15 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
             <div class="kpi-label">Fix Failures Today</div>
           </div>
         </button>
+        <button class="kpi-card neutral" (click)="router.navigate(['/unconfigured'])"
+                title="Active failures MAIA can't act on yet — no classification rule, or no fix policy for the matched error type. Opens the Unconfigured screen to triage + configure.">
+          <div class="kpi-icon">🛠</div>
+          <div class="kpi-body">
+            <div class="kpi-value">{{ stats().unconfigured }}</div>
+            <div class="kpi-label">Unconfigured</div>
+            <div class="kpi-breakdown">No class: {{ stats().unclassified }} · No policy: {{ stats().unconfiguredNoPolicy }}</div>
+          </div>
+        </button>
       </div>
 
       <!-- Analytics row 1: Errors Over Time + Failures by Job side-by-side at
@@ -313,6 +322,7 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
       &.warning { border-left: 3px solid var(--warning); }
       &.info    { border-left: 3px solid var(--info);    }
       &.success { border-left: 3px solid var(--success); }
+      &.neutral { border-left: 3px solid var(--text-muted, #94a3b8); }
       &.auto    { border-left: 3px solid var(--primary, #6366f1); }
       &.muted   { border-left: 3px solid var(--border); }
     }
@@ -365,6 +375,7 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
       display: flex; align-items: center; gap: 10px;
       min-height: 44px; padding: 8px 10px;
       cursor: pointer;
+      min-width: 0;  /* let children ellipsis instead of overflowing the card */
     }
     .row-status-icon {
       width: 16px; height: 16px; flex-shrink: 0;
@@ -374,7 +385,11 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
       &.state-failed  { color: var(--danger); }
       &.state-gray    { color: var(--text-muted); }
     }
-    .row-job-name  { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; }
+    .row-job-name  {
+      font-size: 13px; font-weight: 600; color: var(--text);
+      white-space: nowrap; min-width: 0; flex-shrink: 1;
+      overflow: hidden; text-overflow: ellipsis;
+    }
     .row-meta      { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
     .row-badge     { flex-shrink: 0; }
     .row-stat      { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -460,16 +475,18 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    @media (max-width: 1400px) { .kpi-grid { grid-template-columns: repeat(3, 1fr); } }
-    /* Collapse row 1 to stacked full-width below ~1200px — at that width the
-       40% column would be too narrow for top-10 horizontal bars to stay
-       readable. Resolution Mix on row 2 is already full-width. */
-    @media (max-width: 1200px) {
+    /* At ≤1400px (typical 14" laptop CSS width) the KPI grid wraps to 3 cols.
+       The side-by-side analytics row and the two info panels get too narrow at
+       that width and clip on the right — so stack them full-width at the same
+       breakpoint. Keeps every panel readable and edge-to-edge on a laptop;
+       wide monitors keep the multi-column layout. */
+    @media (max-width: 1400px) {
+      .kpi-grid        { grid-template-columns: repeat(3, 1fr); }
       .analytics-row-1 { grid-template-columns: 1fr; }
+      .row-2col        { grid-template-columns: 1fr; }
     }
     @media (max-width: 900px) {
       .kpi-grid { grid-template-columns: repeat(2,1fr); }
-      .row-2col { grid-template-columns: 1fr; }
     }
   `]
 })
@@ -525,7 +542,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
     totalFailures: 0, active: 0, resolved: 0, manualRequired: 0,
     unclassified: 0, awaitingAction: 0, autoFixed: 0, manuallyFixed: 0,
     resolvedToday: 0, autoFixedToday: 0, manuallyFixedToday: 0,
-    fixFailedToday: 0,
+    fixFailedToday: 0, unconfigured: 0, unconfiguredNoPolicy: 0,
   };
   stats = computed<DashboardStats>(() => this.statsPolled().value ?? DashboardComponent.EMPTY_STATS);
 
@@ -725,7 +742,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
     | 'active' | 'unclassified' | 'awaiting-action'
     | 'resolved' | 'manual-required'
     | 'auto-fixed' | 'operator-fixed'
-    | 'fix-failed' | 'all') {
+    | 'fix-failed' | 'unconfigured' | 'all') {
     this.router.navigate(['/failures'], { queryParams: view === 'all' ? {} : { view } });
   }
 

@@ -20,6 +20,8 @@ const VIEW_LABELS: Record<string, string> = {
   'operator-fixed':  'Operator-Fixed',
   'resolved':        'Resolved',
   'manual-required': 'Manual Required',
+  'fix-failed':      'Fix Failed',
+  'unconfigured':    'Unconfigured (no rule / no policy)',
 };
 
 const PAGE_SIZE = 50;

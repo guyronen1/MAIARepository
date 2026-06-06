@@ -1,6 +1,7 @@
 import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { Observable } from 'rxjs';
 import { FormsModule } from '@angular/forms';
+import { ActivatedRoute, Router } from '@angular/router';
 import {
   ConfigService, JobType, ErrorType, FixPolicyRule, ClassificationRule,
   UpsertJobRequest, UpsertScanRuleRequest,
@@ -209,12 +210,16 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
                           </button>
                         </div>
                       </div>
-                      @if (j.rules.length === 0) {
+                      @if (j.rules.length === 0 && jobTypeGlobalRules(j).length === 0) {
                         <div class="empty-tab">
                           <span>🏷️</span>
-                          <p>No classification rules linked — add one to enable error type detection.</p>
+                          <p>No classification rules apply to this job yet — add one to enable error type detection.</p>
                         </div>
-                      } @else {
+                      }
+
+                      <!-- Job-linked rules (specific to this job). -->
+                      @if (j.rules.length > 0) {
+                        <div class="subsection-label">Linked to this job</div>
                         <table class="data-table">
                           <thead>
                             <tr>
@@ -246,6 +251,41 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
                             }
                           </tbody>
                         </table>
+                      }
+
+                      <!-- JobType-global rules that ALSO classify this job (union
+                           semantics). Read-only here — managed on the
+                           Classification Rules screen — but surfaced so the
+                           operator sees the full effective set, not just links. -->
+                      @if (jobTypeGlobalRules(j).length > 0) {
+                        <div class="subsection-label">
+                          Also applies — <strong>{{ j.jobTypeName }}</strong> defaults
+                          <span class="text-muted text-sm">· JobType-level rules that classify every {{ j.jobTypeName }} job</span>
+                        </div>
+                        <table class="data-table">
+                          <thead>
+                            <tr><th>Pattern</th><th>Error Type</th><th>Confidence</th><th>Priority</th><th>Scope</th></tr>
+                          </thead>
+                          <tbody>
+                            @for (r of jobTypeGlobalRules(j); track r.ruleId) {
+                              <tr class="global-row">
+                                <td class="font-mono">{{ r.pattern }}</td>
+                                <td><span class="badge badge-classified">{{ r.errorTypeCode }}</span></td>
+                                <td>
+                                  <div class="confidence-bar">
+                                    <div class="bar-track">
+                                      <div class="bar-fill" [style.width.%]="r.confidence * 100"></div>
+                                    </div>
+                                    <span class="bar-value">{{ (r.confidence * 100).toFixed(0) }}%</span>
+                                  </div>
+                                </td>
+                                <td class="text-muted text-sm">#{{ r.priority }}</td>
+                                <td><span class="badge badge-muted" title="JobType-level rule — edit on the Classification Rules screen">Global</span></td>
+                              </tr>
+                            }
+                          </tbody>
+                        </table>
+                        <span class="field-hint">Job-linked rules win over these on a match. Edit globals on the Classification Rules screen.</span>
                       }
                     </div>
                   }
@@ -720,7 +760,7 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
             @if (effectiveClassRules().length > 0) {
               <div class="form-group span2">
                 <label>Target a classification rule <span class="text-muted">(shortcut)</span></label>
-                <select [ngModel]="null" (ngModelChange)="pickClassificationRuleById($event)">
+                <select [ngModel]="shortcutRuleId" (ngModelChange)="pickClassificationRuleById($event)">
                   <option [ngValue]="null" disabled>Pick a symptom to target…</option>
                   @for (cr of effectiveClassRules(); track cr.ruleId) {
                     <option [ngValue]="cr.ruleId">{{ cr.pattern }} → {{ cr.errorTypeCode }}</option>
@@ -732,7 +772,7 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
             <div class="form-group span2">
               <label>Error Type *</label>
               <select [(ngModel)]="fixRuleForm.errorTypeId"
-                      (ngModelChange)="syncFixRuleSignal()">
+                      (ngModelChange)="shortcutRuleId = null; syncFixRuleSignal()">
                 <option [ngValue]="0" disabled>Select error type…</option>
                 @for (et of errorTypes(); track et.errorTypeId) {
                   <option [ngValue]="et.errorTypeId">
@@ -1055,6 +1095,13 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
     }
     .section-desc { font-size: 12px; color: var(--text-muted); }
 
+    /* Subsection headers in the Classification tab (linked vs JobType globals). */
+    .subsection-label {
+      font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--text-muted); margin: 16px 0 6px;
+    }
+    .global-row td { opacity: 0.82; }
+
     .empty-tab {
       display: flex; align-items: center; gap: 10px; padding: 20px 0;
       color: var(--text-muted); font-size: 12px;
@@ -1260,6 +1307,8 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
 })
 export class MonitoredJobsComponent implements OnInit {
   private svc = inject(ConfigService);
+  private route  = inject(ActivatedRoute);
+  private router = inject(Router);
 
   loading      = signal(false);
   saving       = signal(false);
@@ -1334,19 +1383,25 @@ export class MonitoredJobsComponent implements OnInit {
   });
 
   /** The classification rules the classifier would actually use for the
-   *  drawer's job — the job's linked rules when it has any, else the JobType
-   *  globals (mirrors SqlMonitoredJobRepository.GetEffectiveRulesAsync).
-   *  Drives the rule picker + the reachability / "covers" clarity. */
+   *  drawer's job: UNION of this job's linked rules (overrides) + the JobType's
+   *  UNLINKED defaults — mirrors SqlMonitoredJobRepository.GetEffectiveRulesAsync.
+   *  Drives the rule picker + the reachability / "covers" clarity, so a fix for
+   *  an ErrorType produced by a JobType default (e.g. ProcessingError) is
+   *  correctly seen as reachable even when the job also has its own links. */
   effectiveClassRules = computed<{ ruleId: number; pattern: string; errorTypeCode: string }[]>(() => {
     const job = this.editingFixRuleJob();
     if (!job) return [];
-    if (job.rules?.length) {
-      return job.rules.map(r => ({ ruleId: r.ruleId, pattern: r.pattern, errorTypeCode: r.errorTypeCode }));
-    }
     const jt = this.getJobTypeId(job);
-    return this.allClassRules()
-      .filter(r => r.jobTypeId === jt && r.isActive)
-      .map(r => ({ ruleId: r.ruleId, pattern: r.pattern, errorTypeCode: r.errorTypeCode }));
+    const linked = job.rules ?? [];
+    // JobType defaults = active rules of this JobType linked to NO job (a rule
+    // linked to another job is that job's override, not a default here).
+    const linkedAnywhere = new Set(this.jobs().flatMap(j => j.rules.map(r => r.ruleId)));
+    const defaults = this.allClassRules()
+      .filter(r => r.jobTypeId === jt && r.isActive && !linkedAnywhere.has(r.ruleId));
+    return [
+      ...linked.map(r => ({ ruleId: r.ruleId, pattern: r.pattern, errorTypeCode: r.errorTypeCode })),
+      ...defaults.map(r => ({ ruleId: r.ruleId, pattern: r.pattern, errorTypeCode: r.errorTypeCode })),
+    ];
   });
 
   /** Code of the currently-selected ErrorType in the fix form (null = none). */
@@ -1388,15 +1443,38 @@ export class MonitoredJobsComponent implements OnInit {
   ruleForm     : UpsertScanRuleRequest & { isActive: boolean } = this.blankScanRule();
   classRuleForm: UpsertJobClassificationRuleRequest            = this.blankClassRule();
   fixRuleForm  : UpsertFixPolicyRuleRequest                    = this.blankFixRule();
+  /** Rule chosen in the "Target a classification rule" shortcut — kept so the
+   *  select shows the pick (cleared on drawer open and on manual Error Type change). */
+  shortcutRuleId: number | null = null;
 
   ngOnInit() {
     this.loading.set(true);
     this.svc.getAllJobs().subscribe({
-      next: j => { this.jobs.set(j); this.loading.set(false); },
+      next: j => { this.jobs.set(j); this.loading.set(false); this.applyFixDeepLink(); },
       error: () => this.loading.set(false),
     });
     this.svc.getJobTypes().subscribe({ next: t => this.jobTypes.set(t) });
     this.svc.getErrorTypes().subscribe({ next: t => this.errorTypes.set(t) });
+  }
+
+  /** Deep-link from the /unconfigured Case-B "Configure fix" button:
+   *  ?fixForJob=<id>&errorTypeId=<id> → expand the job, open its Fix Options
+   *  tab, and pop a new-fix drawer pre-filled (per-job scope + that ErrorType).
+   *  Params are cleared afterward so a refresh/back doesn't re-trigger. */
+  private applyFixDeepLink() {
+    const p = this.route.snapshot.queryParamMap;
+    const jobIdStr = p.get('fixForJob');
+    if (!jobIdStr) return;
+    const job = this.jobs().find(x => x.monitoredJobId === Number(jobIdStr));
+    if (!job) return;
+
+    this.expanded.set(job.monitoredJobId);
+    this.setTab('fix', job);            // loads the effective fix policies
+    this.openFixRuleDrawer(job, null);  // new rule — defaults to per-job scope
+    const etId = Number(p.get('errorTypeId') ?? 0);
+    if (etId) { this.fixRuleForm.errorTypeId = etId; this.syncFixRuleSignal(); }
+
+    this.router.navigate([], { relativeTo: this.route, queryParams: {}, replaceUrl: true });
   }
 
   // ── Panel & tab control ────────────────────────────────────────────────────
@@ -1417,11 +1495,29 @@ export class MonitoredJobsComponent implements OnInit {
       // Pass the host job's MonitoredJobId so the tab shows defaults + any
       // override scoped to this specific job (the operator's effective config).
       if (jt) this.loadFixPolicies(jt, job.monitoredJobId);
+    } else if (tab === 'class' && this.allClassRules().length === 0) {
+      // Needed to show the JobType-global rules that ALSO classify this job
+      // under the union semantics, alongside its job-linked rules.
+      this.svc.getAllClassificationRules().subscribe({ next: r => this.allClassRules.set(r) });
     }
   }
 
   getJobTypeId(job: MonitoredJob): number {
     return this.jobTypes().find(t => t.name === job.jobTypeName)?.jobTypeId ?? 0;
+  }
+
+  /** JobType-global classification rules that ALSO classify this job under the
+   *  union semantics — active, same JobType, not already linked to the job.
+   *  Shown read-only on the job's Classification Rules tab so the operator can
+   *  see the full effective set (not just job-linked rules). */
+  jobTypeGlobalRules(job: MonitoredJob): ClassificationRule[] {
+    const jt = this.getJobTypeId(job);
+    // True JobType defaults = rules linked to NO job. A rule linked to a
+    // specific job is that job's override and must not show as a default here.
+    const linkedAnywhere = new Set(this.jobs().flatMap(j => j.rules.map(r => r.ruleId)));
+    return this.allClassRules()
+      .filter(r => r.jobTypeId === jt && r.isActive && !linkedAnywhere.has(r.ruleId))
+      .sort((a, b) => a.priority - b.priority);
   }
 
   scanIcon(id: number): string {
@@ -1612,6 +1708,7 @@ export class MonitoredJobsComponent implements OnInit {
   openFixRuleDrawer(job: MonitoredJob, rule: FixPolicyRule | null) {
     this.editingFixRuleJob.set(job);
     this.editingFixRule.set(rule);
+    this.shortcutRuleId = null;   // fresh shortcut state per drawer open
     // Needed for the rule picker / reachability fallback when this job has no
     // linked classification rules (classifier then uses JobType globals).
     if (this.allClassRules().length === 0) {
@@ -1733,7 +1830,11 @@ export class MonitoredJobsComponent implements OnInit {
     if (ruleId == null) return;
     const cr = this.effectiveClassRules().find(r => r.ruleId === ruleId);
     const et = cr ? this.errorTypes().find(e => e.code === cr.errorTypeCode) : null;
-    if (et) { this.fixRuleForm.errorTypeId = et.errorTypeId; this.syncFixRuleSignal(); }
+    if (et) {
+      this.shortcutRuleId = ruleId;   // keep the picked rule visible in the shortcut select
+      this.fixRuleForm.errorTypeId = et.errorTypeId;
+      this.syncFixRuleSignal();
+    }
   }
 
   /** A JobType default (MonitoredJobId null) is shadowed when an enabled

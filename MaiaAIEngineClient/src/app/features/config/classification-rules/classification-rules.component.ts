@@ -70,11 +70,13 @@ import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
           <div class="table-header">
             <span class="text-muted text-sm">{{ filtered().length | pluralize:'rule' }}</span>
           </div>
-          <table class="data-table">
+          <div class="table-wrap">
+          <table class="data-table compact">
             <thead>
               <tr>
                 <th>Pattern</th>
                 <th>Job Type</th>
+                <th>Scope</th>
                 <th>Error Type</th>
                 <th>Confidence</th>
                 <th>Priority</th>
@@ -88,6 +90,17 @@ import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
                   <td class="font-mono pattern-cell">{{ r.pattern }}</td>
                   <td>
                     <span class="badge badge-info">{{ r.jobTypeName }}</span>
+                  </td>
+                  <td>
+                    @if (r.linkedJobNames.length === 0) {
+                      <span class="badge badge-muted" title="JobType default — applies to every {{ r.jobTypeName }} job">
+                        Default · all {{ r.jobTypeName }}
+                      </span>
+                    } @else {
+                      <span class="badge badge-resolved" [title]="'Linked to: ' + r.linkedJobNames.join(', ')">
+                        Linked · {{ r.linkedJobNames.join(', ') }}
+                      </span>
+                    }
                   </td>
                   <td>
                     <span class="badge badge-classified">{{ r.errorTypeCode }}</span>
@@ -116,6 +129,7 @@ import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
               }
             </tbody>
           </table>
+          </div>
         </div>
       }
     </div>
@@ -133,14 +147,20 @@ import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
 
             <div class="form-group span2">
               <label>Match Pattern *</label>
-              <input [(ngModel)]="form.pattern"
+              <input [(ngModel)]="form.pattern" (ngModelChange)="checkDup()"
                      placeholder="e.g. FileNotFoundException  or  Error code * occurred" />
               <span class="field-hint">Case-insensitive substring of the error message. Use <code>*</code> as a wildcard for any text (e.g. <code>Login failed for user *</code>). Other regex characters are matched literally.</span>
+              @if (liveDupRuleId(); as dupId) {
+                <div class="dup-warn">
+                  ⚠ An enabled rule with this pattern already exists for this job type.
+                  <button type="button" class="link-btn" (click)="openExisting(dupId)">Open existing rule</button>
+                </div>
+              }
             </div>
 
             <div class="form-group">
               <label>Job Type *</label>
-              <select [(ngModel)]="form.jobTypeId">
+              <select [(ngModel)]="form.jobTypeId" (ngModelChange)="checkDup()">
                 <option [ngValue]="0" disabled>Select job type…</option>
                 @for (t of jobTypes(); track t.jobTypeId) {
                   <option [ngValue]="t.jobTypeId">{{ t.name }}</option>
@@ -192,6 +212,12 @@ import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
             </div>
           }
         </div>
+        @if (saveConflict(); as c) {
+          <div class="dup-warn save-error">
+            ⚠ {{ c.message }}
+            <button type="button" class="link-btn" (click)="openExisting(c.conflictingRuleId)">Open existing rule</button>
+          </div>
+        }
         <div class="drawer-footer">
           <button class="btn btn-ghost" (click)="closeDrawer()">Cancel</button>
           <button class="btn btn-primary" (click)="save()" [disabled]="saving()">
@@ -217,6 +243,29 @@ import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    /* Horizontal-scroll safety net — table never clips its last column. */
+    .table-wrap { overflow-x: auto; }
+
+    /* Compact density so all 8 columns fit on a 14" laptop. */
+    .data-table.compact th,
+    .data-table.compact td { padding: 7px 10px; }
+    .data-table.compact .badge { font-size: 11px; padding: 1px 7px; }
+    .data-table.compact .pattern-cell { max-width: 240px; }
+    .data-table.compact .confidence-bar .bar-track { width: 48px; }
+    .data-table.compact td > div[style*="display:flex"] .btn { padding: 3px 8px; }
+
+    /* Responsive: drop the two least-essential columns as width shrinks.
+       Columns: 1 Pattern · 2 Job Type · 3 Scope · 4 Error Type ·
+                5 Confidence · 6 Priority · 7 Status · 8 Actions */
+    @media (max-width: 1500px) {
+      .data-table.compact th:nth-child(5),
+      .data-table.compact td:nth-child(5) { display: none; }  /* Confidence */
+    }
+    @media (max-width: 1280px) {
+      .data-table.compact th:nth-child(6),
+      .data-table.compact td:nth-child(6) { display: none; }  /* Priority */
     }
 
     /* Drawer */
@@ -250,6 +299,19 @@ import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
       letter-spacing: 0.06em; color: var(--text-dim);
     }
     .preview-arrow { color: var(--text-dim); font-size: 14px; }
+
+    .dup-warn {
+      display: block; margin-top: 6px; padding: 8px 10px; border-radius: var(--radius-sm);
+      background: #fef3c7; border: 1px solid #fde68a; font-size: 12px; color: #78350f; line-height: 1.4;
+    }
+    .dup-warn.save-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; margin: 0 20px 8px; }
+    .dup-warn .link-btn {
+      background: transparent; border: none; padding: 0; margin-left: 4px;
+      color: #b45309; font-weight: 600; cursor: pointer; text-decoration: underline; font-size: inherit;
+    }
+    .dup-warn .link-btn:hover { color: #92400e; }
+
+    .badge-muted { background: #e0e7ff; color: #3730a3; border: 1px solid #c7d2fe; }
   `]
 })
 export class ClassificationRulesComponent implements OnInit {
@@ -262,6 +324,10 @@ export class ClassificationRulesComponent implements OnInit {
   jobTypes   = signal<JobType[]>([]);
   errorTypes = signal<ErrorType[]>([]);
   editing    = signal<ClassificationRule | null>(null);
+  /** Live inline dup warning (client-side) + post-save 409 banner. Same
+   *  three-layer guard shape as FixPolicyRule. */
+  liveDupRuleId = signal<number | null>(null);
+  saveConflict  = signal<{ message: string; conflictingRuleId: number } | null>(null);
 
   filterText      = '';
   filterJobType   = '';
@@ -303,19 +369,46 @@ export class ClassificationRulesComponent implements OnInit {
           pattern: rule.pattern, confidence: rule.confidence,
           priority: rule.priority, isActive: rule.isActive }
       : this.blank();
+    this.saveConflict.set(null);
     this.drawerOpen.set(true);
+    this.checkDup();
+  }
+
+  /** Client-side live duplicate check — at most one enabled rule per
+   *  (JobType, Pattern). Case-insensitive, matches the DB index + backend. */
+  checkDup() {
+    const p = (this.form.pattern || '').trim().toLowerCase();
+    if (!p || !this.form.jobTypeId) { this.liveDupRuleId.set(null); return; }
+    const editingId = this.editing()?.ruleId;
+    const hit = this.rules().find(r =>
+      r.isActive && r.jobTypeId === this.form.jobTypeId
+      && r.pattern.trim().toLowerCase() === p && r.ruleId !== editingId);
+    this.liveDupRuleId.set(hit?.ruleId ?? null);
+  }
+
+  /** "Open existing rule" — re-open the drawer loaded with the conflict. */
+  openExisting(ruleId: number) {
+    const rule = this.rules().find(r => r.ruleId === ruleId);
+    if (rule) this.openDrawer(rule);
   }
 
   save() {
     if (!this.form.pattern || !this.form.jobTypeId || !this.form.errorTypeId) return;
     this.saving.set(true);
+    this.saveConflict.set(null);
     const id   = this.editing()?.ruleId;
     const req$: Observable<any> = id
       ? this.svc.updateClassificationRule(id, this.form)
       : this.svc.createClassificationRule(this.form);
     req$.subscribe({
       next: () => { this.closeDrawer(); this.reload(); },
-      error: () => this.saving.set(false),
+      error: (err) => {
+        this.saving.set(false);
+        const body = err?.error;
+        if (err?.status === 409 && body?.error === 'DuplicateClassificationRule' && body?.conflictingRuleId) {
+          this.saveConflict.set({ message: body.message ?? 'A duplicate active rule exists.', conflictingRuleId: body.conflictingRuleId });
+        }
+      },
     });
   }
 

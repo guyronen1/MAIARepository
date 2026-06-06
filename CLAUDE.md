@@ -187,7 +187,97 @@ Design notes (decided in conversation) + remaining open questions:
   `monitored-jobs.service.ts` consolidation, analytics endpoint shape
   consistency, sort UI on failures-list, style budget warnings,
   CHECK constraints for composite invariants, `FixExecutionLog` retention
-  worker, dashboard surface for unclassified failures / unmatched recs
+  worker
+
+**Last completed (2026-06-06):**
+
+- **`/unconfigured` operator screen + coverage-gap analysis.** Two read-only
+  sections over a 30-day (or all-time) window: **Case A** — unclassified
+  failures (`ErrorTypeId IS NULL`) clustered into suggested ClassificationRule
+  patterns; **Case B** — classified failures whose recommendation has no
+  effective FixPolicyRule (override→default lookup null), aggregated by
+  (ErrorType, JobType, MonitoredJob). Case A "Configure" opens a focused
+  classification-rule drawer (pattern pre-filled) and on save runs
+  classify-pending so the cluster clears; Case B "Configure fix" **deep-links**
+  into the job's Fix Options drawer pre-filled (`?fixForJob=&errorTypeId=`).
+  The dashboard "Unconfigured" tile now drills here (was `/failures?view=unconfigured`).
+- **`IUnconfiguredClusterAnalyzer` (v2 seam) + `NgramClusterAnalyzer`.** v1 is
+  n-gram frequency over normalized messages (`MessageNormalizer`: strip scan
+  prefix → strip leading timestamp → collapse GUIDs → collapse 4+ digit runs;
+  GUID-before-digits ordering is load-bearing). Greedy set-cover by
+  `documentFrequency × n` (n=2..7) gives non-overlapping clusters; single-
+  occurrence noise stays uncategorized. `AnalyzerVersion="ngram-v1"`,
+  `ConfidenceScore=null`. Registered via DI like `IFixActionExecutor` — v2
+  (embedding/LLM) swaps in without touching callers. 16 unit tests.
+- **Rule suggestion provenance** — nullable `SuggestedBy` / `SuggestedFromHash`
+  / `SuggestedConfidence` on both `ClassificationRules` and `FixPolicyRules`
+  (migration `AddRuleSuggestionProvenance`). Recorded on CREATE when a rule is
+  accepted from a cluster (Case A wired; Case B deferred — see follow-ups).
+  `SuggestedFromHash` = SHA-256(sorted sample failure ids, comma-joined), first
+  16 hex. The v2 ML/LLM training signal; null for manual creation.
+- **New endpoints** `GET /api/unconfigured/clusters` + `/policy-gaps` (windowed).
+- **Classifier UNION semantics (replaces "linked-only opts out of globals").**
+  `GetEffectiveRulesAsync` now returns the job's linked rules (by Priority)
+  **plus** the JobType-global rules not already linked (by Priority), deduped.
+  A JobType-level ClassificationRule again applies to every job of that type;
+  per-job links add on top. Precedence = list order → first-match-wins →
+  **linked beats global** (mirrors FixPolicyRule override→default). The old
+  "any link disables all globals" was a UI/system mismatch that silently broke
+  `/unconfigured` Case A (operator creates a JobType-DTSX rule, it never fires
+  on a job that has links). Verified live: classify-pending cleared 19 of 20
+  unclassified after configuring two clusters.
+- **Whitespace-tolerant matching — `Core/Classification/ClassificationMatcher`.**
+  Extracted the ClassificationRule match logic (case-insensitive, `*`-only
+  wildcard, regex metachars literal, 50ms timeout) out of `RuleBasedClassifier`
+  into a public static helper (sibling to `Core/Scanning/FilenamePattern`), and
+  made it collapse runs of whitespace to a single space on BOTH the line and
+  the pattern. Logs have irregular spacing (`INFO␣␣Package`) while the n-gram
+  analyzer emits single-spaced suggested patterns — without this a correct
+  suggestion silently failed to match its own source. Strictly more permissive
+  on whitespace only; existing single-space matches unchanged.
+- **ClassificationRule 3-layer duplicate guard.** Filtered unique index
+  `UX_ClassificationRules_ActiveKey` on `(JobTypeId, Pattern) WHERE IsActive=1`
+  (migration `AddClassificationRuleActiveKeyIndex`); backend 409 pre-flight in
+  Create/Update (`{ error:"DuplicateClassificationRule", conflictingRuleId }`);
+  UI inline soft-warning + post-409 banner with "Open existing rule" on the
+  Classification Rules screen (the `/unconfigured` drawer already surfaces the
+  409 message). Natural key is `(JobTypeId, Pattern)` — ClassificationRule has
+  no MonitoredJobId (per-job is the `MonitoredJobRules` link). Cleaned up 4+2
+  duplicate rules that the retry-on-no-effect loop had created before the guard.
+- **Classification Rules screen — Scope column.** Operators couldn't tell, from
+  the global rules list, whether a rule was a JobType-wide default or scoped to
+  specific jobs (the trigger: an operator added a `Warning` rule "for B2B DB
+  Files Process" and had no way to confirm it was job-specific, not Exe-wide).
+  `ConfigController.GetAllClassificationRules` now projects `LinkedJobNames` per
+  rule via one batched query (active `MonitoredJobRules` ⋈ `MonitoredJobs.Name`,
+  grouped by RuleId — no N+1). The frontend `ClassificationRule` model carries
+  `linkedJobNames: string[]`; the table renders **Default · all {JobType}**
+  (badge-muted) when the array is empty, else **Linked · {names}** (badge-resolved).
+  Empty = JobType default (applies to every job of that type, per the UNION
+  classifier); non-empty = scoped override. Mirrors the Monitored Jobs Class tab,
+  which already shows effective = linked ∪ JobType-globals.
+- **`badge-muted` recolored on two screens (was near-black `#2a2f3a`).** The
+  per-component `.badge-muted` default fell back to a dark slate that read as an
+  unclear black chip on light tables. Replaced with readable light fills: the
+  Classification Rules **Default · all {JobType}** badge → soft indigo
+  (`#e0e7ff` / `#3730a3` / `#c7d2fe` border, signalling "global/default"); the
+  Recommendations **Auto-run "No"** badge → light slate (`#e2e8f0` / `#475569`).
+  `.badge-muted` is defined per-component (not global), so each screen needs its
+  own override — the dashboard's Monitored Jobs already had a light variant.
+- **Responsive layout pass (14" laptop fit).** Two screens were clipping content
+  on laptop-width viewports (~1280–1366px CSS):
+  - **Classification Rules table** — wrapped in `.table-wrap { overflow-x:auto }`
+    (scroll safety net, last column never clipped) + a `.compact` density class
+    (tighter cells/badges, narrower confidence bar). Progressive column drop via
+    media queries: **Confidence** hides ≤1500px, **Priority** hides ≤1280px —
+    keeps Pattern · Job Type · Scope · Error Type · Status · Actions visible.
+  - **Dashboard** — the KPI grid already wrapped at ≤1400px, but the analytics
+    row (Errors Over Time + Failures by Job) only stacked at ≤1200px and the
+    info panels (Recent Failures + Monitored Jobs) only at ≤900px, so on a 14"
+    laptop the right column of both got clipped. Aligned all three to collapse to
+    full-width at the **same ≤1400px** breakpoint. Also hardened the Monitored
+    Jobs compact row (`min-width:0` on the flex row + name ellipsis) so a long
+    job name truncates instead of overflowing its card even on wide screens.
 
 **Last completed (2026-06-03):**
 
@@ -247,12 +337,11 @@ Design notes (decided in conversation) + remaining open questions:
 - **`DbFixHandler.HandleAsync` is a TODO stub returning `false`.** Surfaced during the JobTypeId fix — when a `DbFix`-category recommendation has no matching `FixPolicyRule`, execution falls through to this handler and silently fails. Either implement it or flip those failures to `ManualRequired` explicitly with a clearer message.
 - **Frontend `monitored-jobs.service.ts` is GET-only** while the backend has full CRUD on `/api/config/monitored-jobs`. The config UI uses `config.service.ts`, so this isn't broken — just inconsistent. Consolidate or remove.
 - **`ILogReader` / `FileLogReader` are no longer consumed.** `ClassifyJobsUseCase` was the only caller; it now classifies against `JobFailure.ErrorMessage`. The interface, implementation, and DI registration in `AddMaiaAI` can be removed once we're sure nothing external relies on them.
-- **Recommendations screen drawer (Phase 2).** Same `?selected=` overlay pattern as the failures drawer; deferred so operators get a few days of feedback on the failures version first.
 - **Sort UI on failures-list.** None today. URL hygiene reserves the slot but no UI is wired up.
 - **Style budget warnings.** `features/dashboard/dashboard.component.ts` (~4.79kB vs 4kB budget) and `features/config/monitored-jobs/monitored-jobs.component.ts` (~4.34kB) exceed the Angular per-component SCSS budget. Pre-existing pattern in this codebase, not regressions from current work; raise the budget or extract shared styles.
 - **No DB-level CHECK constraints for composite invariants.** The controller's `ValidateCompositePayload` is the only enforcer of "Composite header has null payload, steps cannot be Manual/Composite, step payload non-empty." Direct SQL INSERTs could bypass. Add CHECK constraints in a follow-up migration (mirrors the defense-in-depth rationale of the filtered unique indexes on `FixPolicyRules`).
 - **`FixExecutionLog` has no retention worker.** Table sits at ~12k rows today and grows monotonically. Composite policies write one row per step; high-frequency drains amplify it further. Mirror `ScanHistoryRetentionWorker` with a configurable retention window (default 90d) when this becomes a noise / size problem.
-- **No dashboard surface for unclassified failures or unmatched recommendations.** Audit (2026-06-01) found 20 `JobFailures` stuck in `Failed` with no `ErrorTypeId` + no recommendations, and 13 `AIRecommendations` whose `ErrorTypeId` has no enabled `FixPolicyRule`. Both states are operator-actionable but invisible unless someone browses to them. A KPI or filtered view ("Unconfigured / N") would surface them.
+- **Unconfigured surface — SHIPPED (2026-06-06), with one deferral.** The `/unconfigured` screen + dashboard tile now surface both coverage gaps (Case A unclassified clusters, Case B missing-policy). **Deferred:** Case B fix-policy creation goes via a deep-link into the existing Fix Options drawer, which does **not** thread suggestion provenance — so `FixPolicyRule.SuggestedBy`/`SuggestedFromHash` stay null for Case-B-created policies in v1 (the columns exist; Case A captures provenance fully). Wire provenance through the deep-link (query params → `fixRuleForm` → create request) when Case B gets a real suggester. Case A creates a JobType-level ClassificationRule which, under the new UNION classifier semantics, correctly applies to all jobs of that type; a "link to just this job" option remains a possible future enhancement for narrower scope.
 - **Failure drawer composite step list re-fetches `FixPolicyRule.Steps` on every 5s poll tick** (per composite rec). Cheap today (clustered PK lookup, typically 1-3 composite recs per drawer-open), but the cost scales with rec count. If a failure ever has many composite recs, switch to a single batched fetch (one query for all distinct ruleIds on the failure) and cache on the rec object.
 
 # Important Decisions Made
@@ -298,6 +387,9 @@ Design notes (decided in conversation) + remaining open questions:
 - **Chart library: chart.js@^4 directly, no ng2-charts wrapper.** Direct usage gives full control over component registration (only the ones we use — keeps the bundle lean), config, and event handling. Wrapper would add ~30kB and an abstraction layer for no real benefit at this scope.
 - **Errors Over Time legend at bottom, not right.** Wider chart canvas + prepares for a Phase 2 split where Errors Over Time pairs with another chart at ~60% width. Right-side legend works at full width but cramps the canvas when narrower. Bottom legend works at any width — no chart config change needed when the layout shrinks.
 - **Errors Over Time chart colors are deterministic per `errorTypeId`** — `colorFor(errorTypeId)` returns `PALETTE[Math.abs(errorTypeId) % PALETTE.length]` (with a gray for `errorTypeId=0` "unclassified"). Same error class gets the same color across page loads regardless of arrival order, so operators build muscle memory.
+- **Multi-column dashboard rows collapse at the KPI breakpoint (≤1400px), not lower.** The target device is a 14" laptop (~1280–1366px CSS width). Three rows were collapsing at three different widths (KPIs ≤1400, analytics ≤1200, info panels ≤900), so on a laptop the KPIs wrapped but the analytics + panel rows stayed side-by-side and clipped on the right. Rule going forward: any side-by-side dashboard row stacks to full-width at the **same ≤1400px** breakpoint the KPIs use — so "KPIs wrapped" and "everything is full-width" happen together, never in between. Wider monitors keep multi-column. Secondary defense: flex rows that hold nowrap content get `min-width:0` + an ellipsis on the most-shrinkable child so they never overflow their card even above the breakpoint.
+- **Dense config tables degrade by hiding non-essential columns, not by horizontal scroll alone.** The Classification Rules table (8 columns) gets `overflow-x:auto` as a never-clip safety net, but the real fix is a `.compact` density class plus media queries that drop the two lowest-value columns as width shrinks (**Confidence** ≤1500px, **Priority** ≤1280px). The essential triage columns — Pattern · Scope · Error Type · Status · Actions — stay visible on a laptop without forcing the operator to scroll sideways to reach the action buttons.
+- **`.badge-muted` is per-component and MUST be overridden to a light fill.** There is no global `.badge-muted`; each screen that uses the class defines its own. The historical fallback (`var(--badge-muted-bg, #2a2f3a)`) renders a near-black chip on the light tables, which reads as broken. Convention: a "default/neutral" badge uses a light tint with dark text (Classification Rules' "Default · all {JobType}" → indigo `#e0e7ff`/`#3730a3`; Recommendations' Auto-run "No" → slate `#e2e8f0`/`#475569`). New screens copying a badge must pick a light fill, not inherit the dark default.
 - **Dashboard stats "today" is server-local midnight, not UTC.** `DateTime.Today` (== `CAST(GETDATE() AS DATE)`). Matches the rest of the schema's local-time convention; an operator on Israel time sees their workday-local numbers, not a 7-hour-shifted view.
 - **`NavigationHistoryService` tracks distinct *paths*, not URLs.** Query-param-only navigation (drawer ↑/↓, filter changes, pagination) doesn't shift the previous-route pointer. Without this guard, pressing ↓ once would hide the back button forever — the referrer would become `/failures?selected=124`, no longer a different page.
 - **`NavigationHistoryService` is eagerly instantiated in `ShellComponent`.** Service has to be alive before the first `NavigationEnd` fires, otherwise the initial referrer is lost. `providedIn: 'root'` alone isn't enough — Angular instantiates lazily on first inject, and the first inject might happen after the first navigation. `ShellComponent` has a `private _navHistory = inject(NavigationHistoryService);` field purely for the side effect.
@@ -364,6 +456,13 @@ Design notes (decided in conversation) + remaining open questions:
 - **Retry re-arms from `ManualRequired` rather than relaxing the drain guard.** `POST /api/recommendations/{id}/retry` flips the failure back to `Failed`, clears `IsExecuted`/claim, sets `OperatorApproved=true`, then drains synchronously — so the fix re-runs with whatever policy is configured NOW. The drain's `Failure.Status='Failed'` claim guard (the infinite-retry fix) is left intact; Retry is the explicit, audited (`FixRetried`) operator override that re-qualifies the rec.
 - **Fix↔classification connection is surfaced as UI clarity, not a new constraint.** Fixes are keyed to ErrorType (never the classification rule); multiple rules → one ErrorType → one fix, and the only blocking constraint that matters (one enabled policy per layer per ErrorType) already exists at three layers. So instead of new blocks: a classification-rule picker (pick a symptom → sets ErrorType), a reachability warning (fix for an ErrorType no rule produces for the job won't fire), a "Covers N rules" fan-in line, and Override·active / Default·shadowed badges. All computed from the job's effective classifier rules (linked rules, else JobType globals — mirrors `GetEffectiveRulesAsync`). To get *different* fixes per symptom, split into distinct ErrorTypes.
 - **`{sourceFileName}` is derived, not stored.** `Path.GetFileName({sourceFilePath})` — empty when no path was captured. No new column; it's a pure projection of the existing `{sourceFilePath}` so a CopyFile dest can reuse the original name.
+- **Classification is UNION(linked, JobType-global), linked-beats-global — NOT linked-only.** The prior `GetEffectiveRulesAsync` returned linked rules *exclusively* when a job had any, silently disabling JobType globals for that job. That was a misunderstood implementation detail, not a feature: it broke the intuitive "a JobType rule applies to all jobs of that type" expectation (and `/unconfigured` Case A, which creates exactly such rules). Now: linked rules (by Priority) ++ JobType globals not already linked (by Priority), deduped; the classifier's first-match-wins over that order yields linked-beats-global (same precedence shape as FixPolicyRule override→default). Sweep before committing showed this newly applies ~15-17 globals to the JT1 jobs — accepted as additive coverage (globals only fire where no linked rule matched; substring matching means they only hit where the text actually contains the pattern).
+- **ClassificationRule matching lives in `Core/Classification/ClassificationMatcher` and is whitespace-tolerant.** Extracted from `RuleBasedClassifier` (mirrors how `FilenamePattern` factors out the FS DSL) so it's unit-testable + reusable. Collapses whitespace runs to a single space on both line and pattern before matching — logs carry irregular spacing while the n-gram analyzer emits single-spaced patterns, so without this a correct suggestion fails to match its own source. The fix is the matcher (not the analyzer) because that makes the whole class of whitespace mismatch go away, for hand-written rules too. Strictly more permissive on whitespace; no existing match regresses.
+- **ClassificationRule uniqueness key is `(JobTypeId, Pattern)`, not `(…, MonitoredJobId)`.** The entity has no `MonitoredJobId` — JobType-scoped, with per-job association via the `MonitoredJobRules` M:N link. So the 3-layer dup guard (filtered unique index + backend 409 + UI) keys on `(JobTypeId, Pattern) WHERE IsActive=1`. Case-insensitive collation matches the case-insensitive matcher. Mandatory because the retry-on-no-effect pattern (network blip, double-click, UI lag, or — as actually happened — a rule that silently doesn't fire) otherwise piles up invisible duplicates that obscure classification state.
+- **Unconfigured cluster analysis is normalize-then-grep, behind an interface seam.** N-gram frequency over `MessageNormalizer`-cleaned text — not ML. Normalization is a precondition, not optional: raw `ErrorMessage` carries the scan prefix `[kw] file:`, an embedded timestamp, and varying ids/GUIDs that otherwise dominate frequency counts and bury the signal. Stages are individually public/testable; GUID collapse MUST precede digit-run collapse (a GUID contains 4+ digit runs — collapsing digits first shreds it). Greedy set-cover by `df × n` yields non-overlapping clusters and leaves single-occurrence noise uncategorized. `IUnconfiguredClusterAnalyzer` is the v2 swap-point (embedding/LLM) — same DI idiom as `IFixActionExecutor`; v1 leaves `ConfidenceScore` null rather than faking a number.
+- **The "Unconfigured" KPI counts raw failures, not clusters; the screen clusters on-demand.** Running the analyzer on every 5s dashboard poll would be wasteful and the honest operator number is "27 failures unhandled," not "5 patterns." So the tile stays a cheap COUNT (failure-based) and only the `/unconfigured` screen runs the analyzer (on load / window-toggle). The tile's drill-down was repointed from `/failures?view=unconfigured` to the new screen (the `view=unconfigured` failures filter still exists as a valid direct link).
+- **Case B "Configure" deep-links into the existing Fix Options drawer, not a rebuilt one.** The FixPolicyRule drawer is the complex one (scope radio, composite step editor); Case B is low-volume. So `/unconfigured` navigates `/config/monitored-jobs?fixForJob=&errorTypeId=`, and `MonitoredJobsComponent` reads those params once on load to expand the job, open its Fix tab, and pop a pre-filled new-fix drawer (then clears the params). Trade-off: provenance isn't captured on Case-B-created policies in v1 (documented in follow-ups).
+- **Suggestion provenance is CREATE-only and reproducible.** `SuggestedBy`/`SuggestedFromHash`/`SuggestedConfidence` are set only when a rule is accepted from a suggestion; update paths never touch them. The hash (SHA-256 of sorted sample failure ids, first 16 hex) is computed by a shared `ClusterHash.Of(...)` so the same cluster membership yields the same hash across code paths and v2 analyzers — the seam that lets v2 ML/LLM learn from "operator accepted/modified this suggestion."
 
 ---
 
@@ -656,6 +755,13 @@ GET  /api/data/analytics/failures-over-time?range=24h|7d|30d   → time-bucketed
                                                                   errorTypeId=0 / "(unclassified)".
 GET  /api/data/scan-runs?monitoredJobId=&outcome=              → ScanRunDto[]  (paged, max 200)
                           &fromDate=&toDate=&page=1&pageSize=50
+GET  /api/unconfigured/clusters?window=30d|all                → Case A: unclassified-failure clusters
+                                                                 (IUnconfiguredClusterAnalyzer / ngram-v1):
+                                                                 { totalUnclassified, clusteredCount,
+                                                                   uncategorizedCount, clusters[] }
+GET  /api/unconfigured/policy-gaps?window=30d|all             → Case B: classified failures with no
+                                                                 effective FixPolicyRule, grouped by
+                                                                 (ErrorType, JobType, MonitoredJob)
 POST /api/classification/classify                              → IClassifyJobsUseCase
 POST /api/fix/execute-fixes                                    → IExecuteFixesUseCase
 POST /api/pipeline/run-pipeline                                → IDirectoryPipelineUseCase

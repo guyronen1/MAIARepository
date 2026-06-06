@@ -221,7 +221,7 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
     .toggle.disabled { opacity: 0.4; cursor: not-allowed; }
     .btn-link { background:none; border:none; color:var(--primary); cursor:pointer; padding:0; font-size:11px; text-decoration:underline; }
     .btn-link:hover { color:var(--accent); }
-    .badge-muted { background: var(--badge-muted-bg, #2a2f3a); color: var(--text-muted, #94a3b8); }
+    .badge-muted { background: #e2e8f0; color: #475569; border: 1px solid #cbd5e1; }
     /* ↑/↓ buttons projected into the shared drawer's controls slot. */
     .nav-arrow:disabled { opacity: 0.35; cursor: not-allowed; }
     .drawer-title strong { font-weight: 700; color: var(--text); }
