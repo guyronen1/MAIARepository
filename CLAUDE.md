@@ -61,10 +61,11 @@ CLAUDE.md is the live source of truth for current architecture, endpoints, and d
 - `[dbo].[MonitoredJobs]`
 - `[dbo].[MonitoredJobRules]`
 - `[dbo].[MonitoredJobLeases]` — 1:1 with MonitoredJobs; runtime claim/release state for the lease-coordinated worker
-- `[dbo].[ScanTypes]` — now carries `LeaseDurationSeconds` (FS=300, DB=1800, ApiEndpoint=60)
-- `[dbo].[ScanCheckRules]`
+- `[dbo].[ScanTypes]` — now carries `LeaseDurationSeconds` (FS=300, DB=1800, ApiEndpoint=60, FileContent=300)
+- `[dbo].[ScanCheckRules]` — incl. FileContent fields (`ExtractorType`, `ExtractorLocator`, `IdentifierLocator`, `ExtractorPredicateType`, `ExtractorPredicateValue`)
 - `[dbo].[ScanDbWatermarks]`
 - `[dbo].[ScanFileWatermarks]`
+- `[dbo].[ScanContentWatermarks]` — FileContent per-file mtime watermark; unique `(MonitoredJobId, FilePath)`, cascade delete
 - `[dbo].[JobFailures]`
 - `[dbo].[AIRecommendations]`
 - `[dbo].[ClassificationRules]`
@@ -136,47 +137,14 @@ All backend engines, APIs, and config UI are built:
 
 # Active Goals / What We're Working On
 
-**Next up: New scan capability — `FileContentScanStrategy` + `XmlExtractor`.**
-
-A 4th scan strategy alongside the existing FileSystem / Database / ApiEndpoint
-trio. Where `FileSystemScanStrategy` is keyword-line-matching ("look for
-ERROR in log lines"), `FileContentScanStrategy` does structured extraction
-from a file's actual contents — initial extractor is XML, others added when
-concrete cases demand them (JSON, CSV, fixed-width, etc.).
-
-Design notes (decided in conversation) + remaining open questions:
-
-- **Extractor as plugin — DECIDED.** An `IFileContentExtractor` interface with
-  one implementation per format (XML first), mirroring the `IFixActionExecutor`
-  shape — NOT an enum-cased switch. Operator picks it via a new
-  `ScanCheckRule.ExtractorType`.
-- **Config via two locator strings (dual-locator) — DECIDED, replaces the
-  earlier JSON-blob lean.** Two simple string columns on `ScanCheckRule`:
-  `ExtractorLocator` (what to pull out — an XPath for XML, JsonPath for JSON,
-  column index for CSV, …) and `IdentifierLocator` (how to derive the extracted
-  row's identity / `SourceId`). Each is a single polymorphic string that the
-  *chosen extractor* interprets — the extractor owns the meaning of its own
-  locator, so there's no shared blob schema to version/parse and the two values
-  stay queryable as plain columns. The previously-leaned `ExtractorConfig`
-  `nvarchar(max)` JSON blob was rejected: a blob forces a structured config
-  format onto every extractor and is opaque in ad-hoc SQL; one polymorphic
-  string per locator is simpler and each extractor already knows how to read it.
-- **Identifier-extraction failure → fall back to filename, but COUNT it —
-  DECIDED.** When `IdentifierLocator` yields nothing for a finding, use the
-  source filename as the identifier (don't drop the finding), but increment an
-  identifier-extraction-failure counter on that scan's `ScanRunHistory` row
-  rather than only logging a warning. Keeps the silent fallback visible in scan
-  history (same surface as the existing per-tick counts), so a misconfigured
-  `IdentifierLocator` reads as "N fell back" instead of hiding in the log file.
-- **Watermarking by content (OPEN).** `ScanFileWatermarks` today stores byte
-  offset (per-line-scan friendly). For content extraction, "did I already
-  process this file" is the right granularity — a file-modified-at watermark
-  plus a hash-of-content for tamper detection. New table `ScanContentWatermarks`?
-  Reuse `ScanFileWatermarks` with a polymorphic value column?
-- **Output shape (OPEN, leaning `JobFailure`).** Each extracted "row" becomes a
-  `JobFailure` (consistent with DB scan strategy's row-per-match)? Or a new
-  `JobFinding` entity upstream of the failure? Lean towards JobFailure to keep
-  the downstream pipeline (classify → suggest → execute) unchanged.
+**`FileContentScanStrategy` + `XmlContentExtractor` — SHIPPED (2026-06-07).**
+The 4th scan strategy is built, tested (38 new unit/integration tests), and
+smoke-tested end-to-end. See the "Last completed (2026-06-07)" entry and the
+FileContent decisions block below. The open questions from the design phase are
+now resolved: watermarking is a **new `ScanContentWatermarks` table** (mtime-based,
+content-hash deferred to v2); output shape is **`JobFailure`** (downstream pipeline
+unchanged). v2 extractors (CSV/JSON/Excel), content-hash watermarking, and
+composite scan rules are deferred (see Known follow-ups).
 
 **Backlog (already documented in Known follow-ups below):**
 
@@ -188,6 +156,62 @@ Design notes (decided in conversation) + remaining open questions:
   consistency, sort UI on failures-list, style budget warnings,
   CHECK constraints for composite invariants, `FixExecutionLog` retention
   worker
+
+**Last completed (2026-06-07):**
+
+- **`FileContentScanStrategy` + `XmlContentExtractor` (4th scan strategy).**
+  Structured extraction from INPUT DATA files (not logs). Two operator modes,
+  one rule shape: **(1) filename signals failure** — a file whose name matches
+  the rule's pattern IS a failure (e.g. `*WARNING*.xml`); **(2) content
+  predicate** — extract a value via XPath and test it (e.g. `/file/status/code`
+  Equals `ERROR`). Either way an `IdentifierLocator` (XPath) can pull a natural
+  key for `SourceId`. New `ScanType.FileContent=3`, `CheckType.FileContent=5`,
+  `ScanTypes` row 4 (lease 300s), enums `FileFormat{Xml}` + `ScanPredicateType
+  {Equals,NotEquals,Contains,NotContains}`. Migration `AddFileContentScan`.
+- **`IFileContentExtractor` plug-in seam + `XmlContentExtractor`.** Interface in
+  `Core/Interfaces` (Format + `ExtractAsync(filePath, locator) → string?`),
+  registered as `IEnumerable<IFileContentExtractor>`, strategy dispatches by
+  `ExtractorType` — same shape as `IFixActionExecutor`. XML impl uses
+  `XPathEvaluate` (elements, attributes, text/CDATA, functions), **strips
+  namespaces** before evaluation (operators write plain `/file/status/code`),
+  hard 5MB cap (`FileContentTooLargeException`), null-on-miss/malformed. 21 unit
+  tests. v2 extractors (CSV/JSON/Excel) plug in here.
+- **`ScanCheckRule` +5 fields** (all nullable, FileContent-only): `ExtractorType`,
+  `ExtractorLocator`, `IdentifierLocator`, `ExtractorPredicateType`,
+  `ExtractorPredicateValue`. **`TargetField` is reused as the filename pattern**
+  (same `*`-wildcard DSL as classification/FS) — no new column. **`MonitoredJob`
+  +`IncludeSubfolders`** (reuses `LogFolder` as the scanned folder). **`ScanRunHistory`
+  +`IdentifierExtractionFailures` +`OversizeFileSkips`** counters (flow
+  `ScanResult` → worker → history row).
+- **New `ScanContentWatermarks` table** (per-`(MonitoredJobId, FilePath)`, mtime-based).
+  Methods folded into the existing `IScanWatermarkRepository` (it's already the
+  multi-kind watermark repo) — no new interface. Dedup: skip a file when its
+  current mtime ≤ recorded `LastModifiedAt`; re-scan when new or modified.
+  Content-hash tamper detection deferred to v2.
+- **File-outer / rule-inner walk ("walk-once-apply-many").** Forced by the
+  per-file watermark grain: each file is examined once, every rule whose filename
+  pattern matches is applied, watermark written once after. A single file
+  produces 0–N `JobFailure`s depending on how many rules' predicates evaluate
+  successfully on it.
+- **ConfigController validation, FileContent-scoped only.** Three 400 codes:
+  `ExtractorTypeRequired`, `PredicateIncomplete` (type/value must be both-or-
+  neither), `PredicateRequiresLocator`. FS/DB/API rule types are untouched
+  (their existing "validate at scan time" behavior stays). Verified live: all
+  three codes fire. UI surfaces them as a footer save-error banner + an inline
+  soft-warning when a predicate lacks a locator.
+- **Frontend — Scan Rules drawer learns FileContent.** New `FileContent` scan
+  type; the rule drawer renders Filename Pattern (relabeled `TargetField`),
+  Format, Value Locator, Predicate (+ value), Identifier Locator with
+  format-specific hints; `IncludeSubfolders` checkbox on the job config.
+  (Also fixed a latent bug: `SqlMonitoredJobRepository.UpdateAsync` never
+  persisted `InputFolder` — added alongside `IncludeSubfolders`.)
+- **Smoke test (live, job 1005):** two rules (filename-only + content-predicate)
+  over real XML → 2 failures (`ORD-88134` via `/order/@id`; `INV-2026-001` via
+  `/file/header/invoiceId`, fired on `code=ERROR`); healthy `invoice-ok.xml`
+  (code=OK) correctly didn't fire; all 3 files watermarked (incl. the non-firing
+  one); `classify-pending` then classified the invoice failure against its
+  constructed `ErrorMessage` → `ErrorTypeId=FileNotFound`, confirming the
+  classify→suggest pipeline consumes FileContent failures unchanged.
 
 **Last completed (2026-06-06):**
 
@@ -330,6 +354,21 @@ Design notes (decided in conversation) + remaining open questions:
 
 # Known follow-ups (not blocking)
 
+- **🏗️ ARCHITECTURE — heterogeneous scan rules under one MonitoredJob (dedicated design conversation when ready).**
+  > Architectural question: MonitoredJob locks scan type at the job level, preventing heterogeneous rules under one job. Operator wants to monitor one operational concept via multiple scan paths (DB + logs + other DB). Three framings exist: (1) move ScanType to ScanCheckRule, (2) add MonitoredService aggregation entity, (3) keep current model with naming conventions. Each has different implications for lease model, ScanRunHistory, dashboard rollup, config UX. Worth a dedicated design conversation when ready.
+
+  **Root cause (verified in code):** `ScanType` lives at *both* levels and they conflict. `MonitoredJob.ScanTypeId` makes the worker pick exactly one strategy (`strategies.FirstOrDefault(s => s.ScanType == job.ScanType)`), but `ScanCheckRule.CheckType` is *already* a per-rule discriminator and every strategy already filters the job's rules by it (`FileSystem`→`ErrorKeyword`, `Database`→`ColumnRange`/`ValueEquals`, `ApiEndpoint`→`StatusCode`/`ResponseContains`, `FileContent`→`FileContent`). So the rule layer is already type-aware; the job-level `ScanType` is the artificial bottleneck duplicating what the rules know.
+
+  **Concrete coupling points any fix must address:** (a) worker dispatch (`FirstOrDefault(==job.ScanType)` → run every strategy with ≥1 matching active rule); (b) per-type config fields (`LogFolder`/`SearchPatterns`, `ConnectionName`, `LogSourceUrl`) are job-level + singular — all DB rules share one connection, all FS rules one folder; (c) lease duration is per-`ScanType` and doubles as the per-job timeout → mixed job needs `max(involved)` or a job-level value; (d) `ScanRunHistory` is one-row-per-job-scan → aggregate vs per-strategy rows; (e) **FS has a non-rule-driven "full-pipeline over all lines" mode triggered purely by `ScanType=FS` with no keyword rules — that signal vanishes under CheckType dispatch and needs an explicit flag**; (f) UI rule editor branches its form on the *job's* ScanType today → would branch on the *rule's* CheckType.
+
+  **Recommendation (Claude, 2026-06-07):** **Tier 1 now, Tier 3 as the north star; avoid Tier 2.**
+    - **Tier 1 (≈ framing 1) — CheckType-driven dispatch.** Worker runs every strategy whose supported CheckTypes appear in the job's active rules; `CheckType` is the discriminator (no new field needed); the config columns already coexist (just fill more of them). Unlocks the operator's exact example *when both tables share one connection*. Smallest, lowest-risk change; matches the additive codebase style. Costs: UI rework (rule editor goes CheckType-first; job config shows the source-config sections actually used), and two decisions — fate of `ScanType`-at-job (remove vs keep-as-default) and how to re-signal FS full-pipeline mode.
+    - **Tier 2 — push source config onto `ScanCheckRule` (connection/folder/url per rule).** Unlocks different connections per rule BUT adds yet more nullable columns to `ScanCheckRule`, already the widest table and already flagged at the "normalize?" threshold during FileContent. **A trap** — spends schema churn without giving the clean model.
+    - **Tier 3 (≈ framing 2) — `ScanSource` / `MonitoredService` sub-entity.** `MonitoredJob (1) → (N) ScanSource [typed + its own config] → (N) ScanCheckRule`. Job = the logical operational concept; sources = typed observation points (this DB on this connection, that folder, that API); rules = checks within a source. Conceptually correct; resolves the `ScanCheckRule`-width problem (per-type config moves to the source); lease/watermark/history/dashboard all key naturally to a source. Heavy: new table, move `ScanCheckRule.MonitoredJobId → ScanSourceId`, worker rewrite, a Sources UI tab, watermark re-key, data backfill (each existing job → one source).
+    - Framing 3 (naming conventions / N jobs per process) is the current workaround the operator wants to escape — fragments the mental model, splits leases/failures/recommendations/views.
+
+  **Decisions that pick the tier:** Is the real "two tables" case same connection or different? (same → Tier 1 suffices; different → go straight to Tier 3, don't pass through Tier 2.) Does one job ever need two databases / two log folders? Is "one business process = one monitored job" the intended operator mental model? When ready, resolve these, then plan the chosen tier end-to-end.
+
 - **Operator identity is hardcoded `'operator'`** in approve/reject calls. Replace with real authenticated user when auth lands.
 - **No authn/authz on any controller.** All endpoints are currently open. Operators, admins, and auditors should have distinct permission sets. Needs role-based authorization before production. `AuditLog.Actor` (and `OperatorAction.OperatorId`) should be wired to the real identity.
 - **Analytics endpoint response shapes are inconsistent.** `failures-over-time` wraps its rows in `{ range, bucketSize, rangeStart, rangeEnd, buckets[] }`; the newer `failures-by-job` and `resolution-mix` return plain arrays. Flatten `failures-over-time` to a plain array next time it's touched — don't refactor purely for consistency.
@@ -341,6 +380,8 @@ Design notes (decided in conversation) + remaining open questions:
 - **Style budget warnings.** `features/dashboard/dashboard.component.ts` (~4.79kB vs 4kB budget) and `features/config/monitored-jobs/monitored-jobs.component.ts` (~4.34kB) exceed the Angular per-component SCSS budget. Pre-existing pattern in this codebase, not regressions from current work; raise the budget or extract shared styles.
 - **No DB-level CHECK constraints for composite invariants.** The controller's `ValidateCompositePayload` is the only enforcer of "Composite header has null payload, steps cannot be Manual/Composite, step payload non-empty." Direct SQL INSERTs could bypass. Add CHECK constraints in a follow-up migration (mirrors the defense-in-depth rationale of the filtered unique indexes on `FixPolicyRules`).
 - **`FixExecutionLog` has no retention worker.** Table sits at ~12k rows today and grows monotonically. Composite policies write one row per step; high-frequency drains amplify it further. Mirror `ScanHistoryRetentionWorker` with a configurable retention window (default 90d) when this becomes a noise / size problem.
+- **Composite scan rules (deferred from FileContent v1).** Operator requested multi-step scan checks for both file-content (multi-predicate within one file) and DB scans (cross-table value checks). v1 supports single-predicate / single-check rules; operators express compound checks via XPath compound conditions (XML) or a JOIN in `SourceTable` (DB). When concrete cases demand explicit composite UI, mirror the `FixPolicyRule` composite pattern: a parent `ScanCheckRule` with `ActionType=Composite` + a child `ScanCheckRuleStep` table (`StepId`, `RuleId`, `Locator`/`TargetColumn`, `PredicateType`, `PredicateValue`, `StepOrder`). All steps evaluated, AND logic, fires a single `JobFailure` on full match. Architecture supports it additively — single-predicate v1 rules keep working unchanged.
+- **FileContent v2 backlog.** CSV/JSON/Excel extractors (add a `FileFormat` value + an `IFileContentExtractor` impl); content-hash watermarking (mtime is the v1 dedup key); per-rule failure-mode config (malformed-file behavior is fixed at "log Warning, skip" in v1); regex predicate type; streaming extraction for >5MB files; walk-once-apply-many is already implemented so multi-rule scans don't re-read files. Also: the `Severity` enum has no `Critical` value but the frontend `SEVERITIES` list offers it — surfaced during FileContent smoke test; either add `Critical` to the enum or drop it from the UI list.
 - **Unconfigured surface — SHIPPED (2026-06-06), with one deferral.** The `/unconfigured` screen + dashboard tile now surface both coverage gaps (Case A unclassified clusters, Case B missing-policy). **Deferred:** Case B fix-policy creation goes via a deep-link into the existing Fix Options drawer, which does **not** thread suggestion provenance — so `FixPolicyRule.SuggestedBy`/`SuggestedFromHash` stay null for Case-B-created policies in v1 (the columns exist; Case A captures provenance fully). Wire provenance through the deep-link (query params → `fixRuleForm` → create request) when Case B gets a real suggester. Case A creates a JobType-level ClassificationRule which, under the new UNION classifier semantics, correctly applies to all jobs of that type; a "link to just this job" option remains a possible future enhancement for narrower scope.
 - **Failure drawer composite step list re-fetches `FixPolicyRule.Steps` on every 5s poll tick** (per composite rec). Cheap today (clustered PK lookup, typically 1-3 composite recs per drawer-open), but the cost scales with rec count. If a failure ever has many composite recs, switch to a single batched fetch (one query for all distinct ruleIds on the failure) and cache on the rec object.
 
@@ -464,6 +505,21 @@ Design notes (decided in conversation) + remaining open questions:
 - **Case B "Configure" deep-links into the existing Fix Options drawer, not a rebuilt one.** The FixPolicyRule drawer is the complex one (scope radio, composite step editor); Case B is low-volume. So `/unconfigured` navigates `/config/monitored-jobs?fixForJob=&errorTypeId=`, and `MonitoredJobsComponent` reads those params once on load to expand the job, open its Fix tab, and pop a pre-filled new-fix drawer (then clears the params). Trade-off: provenance isn't captured on Case-B-created policies in v1 (documented in follow-ups).
 - **Suggestion provenance is CREATE-only and reproducible.** `SuggestedBy`/`SuggestedFromHash`/`SuggestedConfidence` are set only when a rule is accepted from a suggestion; update paths never touch them. The hash (SHA-256 of sorted sample failure ids, first 16 hex) is computed by a shared `ClusterHash.Of(...)` so the same cluster membership yields the same hash across code paths and v2 analyzers — the seam that lets v2 ML/LLM learn from "operator accepted/modified this suggestion."
 
+## FileContent scan (2026-06-07)
+
+- **`FileContentScanStrategy` is the 4th `IScanStrategy`, added purely additively.** No orchestrator change: `MonitoringWorker` resolves `strategies.FirstOrDefault(s => s.ScanType == job.ScanType)` over `GetServices<IScanStrategy>()`, with zero hard-coded scan-type lists. New strategy = new enum value + `ScanTypes` seed row + one DI line. **Load-bearing detail:** `MonitoredJob.ScanType` is `Enum.Parse<ScanType>(ScanTypeDefinition.Name)`, so the enum member name must equal the seed `Name` **exactly** (`"FileContent"`); the enum int (`3`) and the `ScanTypeId` PK (`4`) intentionally differ (same offset the existing types already have).
+- **Extractor plug-in, not a switch.** `IFileContentExtractor` (Core/Interfaces) mirrors `IFixActionExecutor`: `Format` + `ExtractAsync(filePath, locator) → string?`, registered as `IEnumerable<>`, dispatched by `ExtractorType` via a `Dictionary<FileFormat,…>` built at construction. v2 formats (CSV/JSON/Excel) add an enum value + an impl, nothing else.
+- **Dual single-string locators on `ScanCheckRule`, not a JSON blob.** `ExtractorLocator` (value to test) and `IdentifierLocator` (natural key → SourceId) are plain `nvarchar(500)` columns whose grammar the chosen extractor owns (XPath for XML). Rejected a `nvarchar(max)` JSON config blob — it'd force a schema on every extractor and be opaque in ad-hoc SQL.
+- **`TargetField` is reused as the FileContent filename pattern** (same `*`-wildcard DSL as classification/FS) — no `FileNamePattern` column. `TargetField` is already the polymorphic per-rule target (keyword for ErrorKeyword, column for ColumnRange). `LogFolder` is reused as the scanned folder; `MonitoredJob.IncludeSubfolders` toggles recursion. Net new columns kept to the 5 FileContent fields + 1 job flag + 2 history counters. The wide-table threshold: if a *5th* scan type needs another batch of columns, normalize then (child config table / TPH) — not now.
+- **`ScanContentWatermarks` (new table), mtime-based, NOT byte-offset.** Content scans track WHOLE files: skip when current mtime ≤ recorded `LastModifiedAt`; re-scan when new or modified. Methods folded into the existing `IScanWatermarkRepository` (already multi-kind: file-offset + db + now content) rather than a new interface. **Watermark is written once per examined (new/changed) file regardless of outcome** — failure, predicate-not-satisfied, oversize, or malformed-null. Contract = "process each file *version* once"; the transient-IO edge (a briefly-locked file gets watermarked and won't retry until its mtime changes) is accepted as rare. Content-hash tamper detection deferred to v2.
+- **File-outer / rule-inner walk.** Forced by the per-file watermark grain (a per-rule walk would let rule A's watermark write make rule B skip the file). Each file is examined once, every rule whose filename pattern matches is applied, watermark written once after. **Contract note: a single file produces 0–N `JobFailure`s** depending on how many rules' predicates evaluate successfully on it. A predicate that can't be evaluated (locator returns null) **skips that rule cleanly with a Warning** rather than firing a false-positive failure with a meaningless message — so rules over the same file don't interfere, and the "N rules legitimately match → N failures" case still works.
+- **Oversize cap (5MB) is enforced by the extractor (throws), only when extraction is attempted.** The strategy catches `FileContentTooLargeException` → `OversizeFileSkips++` + skip. A pure filename-match rule with **no** locators never opens the file, so a 6MB `*WARNING*.xml` still fires (if we don't read it, its size is moot). `XmlContentExtractor` checks `FileInfo.Length` before any parse.
+- **XPath is namespace-blind (v1).** `XmlContentExtractor` strips xmlns declarations + prefixes from the loaded `XDocument` before evaluation, so operator XPaths like `/file/status/code` match namespaced XML without `local-name()` or per-rule namespace config. Trade-off: explicit namespace-prefixed XPath won't match, and same-local-name-different-namespace elements merge. Real business XML rarely needs the disambiguation; a per-rule `NamespaceManager` is the v2 escape hatch.
+- **No XPath timeout — the 5MB cap is the real bound.** Unlike `Regex`, XPath evaluation isn't cancellable mid-run; a `Task.Run`+token wrapper wouldn't actually stop the work. On a doc already capped at 5MB a reasonable expression completes in microseconds. Malformed XML / invalid XPath are caught → null (logged Warning), never throw past the extractor.
+- **`JobFailure` field assignment for FileContent.** `SourceLogPath` = full file path (the field is `required` / non-null — it can't be null; the data file *is* where detection happened), `SourceFilePath` = same path (for `{sourceFilePath}`), `StepName` = filename (matches FS convention — FS uses the filename, not the rule name), `SourceId` = identifier-locator value else `Path.GetFileNameWithoutExtension`. `ErrorMessage` = `"{Description|'FileContent match'}: {primaryValue} (file: {filename})"` — predictable so classification patterns can match it; empty primary value is acceptable for pattern-only rules.
+- **Identifier fallback is counted, not silent.** `IdentifierLocator` set but extraction yields null → use filename, increment `ScanRunHistory.IdentifierExtractionFailures` (+ an Info log when an examined file produces no failure at all). Surfaces a misconfigured locator as "N fell back" in scan history instead of hiding in the log file.
+- **FileContent validation is reject-at-save (400), scoped to `CheckType=FileContent` only.** Three codes — `ExtractorTypeRequired`, `PredicateIncomplete` (type/value both-or-neither), `PredicateRequiresLocator` — mirror the FixPolicy composite validation precedent. Deliberately NOT retrofitted onto FS/DB/API rules, which keep their existing "accept, validate at scan time" behavior (no back-compat risk since FileContent is new). The 5 fields are nulled for non-FileContent rules on save.
+
 ---
 
 # File Structure
@@ -484,23 +540,29 @@ Core/
 │   ├── MonitoredJob         job to watch (LogPathTemplate + interval)
 │   ├── MonitoredJobRule     M:N — MonitoredJob ↔ ClassificationRule
 │   ├── MonitoredJobLease    1:1 with MonitoredJob; runtime claim/release state for the worker
-│   ├── ScanCheckRule        per-job check: DB column range, file existence, etc.
+│   ├── ScanCheckRule        per-job check: DB column range, file existence, FileContent extraction, etc.
+│   │                          (FileContent: TargetField = filename pattern; + ExtractorType,
+│   │                           ExtractorLocator, IdentifierLocator, ExtractorPredicateType/Value)
 │   ├── ScanDbWatermark      incremental DB scan watermark
-│   ├── ScanFileWatermark    incremental file scan watermark
+│   ├── ScanFileWatermark    incremental file scan watermark (byte offset, log tailing)
+│   ├── ScanContentWatermark FileContent scan watermark (per-file mtime, whole-file dedup)
 │   ├── ScanTypeDefinition   lookup for scan strategy types + LeaseDurationSeconds
 │   ├── FixPolicyRule        error type → action type + payload mapping
 │   │                          (MonitoredJobId NULL = JobType default; set = per-job override)
 │   │                          (ActionType=Composite → ActionPayload null, steps in FixPolicyRuleSteps)
 │   ├── FixPolicyRuleStep    ordered step within a Composite rule
 │   │                          (ActionType + ActionPayload + optional Description per step)
-│   └── ScanRunHistory       append-only per-tick scan log (timing, outcome, counts)
+│   └── ScanRunHistory       append-only per-tick scan log (timing, outcome, counts +
+│                              IdentifierExtractionFailures, OversizeFileSkips for FileContent)
 │
 ├── Enums/
 │   ├── FixCategory          Retry | FileRepair | DbFix | Manual
 │   ├── FixActionType        Manual | ApiCall | StoredProcedure | Script | SqlScript | CopyFile | Composite
 │   ├── JobStatus            Failed | Resolved | ManualRequired   (no "Classified" state — see decisions below)
-│   ├── ScanType             FileSystem | Database | ApiEndpoint
-│   ├── CheckType            check rule type enum
+│   ├── ScanType             FileSystem | Database | ApiEndpoint | FileContent
+│   ├── CheckType            ColumnRange | ErrorKeyword | StatusCode | ResponseContains | ValueEquals | FileContent
+│   ├── FileFormat           Xml   (FileContent extractor format; v2: Csv/Json/Excel)
+│   ├── ScanPredicateType    Equals | NotEquals | Contains | NotContains   (FileContent value test)
 │   ├── Severity             severity levels for check rules
 │   ├── TriggerType          Auto | Manual
 │   └── JobRunOutcome        Success | Failed | Timeout | Stolen   (lease release outcome)
@@ -516,9 +578,10 @@ Core/
 │   ├── IFixEngine
 │   ├── IFixHandler          FixCategory-based fallback handler
 │   ├── IFixActionExecutor   FixActionType-based primary executor
+│   ├── IFileContentExtractor  one per FileFormat (XML in v1); FileContent scan dispatches by ExtractorType
 │   ├── IFixCatalogue
 │   ├── IPlaceholderResolver  centralised payload {token} substitution
-│   ├── IScanStrategy        FileSystem / Database / ApiEndpoint strategies
+│   ├── IScanStrategy        FileSystem / Database / ApiEndpoint / FileContent strategies
 │   ├── IScanHistoryRetentionService  shared by retention worker + admin endpoint
 │   ├── ILogParser / ILogReader
 │   └── UseCases/
@@ -555,7 +618,9 @@ Infrastructure/
 ├── Scanning/
 │   ├── FileSystemScanStrategy     → IScanStrategy (FileSystem)
 │   ├── DatabaseScanStrategy       → IScanStrategy (Database)
-│   └── ApiEndpointScanStrategy    → IScanStrategy (ApiEndpoint)
+│   ├── ApiEndpointScanStrategy    → IScanStrategy (ApiEndpoint)
+│   ├── FileContentScanStrategy    → IScanStrategy (FileContent) — file-outer/rule-inner walk
+│   └── XmlContentExtractor        → IFileContentExtractor (Xml; XPath, namespace-blind, 5MB cap)
 ├── Fix/
 │   ├── Handlers (FixCategory fallback)
 │   │   ├── RetryFixHandler, FileRepairFixHandler, DbFixHandler, ManualFixHandler

@@ -14,7 +14,9 @@ import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
 type ActiveTab    = 'scan' | 'class' | 'fix';
 type ActiveDrawer = 'job' | 'scan-rule' | 'class-rule' | 'link-class-rule' | 'fix-rule' | null;
 
-const SCAN_TYPES     = [{ id: 1, name: 'FileSystem' }, { id: 2, name: 'Database' }, { id: 3, name: 'ApiEndpoint' }];
+const SCAN_TYPES     = [{ id: 1, name: 'FileSystem' }, { id: 2, name: 'Database' }, { id: 3, name: 'ApiEndpoint' }, { id: 4, name: 'FileContent' }];
+const FILE_FORMATS   = ['Xml'];
+const PREDICATE_TYPES = ['Equals', 'NotEquals', 'Contains', 'NotContains'];
 const DB_CHECK_TYPES = ['ColumnRange', 'ValueEquals'];
 const SEVERITIES     = ['Low', 'Medium', 'High', 'Critical'];
 const FIX_CATEGORIES = ['Retry', 'FileRepair', 'DbFix', 'Manual'];
@@ -443,6 +445,24 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
                 <input [(ngModel)]="jobForm.logSourceUrl" placeholder="https://api.example.com/health" />
               </div>
             }
+            @if (jobForm.scanTypeId === 4) {
+              <div class="form-group span2">
+                <label>Folder to Scan</label>
+                <input [(ngModel)]="jobForm.logFolder" placeholder="C:\incoming\invoices" />
+                <span class="field-hint">
+                  Folder holding the input data files to inspect (not logs). Each
+                  rule's <strong>Filename Pattern</strong> selects which files in
+                  here are examined.
+                </span>
+              </div>
+              <div class="form-group span2" style="flex-direction:row;align-items:center;gap:10px">
+                <label class="toggle">
+                  <input type="checkbox" [(ngModel)]="jobForm.includeSubfolders" />
+                  <span class="slider"></span>
+                </label>
+                <span class="text-sm">Include subfolders (scan recursively)</span>
+              </div>
+            }
 
             <div class="form-group">
               <label>Poll Interval (seconds)</label>
@@ -508,6 +528,62 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
                   <code>{{'{'}}sourceFilePath{{'}'}}</code> placeholder you can use in
                   a fix policy's payload (e.g. a <strong>CopyFile</strong> or SQL fix).
                   Leave blank if no fix on this job needs the input file.
+                </span>
+              </div>
+            } @else if (editingRuleJob()?.scanTypeId === 4) {
+              <!-- FileContent: structured extraction from input data files -->
+              <div class="form-group span2">
+                <label>Filename Pattern *</label>
+                <input [(ngModel)]="ruleForm.targetField" placeholder="e.g. *WARNING*.xml  or  *.xml" />
+                <span class="field-hint">
+                  Files whose name matches are examined. Uses <code>*</code> as a
+                  wildcard, case-insensitive — same DSL as classification patterns
+                  (<em>not</em> regex). e.g. <code>*WARNING*.xml</code> or <code>*.xml</code>.
+                </span>
+              </div>
+              <div class="form-group span2">
+                <label>Format *</label>
+                <select [(ngModel)]="ruleForm.extractorType">
+                  @for (f of fileFormats; track f) { <option [ngValue]="f">{{ f }}</option> }
+                </select>
+                <span class="field-hint">Extractor used to read the file. XML only in v1.</span>
+              </div>
+              <div class="form-group span2">
+                <label>Value Locator (XPath)</label>
+                <input [(ngModel)]="ruleForm.extractorLocator" placeholder="e.g. /file/status/code" />
+                <span class="field-hint">
+                  XPath to the value tested by the predicate below.
+                  <strong>Leave blank if the filename match alone signals the failure.</strong>
+                  Namespaces are ignored — write plain element names (e.g.
+                  <code>/file/status/code</code>), not <code>local-name()</code>.
+                </span>
+              </div>
+              <div class="form-group">
+                <label>Predicate</label>
+                <select [(ngModel)]="ruleForm.extractorPredicateType">
+                  <option [ngValue]="null">None — filename match is the failure</option>
+                  @for (p of predicateTypes; track p) { <option [ngValue]="p">{{ p }}</option> }
+                </select>
+              </div>
+              @if (ruleForm.extractorPredicateType) {
+                <div class="form-group">
+                  <label>Predicate Value *</label>
+                  <input [(ngModel)]="ruleForm.extractorPredicateValue" placeholder="e.g. ERROR" />
+                </div>
+                @if (!ruleForm.extractorLocator) {
+                  <div class="dup-warn span2">
+                    ⚠ A predicate needs a <strong>Value Locator</strong> to extract the value it tests.
+                  </div>
+                }
+              }
+              <div class="form-group span2">
+                <label>Identifier Locator (XPath)</label>
+                <input [(ngModel)]="ruleForm.identifierLocator" placeholder="e.g. /file/header/invoiceId" />
+                <span class="field-hint">
+                  XPath to the natural key, stored as the failure's
+                  <code>{{'{'}}sourceId{{'}'}}</code> (used by SQL / CopyFile fixes).
+                  Leave blank to use the filename without extension. If set but not
+                  found in a file, falls back to the filename and the scan counts it.
                 </span>
               </div>
             } @else {
@@ -586,6 +662,9 @@ const ACTION_TYPES   = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlSc
               <input [(ngModel)]="ruleForm.description" placeholder="Optional notes" />
             </div>
           </div>
+          @if (scanRuleSaveError(); as msg) {
+            <div class="dup-warn save-error" role="alert">⚠ Save failed: {{ msg }}</div>
+          }
         </div>
         <div class="drawer-footer">
           <button class="btn btn-ghost" (click)="closeDrawer()">Cancel</button>
@@ -1435,7 +1514,14 @@ export class MonitoredJobsComponent implements OnInit {
 
   readonly scanTypes     = SCAN_TYPES;
   readonly dbCheckTypes  = DB_CHECK_TYPES;
+  readonly fileFormats   = FILE_FORMATS;
+  readonly predicateTypes = PREDICATE_TYPES;
   readonly severities    = SEVERITIES;
+
+  /** Last scan-rule save error (400 FileContent validation: ExtractorTypeRequired,
+   *  PredicateIncomplete, PredicateRequiresLocator). Surfaced in the drawer
+   *  footer; cleared on drawer open + each save attempt. */
+  scanRuleSaveError = signal<string | null>(null);
   readonly fixCategories = FIX_CATEGORIES;
   readonly actionTypes   = ACTION_TYPES;
 
@@ -1546,7 +1632,7 @@ export class MonitoredJobsComponent implements OnInit {
       this.jobForm = {
         name: job.name, displayName: job.displayName, jobTypeId: jt?.jobTypeId ?? 0,
         scanTypeId: job.scanTypeId, logFolder: job.logFolder, searchPatterns: job.searchPatterns,
-        inputFolder: job.inputFolder,
+        inputFolder: job.inputFolder, includeSubfolders: job.includeSubfolders,
         connectionName: job.connectionName, logSourceUrl: job.logSourceUrl,
         pollingIntervalSeconds: job.pollingIntervalSeconds, isActive: job.isActive,
         description: job.description,
@@ -1603,11 +1689,15 @@ export class MonitoredJobsComponent implements OnInit {
   openScanRuleDrawer(job: MonitoredJob, rule: ScanCheckRule | null) {
     this.editingRuleJob.set(job);
     this.editingRule.set(rule);
+    this.scanRuleSaveError.set(null);
     this.ruleForm = rule ? {
       checkType: rule.checkType, sourceTable: rule.sourceTable, targetField: rule.targetField,
       minValue: rule.minValue, maxValue: rule.maxValue, expectedValue: rule.expectedValue,
       watermarkColumn: rule.watermarkColumn, sourceIdColumn: rule.sourceIdColumn,
       filePathColumn: rule.filePathColumn, inputPathPattern: rule.inputPathPattern,
+      extractorType: rule.extractorType, extractorLocator: rule.extractorLocator,
+      identifierLocator: rule.identifierLocator, extractorPredicateType: rule.extractorPredicateType,
+      extractorPredicateValue: rule.extractorPredicateValue,
       severity: rule.severity, description: rule.description, isActive: true,
     } : this.blankScanRule(job.scanTypeId);
     this.activeDrawer.set('scan-rule');
@@ -1616,6 +1706,7 @@ export class MonitoredJobsComponent implements OnInit {
   saveScanRule() {
     if (!this.ruleForm.targetField) return;
     this.saving.set(true);
+    this.scanRuleSaveError.set(null);
     const ruleId  = this.editingRule()?.checkRuleId;
     const jobId   = this.editingRuleJob()!.monitoredJobId;
     const req$: Observable<any> = ruleId
@@ -1623,7 +1714,16 @@ export class MonitoredJobsComponent implements OnInit {
       : this.svc.createScanRule(jobId, this.ruleForm);
     req$.subscribe({
       next: () => { this.closeDrawer(); this.reload(); },
-      error: () => this.saving.set(false),
+      error: (e) => {
+        // 400 FileContent validation (ExtractorTypeRequired / PredicateIncomplete /
+        // PredicateRequiresLocator) carries { error, message } — surface the message.
+        const body = e?.error;
+        this.scanRuleSaveError.set(
+          (body && typeof body === 'object' && body.message) ? body.message
+          : (typeof body === 'string' && body) ? body
+          : 'Save failed. Check the rule fields and try again.');
+        this.saving.set(false);
+      },
     });
   }
 
@@ -1895,14 +1995,21 @@ export class MonitoredJobsComponent implements OnInit {
 
   private blankJob(): UpsertJobRequest {
     return { name: '', displayName: null, jobTypeId: 0, scanTypeId: 1, logFolder: null,
-             searchPatterns: null, inputFolder: null, connectionName: null, logSourceUrl: null,
+             searchPatterns: null, inputFolder: null, includeSubfolders: false,
+             connectionName: null, logSourceUrl: null,
              pollingIntervalSeconds: 300, isActive: true, description: null };
   }
   private blankScanRule(scanTypeId = 2): UpsertScanRuleRequest & { isActive: boolean } {
-    const checkType = scanTypeId === 1 ? 'ErrorKeyword' : 'ValueEquals';
+    const checkType = scanTypeId === 1 ? 'ErrorKeyword'
+                    : scanTypeId === 4 ? 'FileContent'
+                    : 'ValueEquals';
     return { checkType, sourceTable: null, targetField: '', minValue: null,
              maxValue: null, expectedValue: null, watermarkColumn: null, sourceIdColumn: null,
              filePathColumn: null, inputPathPattern: null,
+             // FileContent: default to the only v1 extractor; null for other types.
+             extractorType: scanTypeId === 4 ? 'Xml' : null,
+             extractorLocator: null, identifierLocator: null,
+             extractorPredicateType: null, extractorPredicateValue: null,
              severity: 'Medium', description: null, isActive: true };
   }
   private blankClassRule(): UpsertJobClassificationRuleRequest {

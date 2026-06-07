@@ -58,6 +58,8 @@ export interface UpsertJobRequest {
   logSourceUrl: string | null; pollingIntervalSeconds: number; isActive: boolean; description: string | null;
   /** Optional base folder for relative InputPathPattern captures (FS jobs). */
   inputFolder: string | null;
+  /** FileContent scans: recurse into subdirectories of logFolder. */
+  includeSubfolders: boolean;
 }
 export interface UpsertScanRuleRequest {
   checkType: string; sourceTable: string | null; targetField: string;
@@ -68,6 +70,17 @@ export interface UpsertScanRuleRequest {
   filePathColumn:   string | null;
   /** FS scans only — regex (capture group #1 = input file path). */
   inputPathPattern: string | null;
+  // ── FileContent scans only ──
+  /** Extractor/format name, e.g. "Xml". Required for FileContent rules. */
+  extractorType:           string | null;
+  /** Address of the value to test (XPath for XML). Null = filename-only failure. */
+  extractorLocator:        string | null;
+  /** Address of the natural key for SourceId. Null = filename-without-ext. */
+  identifierLocator:       string | null;
+  /** Equals | NotEquals | Contains | NotContains. Null = no predicate. */
+  extractorPredicateType:  string | null;
+  /** Right-hand operand for the predicate. */
+  extractorPredicateValue: string | null;
 }
 export interface UpsertClassificationRuleRequest {
   jobTypeId: number; errorTypeId: number; pattern: string;

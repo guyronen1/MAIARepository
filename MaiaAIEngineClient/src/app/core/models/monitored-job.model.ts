@@ -15,6 +15,19 @@ export interface ScanCheckRule {
    *  from the matching error line. Differs from classification patterns:
    *  full regex applies here (capture groups required). */
   inputPathPattern: string | null;
+  /** FileContent scans: extractor/format name (e.g. "Xml"). Null on other types. */
+  extractorType:           string | null;
+  /** FileContent scans: address of the value to test (XPath for XML). Null =
+   *  filename match alone is the failure signal. */
+  extractorLocator:        string | null;
+  /** FileContent scans: address of the natural key for SourceId (XPath for XML).
+   *  Null = fall back to filename without extension. */
+  identifierLocator:       string | null;
+  /** FileContent scans: Equals | NotEquals | Contains | NotContains. Null = no
+   *  predicate (filename match fires unconditionally). */
+  extractorPredicateType:  string | null;
+  /** FileContent scans: right-hand operand for the predicate. */
+  extractorPredicateValue: string | null;
   severity:         string;
   description:      string | null;
 }
@@ -41,6 +54,8 @@ export interface MonitoredJob {
   /** Optional base folder for relative InputPathPattern captures.
    *  FS-scan jobs only; ignored when the regex captures an absolute path. */
   inputFolder:             string | null;
+  /** FileContent scans: recurse into subdirectories of logFolder. */
+  includeSubfolders:       boolean;
   connectionName:          string | null;
   logSourceUrl:            string | null;
   pollingIntervalSeconds:  number;
