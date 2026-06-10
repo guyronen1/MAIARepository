@@ -54,9 +54,9 @@ const COLORS = {
       margin-bottom: 6px;
       h3 { font-size: 13px; font-weight: 600; color: var(--text); margin: 0; }
     }
-    .chart-wrap { position: relative; height: 220px; }
+    .chart-wrap { position: relative; height: 200px; }
     .chart-skeleton {
-      height: 220px;
+      height: 200px;
       border-radius: var(--radius-sm);
       background: linear-gradient(90deg,
         var(--surface-2) 0%, var(--surface-3) 50%, var(--surface-2) 100%);
@@ -65,7 +65,7 @@ const COLORS = {
     }
     @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
     .chart-empty {
-      height: 220px;
+      height: 200px;
       display: flex; align-items: center; justify-content: center;
       color: var(--text-muted);
     }

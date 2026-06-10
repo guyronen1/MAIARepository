@@ -5,6 +5,7 @@ import { RouterLink } from '@angular/router';
 import { ConfigService, JobType, UpsertJobRequest } from '../../../core/services/config.service';
 import { MonitoredJob } from '../../../core/models';
 import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
+import { DrawerComponent } from '../../../shared/drawer/drawer.component';
 
 const SCAN_TYPES = [
   { id: 1, name: 'FileSystem' }, { id: 2, name: 'Database' },
@@ -22,7 +23,7 @@ const SCAN_TYPES = [
 @Component({
   selector: 'app-monitored-jobs',
   standalone: true,
-  imports: [FormsModule, RouterLink, PluralizePipe],
+  imports: [FormsModule, RouterLink, PluralizePipe, DrawerComponent],
   template: `
     <div class="page">
       <div class="page-header">
@@ -69,15 +70,15 @@ const SCAN_TYPES = [
       }
     </div>
 
-    <!-- ── Drawer: Add / Edit Job ─────────────────────────────────────────── -->
-    @if (drawerOpen()) {
-      <div class="drawer-overlay" (click)="closeDrawer()"></div>
-      <div class="drawer">
-        <div class="drawer-header">
-          <h3>{{ editingJob()?.monitoredJobId ? 'Edit Job' : 'New Monitored Job' }}</h3>
-          <button class="btn btn-ghost btn-sm btn-icon" (click)="closeDrawer()">✕</button>
-        </div>
-        <div class="drawer-body">
+    <!-- ── Drawer: Add / Edit Job (shared DrawerComponent — matches the config
+             screen's drawers in width/height/behavior) ───────────────────── -->
+    <app-drawer [open]="drawerOpen()"
+                [ariaLabel]="editingJob()?.monitoredJobId ? 'Edit job' : 'New monitored job'"
+                (close)="closeDrawer()">
+      <ng-container drawer-title>
+        <span class="text-muted text-sm">{{ editingJob()?.monitoredJobId ? 'Edit Job' : 'New Monitored Job' }}</span>
+      </ng-container>
+      @if (drawerOpen()) {
           <div class="form-grid">
             <div class="form-group">
               <label>Name *</label>
@@ -166,16 +167,15 @@ const SCAN_TYPES = [
               <textarea [(ngModel)]="jobForm.description" rows="2" placeholder="Optional notes"></textarea>
             </div>
           </div>
-        </div>
-        <div class="drawer-footer">
-          <button class="btn btn-ghost" (click)="closeDrawer()">Cancel</button>
-          <button class="btn btn-primary" (click)="saveJob()" [disabled]="saving()">
-            @if (saving()) { <span class="spinner"></span> }
-            {{ editingJob()?.monitoredJobId ? 'Save Changes' : 'Create Job' }}
-          </button>
-        </div>
-      </div>
-    }
+          <div class="drawer-foot">
+            <button class="btn btn-ghost" (click)="closeDrawer()">Cancel</button>
+            <button class="btn btn-primary" (click)="saveJob()" [disabled]="saving()">
+              @if (saving()) { <span class="spinner"></span> }
+              {{ editingJob()?.monitoredJobId ? 'Save Changes' : 'Create Job' }}
+            </button>
+          </div>
+      }
+    </app-drawer>
   `,
   styles: [`
     h1 { font-size: 22px; font-weight: 700; }
@@ -199,26 +199,10 @@ const SCAN_TYPES = [
     }
     .job-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 
-    /* Drawer */
-    .drawer-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.25); z-index: 200; }
-    .drawer {
-      position: fixed; top: 0; right: 0; height: 100vh; width: 500px;
-      background: var(--surface); border-left: 1px solid var(--border);
-      box-shadow: -4px 0 24px rgba(0,0,0,0.12); z-index: 201;
-      display: flex; flex-direction: column; animation: slideIn 0.2s ease;
-    }
-    @keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
-    .drawer-header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 16px 20px; border-bottom: 1px solid var(--border);
-      h3 { font-size: 15px; font-weight: 600; }
-    }
-    .drawer-body   { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
-    .drawer-footer {
-      display: flex; justify-content: flex-end; gap: 8px;
-      padding: 14px 20px; border-top: 1px solid var(--border);
-    }
-    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; .span2 { grid-column: span 2; } }
+    /* Drawer form (shell chrome comes from the shared DrawerComponent; the
+       form here mirrors the config screen's drawers — same 560px form column,
+       same footer — so every job/source/rule drawer looks identical). */
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; max-width: 560px; .span2 { grid-column: span 2; } }
     .form-group { display: flex; flex-direction: column; gap: 4px; }
     .form-group label { font-size: 12px; font-weight: 600; color: var(--text); }
     .form-group input:not([type="checkbox"]), .form-group select, .form-group textarea {
@@ -226,6 +210,7 @@ const SCAN_TYPES = [
     }
     .toggle-label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
     .field-hint   { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+    .drawer-foot  { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
   `]
 })
 export class MonitoredJobsComponent implements OnInit {

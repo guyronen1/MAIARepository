@@ -78,11 +78,9 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                   <span class="badge badge-info">{{ s.scanTypeName }}</span>
                   <span class="source-config text-muted text-sm">{{ sourceConfig(s) }}</span>
                   @if (!s.isActive) { <span class="badge badge-failed">Inactive</span> }
-                  @if (s.scanTypeName !== 'ApiEndpoint') {
-                    <span class="rule-count">{{ s.scanCheckRules.length }} {{ s.scanCheckRules.length === 1 ? 'rule' : 'rules' }}</span>
-                  }
                   <span class="source-tools">
                     @if (s.scanTypeName !== 'ApiEndpoint') {
+                      <span class="rule-count">{{ s.scanCheckRules.length }} {{ s.scanCheckRules.length === 1 ? 'rule' : 'rules' }}</span>
                       <button class="btn btn-ghost btn-sm" (click)="openRuleDrawer(s, null)">+ Add Rule</button>
                     }
                     <span class="row-actions">
@@ -99,7 +97,7 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                 } @else {
                   <table class="data-table compact rule-table">
                     <thead>
-                      <tr><th>Check</th><th>Target</th><th>Detail</th><th>Severity</th><th></th></tr>
+                      <tr><th style="width:16%">Check</th><th style="width:28%">Target</th><th style="width:32%">Detail</th><th style="width:12%">Severity</th><th style="width:12%"></th></tr>
                     </thead>
                     <tbody>
                       @for (r of s.scanCheckRules; track r.checkRuleId) {
@@ -138,7 +136,7 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
               @if (j.rules.length > 0) {
                 <div class="subsection-label">Linked to this job</div>
                 <table class="data-table compact">
-                  <thead><tr><th>Pattern</th><th>Error Type</th><th>Conf.</th><th>Pri.</th><th></th></tr></thead>
+                  <thead><tr><th style="width:38%">Pattern</th><th style="width:23%">Error Type</th><th style="width:11%">Conf.</th><th style="width:10%">Pri.</th><th style="width:18%"></th></tr></thead>
                   <tbody>
                     @for (r of j.rules; track r.ruleId) {
                       <tr>
@@ -158,7 +156,7 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
               @if (jobTypeGlobalRules().length > 0) {
                 <div class="subsection-label">{{ j.jobTypeName }} defaults <span class="text-muted">(apply to all {{ j.jobTypeName }} jobs)</span></div>
                 <table class="data-table compact">
-                  <thead><tr><th>Pattern</th><th>Error Type</th><th>Conf.</th><th>Pri.</th></tr></thead>
+                  <thead><tr><th style="width:48%">Pattern</th><th style="width:26%">Error Type</th><th style="width:13%">Conf.</th><th style="width:13%">Pri.</th></tr></thead>
                   <tbody>
                     @for (r of jobTypeGlobalRules(); track r.ruleId) {
                       <tr class="global-row">
@@ -187,7 +185,7 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                 <button class="btn btn-primary btn-sm" (click)="openFixRuleDrawer(null)">+ New Fix Option</button></div>
             } @else {
               <table class="data-table compact">
-                <thead><tr><th>Error Type</th><th>Action</th><th>Scope</th><th>Auto-heal</th><th>Status</th><th></th></tr></thead>
+                <thead><tr><th style="width:20%">Error Type</th><th style="width:22%">Action</th><th style="width:20%">Scope</th><th style="width:12%">Auto-heal</th><th style="width:14%">Status</th><th style="width:12%"></th></tr></thead>
                 <tbody>
                   @for (p of fixPolicies(); track p.ruleId) {
                     <tr [class.shadowed]="isShadowedDefault(p)">
@@ -704,6 +702,9 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
     </div>
   `,
   styles: [`
+    /* Config screen is a focused, form-like surface — cap its width so content
+       reads as a tidy column instead of stretching across an ultra-wide page. */
+    .page { max-width: 1080px; }
     h1 { font-size: 22px; font-weight: 700; }
     .title-row { display: flex; align-items: flex-start; gap: 14px; }
     .title-main { flex: 1; min-width: 0; }
@@ -713,9 +714,13 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
     .count { display: inline-block; min-width: 20px; padding: 0 6px; margin-left: 6px; border-radius: 10px; background: var(--surface-3, #e2e8f0); color: var(--text-muted); font-size: 11px; text-align: center; }
     .source-block { padding: 14px 16px; border-bottom: 1px solid var(--border); }
     .source-block:last-child { border-bottom: none; }
-    .source-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-    .scan-icon { font-size: 16px; }
-    .source-config { margin-left: 4px; }
+    /* Source header: identity (icon · name · type) flush-left, the config path
+       takes the middle and truncates, count + actions flush-right. Left and
+       right edges line up across every source; only the middle path varies. */
+    .source-head { display: flex; align-items: center; gap: 8px; }
+    .scan-icon { font-size: 16px; flex-shrink: 0; }
+    .source-head strong { flex-shrink: 0; }
+    .source-config { margin-left: 4px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     /* Inline rule-count chip on the source header — muted meta styling matching
        the page's other meta chips. */
     .rule-count { font-size: 11px; color: var(--text-muted); background: var(--surface-2);
@@ -724,8 +729,11 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
        hover-reveal Edit/Delete. */
     .source-tools { margin-left: auto; display: flex; align-items: center; gap: 6px; }
     .source-note { margin: 6px 0 0 24px; }
-    .data-table.compact { margin-top: 6px; }
-    .data-table.compact th, .data-table.compact td { padding: 6px 10px; }
+    /* Fixed layout + width:100% → tables are the same width on every job and
+       columns don't shift with the data (long XPaths/patterns wrap instead of
+       widening their column). Per-table column widths set on the <th>s below. */
+    .data-table.compact { margin-top: 6px; width: 100%; table-layout: fixed; }
+    .data-table.compact th, .data-table.compact td { padding: 6px 10px; vertical-align: top; word-break: break-word; }
     /* Change 3 — breathing room on scan-rule rows only (class/fix tables keep
        their density). */
     .rule-table td { padding-top: 10px; padding-bottom: 10px; }

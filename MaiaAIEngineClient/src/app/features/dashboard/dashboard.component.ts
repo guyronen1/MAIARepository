@@ -5,7 +5,7 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { DashboardStats } from '../../core/services/failures.service';
 import { ScanService } from '../../core/services/scan.service';
 import { PolledData, WorkerStatusService } from '../../core/services/worker-status.service';
-import { JobFailure, JobLastScanRow, MonitoredJob, ScanResult, WorkerStatus } from '../../core/models';
+import { JobFailure, JobLastScanRow, MonitoredJob, ScanResult, SourceLastScanRow, WorkerStatus } from '../../core/models';
 import { ErrorsOverTimeChartComponent } from './errors-over-time-chart.component';
 import { FailuresByJobChartComponent } from './failures-by-job-chart.component';
 import { ResolutionMixChartComponent } from './resolution-mix-chart.component';
@@ -114,18 +114,17 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
         </button>
       </div>
 
-      <!-- Analytics row 1: Errors Over Time + Failures by Job side-by-side at
-           ~60/40. The range toggle lives inside the Errors Over Time card but
-           drives both charts via the chartRange signal below. Resolution Mix
-           on row 2 has its own fixed 7-day window (different semantic). -->
-      <div class="analytics-row-1">
+      <!-- Analytics: all three charts in one row. Errors Over Time is widest
+           (carries the range toggle + multi-series legend) and its toggle
+           drives Failures by Job too via chartRange; Resolution Mix keeps its
+           own fixed 7-day window. Collapses to a single column on narrow
+           viewports. -->
+      <div class="analytics-row">
         <app-errors-over-time-chart
             [range]="chartRange()"
             (rangeChange)="chartRange.set($event)"></app-errors-over-time-chart>
         <app-failures-by-job-chart
             [range]="chartRange()"></app-failures-by-job-chart>
-      </div>
-      <div class="analytics-row-2">
         <app-resolution-mix-chart></app-resolution-mix-chart>
       </div>
 
@@ -188,7 +187,7 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
                       }
                     </span>
                     <span class="row-job-name" dir="auto">{{ j.displayName ?? j.name }}</span>
-                    <span class="row-meta">{{ j.scanTypeName }} · {{ j.jobTypeName }}</span>
+                    <span class="row-meta" [title]="scanTypeTitle(j.monitoredJobId)">{{ scanTypeLabel(j.monitoredJobId, j.scanTypeName) }} · {{ j.jobTypeName }}</span>
 
                     @if (lastScanFor(j.monitoredJobId); as ls) {
                       <span class="row-badge badge" [class]="lastScanBadgeClass(j.monitoredJobId)">
@@ -218,32 +217,42 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
                             (click)="triggerScan(j); $event.stopPropagation()">▶</button>
                   </div>
 
-                  <!-- Expanded detail panel — animated max-height + opacity -->
+                  <!-- Expanded detail panel — per-source scan breakdown (Tier 2.5) -->
                   <div class="job-row-detail">
-                    @if (lastScanFor(j.monitoredJobId); as ls) {
-                      <dl class="detail-grid">
-                        <dt>Last outcome</dt>
-                        <dd>
-                          <span class="badge" [class]="lastScanBadgeClass(j.monitoredJobId)">
-                            {{ ls.lastScan.outcome }}
-                          </span>
-                        </dd>
-                        <dt>Completed</dt>
-                        <dd>{{ ls.lastScan.completedAt | date:'MM/dd HH:mm:ss' }} ({{ relativeAge(ls.lastScan.completedAt) }})</dd>
-                        <dt>Duration</dt>
-                        <dd>{{ ls.lastScan.durationMs }} ms</dd>
-                        <dt>Failures detected</dt>
-                        <dd [class.text-warn]="ls.lastScan.failuresDetected > 0">{{ ls.lastScan.failuresDetected }}</dd>
-                        <dt>Classifications</dt>
-                        <dd>{{ ls.lastScan.classifications }}</dd>
-                        <dt>Recommendations</dt>
-                        <dd>{{ ls.lastScan.recommendations }}</dd>
-                      </dl>
-                    } @else {
-                      <p class="text-muted text-sm">This job has not been scanned yet.</p>
-                    }
-                    @if (j.description) {
-                      <p class="detail-desc text-sm" dir="auto">{{ j.description }}</p>
+                    @if (sourcesFor(j.monitoredJobId); as sources) {
+                      @if (sources.length > 0) {
+                        <div class="source-scans" [attr.aria-label]="'Scan sources: ' + sources.length">
+                          @for (s of sources; track s.scanSourceId) {
+                            <div class="source-scan-row">
+                              <span class="src-name" dir="auto">{{ s.name }}</span>
+                              <span class="badge badge-info">{{ s.scanTypeName }}</span>
+                              @if (s.lastScan; as sl) {
+                                <span class="badge" [class]="sl.outcome === 'Success' ? 'badge-resolved' : 'badge-failed'">{{ sl.outcome }}</span>
+                                <span class="text-muted text-sm">{{ sl.durationMs }}ms · {{ relativeAge(sl.completedAt) }}</span>
+                                <span class="src-counts text-sm">
+                                  @if (sl.failuresDetected > 0) { <span class="count-warn">{{ sl.failuresDetected }} failures</span> }
+                                  @if (sl.classifications > 0) { · {{ sl.classifications }} classified }
+                                  @if (sl.recommendations > 0) { · {{ sl.recommendations }} recs }
+                                </span>
+                              } @else {
+                                <span class="badge badge-muted">No scans yet</span>
+                              }
+                            </div>
+                          }
+                        </div>
+                      } @else if (lastScanFor(j.monitoredJobId); as ls) {
+                        <!-- Fallback for jobs with no active sources (pre-backfill / all inactive). -->
+                        <dl class="detail-grid">
+                          <dt>Last outcome</dt>
+                          <dd><span class="badge" [class]="lastScanBadgeClass(j.monitoredJobId)">{{ ls.lastScan.outcome }}</span></dd>
+                          <dt>Completed</dt>
+                          <dd>{{ ls.lastScan.completedAt | date:'MM/dd HH:mm:ss' }} ({{ relativeAge(ls.lastScan.completedAt) }})</dd>
+                          <dt>Duration</dt>
+                          <dd>{{ ls.lastScan.durationMs }} ms</dd>
+                        </dl>
+                      } @else {
+                        <p class="text-muted text-sm">This job has not been scanned yet.</p>
+                      }
                     }
                   </div>
                 </div>
@@ -359,11 +368,13 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
        column's Chart.js canvas can shrink with the grid instead of forcing
        its parent wider via intrinsic content size (which was causing the
        visual to look 55/45 instead of the intended 60/40). */
-    .analytics-row-1 {
-      display: grid; grid-template-columns: 3fr 2fr; gap: 16px;
+    /* All three charts in one row. Errors Over Time widest (toggle + legend),
+       the bar + pie narrower. min-width:0 lets each Chart.js canvas shrink with
+       the grid instead of forcing the column wider. */
+    .analytics-row {
+      display: grid; grid-template-columns: 1.7fr 1fr 1fr; gap: 16px;
       > * { min-width: 0; }
     }
-    .analytics-row-2 { display: block; }
 
     .job-list { display: flex; flex-direction: column; gap: 1px; }
 
@@ -407,7 +418,7 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
       transition: max-height 250ms ease, opacity 250ms ease, padding 250ms ease;
     }
     .job-row-wrap.expanded .job-row-detail {
-      max-height: 240px; opacity: 1; padding: 4px 10px 12px 32px;
+      max-height: 600px; opacity: 1; padding: 4px 10px 12px 32px; overflow-y: auto;
     }
     .detail-grid {
       display: grid; grid-template-columns: 140px 1fr; row-gap: 4px; column-gap: 12px;
@@ -415,7 +426,12 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
       dt { color: var(--text-muted); font-weight: 500; }
       dd { color: var(--text); }
     }
-    .detail-desc { margin-top: 8px; color: var(--text-muted); font-style: italic; }
+    /* Tier 2.5 per-source scan breakdown in the expand panel. */
+    .source-scan-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      padding: 5px 0; border-bottom: 1px solid var(--border-light); }
+    .source-scan-row:last-child { border-bottom: none; }
+    .src-name { font-weight: 600; font-size: 12px; }
+    .src-counts { color: var(--text-muted); }
     .text-warn { color: var(--warning); font-weight: 600; }
     .spinner-mini {
       width: 12px; height: 12px;
@@ -481,9 +497,13 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
        breakpoint. Keeps every panel readable and edge-to-edge on a laptop;
        wide monitors keep the multi-column layout. */
     @media (max-width: 1400px) {
-      .kpi-grid        { grid-template-columns: repeat(3, 1fr); }
-      .analytics-row-1 { grid-template-columns: 1fr; }
-      .row-2col        { grid-template-columns: 1fr; }
+      .kpi-grid { grid-template-columns: repeat(3, 1fr); }
+      .row-2col { grid-template-columns: 1fr; }
+    }
+    /* Charts shrink more gracefully than the info panels, so keep all three in
+       one row down to ~1024px; stack only below that. */
+    @media (max-width: 1024px) {
+      .analytics-row { grid-template-columns: 1fr; }
     }
     @media (max-width: 900px) {
       .kpi-grid { grid-template-columns: repeat(2,1fr); }
@@ -666,6 +686,31 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return ls ? { lastScan: ls } : null;
   }
 
+  /** Per-source last-scan rows for a job (Tier 2.5 drill-down). Empty when the
+   *  worker-status payload hasn't arrived or the job has no active sources. */
+  sourcesFor(monitoredJobId: number): SourceLastScanRow[] {
+    return this.workerStatus()?.jobs.find(j => j.monitoredJobId === monitoredJobId)?.sources ?? [];
+  }
+
+  /** Compact-row scan-type label derived from the job's active sources (Tier 2.5):
+   *  one type → that type; several sources of one type → "FileSystem · N sources";
+   *  mixed types → "Mixed · N sources". Falls back to the job's legacy scanType
+   *  string until the first worker-status poll arrives (sources empty). */
+  scanTypeLabel(monitoredJobId: number, fallback: string): string {
+    const sources = this.sourcesFor(monitoredJobId);
+    if (sources.length === 0) return fallback;
+    const distinct = [...new Set(sources.map(s => s.scanTypeName))];
+    if (distinct.length === 1)
+      return sources.length === 1 ? distinct[0] : `${distinct[0]} · ${sources.length} sources`;
+    return `Mixed · ${sources.length} sources`;
+  }
+
+  /** Tooltip for the scan-type label — lists every source with its type so a
+   *  rolled-up "Mixed · 3 sources" stays inspectable on hover. */
+  scanTypeTitle(monitoredJobId: number): string {
+    return this.sourcesFor(monitoredJobId).map(s => `${s.name} (${s.scanTypeName})`).join('\n');
+  }
+
   relativeAge(iso: string): string {
     const sec = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
     if (sec < 5)    return 'just now';
@@ -710,8 +755,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return !!ls && (ls.failuresDetected > 0 || ls.classifications > 0 || ls.recommendations > 0);
   }
 
-  rulesLabel(n: number): string {
-    return n === 1 ? '1 rule' : `${n} rules`;
+  rulesLabel(n: number | null | undefined): string {
+    const c = n ?? 0;
+    return c === 1 ? '1 rule' : `${c} rules`;
   }
 
   // ── Expand / collapse per-row detail ─────────────────────────────────
