@@ -32,6 +32,24 @@ export interface ScanCheckRule {
   description:      string | null;
 }
 
+/** Tier 2.5: a typed observation point within a job (its own ScanType + config),
+ *  carrying its own scan rules. Active sources only on the wire. */
+export interface ScanSource {
+  scanSourceId:      number;
+  monitoredJobId:    number;
+  name:              string;
+  scanTypeId:        number;
+  scanTypeName:      string;
+  logFolder:         string | null;
+  searchPatterns:    string | null;
+  inputFolder:       string | null;
+  includeSubfolders: boolean;
+  connectionName:    string | null;
+  logSourceUrl:      string | null;
+  isActive:          boolean;
+  scanCheckRules:    ScanCheckRule[];
+}
+
 export interface RuleOverride {
   ruleId:        number;
   pattern:       string;
@@ -64,6 +82,8 @@ export interface MonitoredJob {
   createdAt:               string;
   scanCheckRules:          ScanCheckRule[];
   rules:                   RuleOverride[];
+  /** Tier 2.5: active scan sources, each nesting its own rules. */
+  sources:                 ScanSource[];
   /** Runtime lease snapshot — null when the job has never been claimed. */
   lease:                   MonitoredJobLease | null;
 }

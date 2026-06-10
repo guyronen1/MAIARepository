@@ -61,6 +61,13 @@ export interface UpsertJobRequest {
   /** FileContent scans: recurse into subdirectories of logFolder. */
   includeSubfolders: boolean;
 }
+export interface UpsertScanSourceRequest {
+  name: string; scanTypeId: number;
+  logFolder: string | null; searchPatterns: string | null; inputFolder: string | null;
+  includeSubfolders: boolean;
+  connectionName: string | null; logSourceUrl: string | null;
+  isActive: boolean;
+}
 export interface UpsertScanRuleRequest {
   checkType: string; sourceTable: string | null; targetField: string;
   minValue: number | null; maxValue: number | null; expectedValue: string | null;
@@ -153,6 +160,11 @@ export class ConfigService {
   getAllJobs(): Observable<MonitoredJob[]> {
     return this.http.get<MonitoredJob[]>(`${this.base}/monitored-jobs`);
   }
+  /** Tier 2.5: full operational picture of one job (sources + rules + class + fix)
+   *  for the dedicated config screen. */
+  getJob(id: number): Observable<MonitoredJob> {
+    return this.http.get<MonitoredJob>(`${this.base}/monitored-jobs/${id}`);
+  }
   createJob(req: UpsertJobRequest): Observable<{ monitoredJobId: number }> {
     return this.http.post<{ monitoredJobId: number }>(`${this.base}/monitored-jobs`, this.withActor(req));
   }
@@ -161,6 +173,22 @@ export class ConfigService {
   }
   deleteJob(id: number): Observable<void> {
     return this.http.delete<void>(`${this.base}/monitored-jobs/${id}`, { params: this.actorParams() });
+  }
+
+  // ── Scan Sources (Tier 2.5) ────────────────────────────────────────────────
+  createScanSource(jobId: number, req: UpsertScanSourceRequest): Observable<{ scanSourceId: number }> {
+    return this.http.post<{ scanSourceId: number }>(`${this.base}/monitored-jobs/${jobId}/scan-sources`, this.withActor(req));
+  }
+  updateScanSource(id: number, req: UpsertScanSourceRequest): Observable<void> {
+    return this.http.put<void>(`${this.base}/scan-sources/${id}`, this.withActor(req));
+  }
+  deleteScanSource(id: number): Observable<void> {
+    return this.http.delete<void>(`${this.base}/scan-sources/${id}`, { params: this.actorParams() });
+  }
+  /** Source-scoped rule create — the canonical add-rule path now that the worker
+   *  scans per source. */
+  createScanRuleForSource(sourceId: number, req: UpsertScanRuleRequest): Observable<{ checkRuleId: number }> {
+    return this.http.post<{ checkRuleId: number }>(`${this.base}/scan-sources/${sourceId}/scan-rules`, this.withActor(req));
   }
 
   // ── Scan Check Rules ───────────────────────────────────────────────────────

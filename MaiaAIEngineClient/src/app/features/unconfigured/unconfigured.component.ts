@@ -304,10 +304,10 @@ export class UnconfiguredComponent implements OnInit {
     });
   }
 
-  // ── Case B: deep-link into the job's Fix Options drawer, pre-filled ───────
+  // ── Case B: deep-link into the job's config screen, fix drawer pre-filled ──
   configureFix(g: PolicyGap) {
-    this.router.navigate(['/config/monitored-jobs'], {
-      queryParams: { fixForJob: g.monitoredJobId, errorTypeId: g.errorTypeId },
+    this.router.navigate(['/config/monitored-jobs', g.monitoredJobId], {
+      queryParams: { errorTypeId: g.errorTypeId },
     });
   }
 
