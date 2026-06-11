@@ -640,7 +640,10 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                   <input [ngModel]="fixRuleForm.actionPayload" (ngModelChange)="fixRuleForm.actionPayload = $event; syncFixRuleSignal()" placeholder="dbo.sp_RetryJob  or  ConnName|dbo.sp_RetryJob" />
                 } @else if (fixRuleForm.actionType === 'SqlScript') {
                   <textarea [ngModel]="fixRuleForm.actionPayload" (ngModelChange)="fixRuleForm.actionPayload = $event; syncFixRuleSignal()" rows="4" placeholder="UPDATE dbo.Files SET FileStatusCode = 0 WHERE Id = '{sourceId}'"></textarea>
-                  <span class="field-hint">Runs against the job's configured connection. Key the source row on <code>'{{'{'}}sourceId{{'}'}}'</code> (quoted) — <em>not</em> <code>{{'{'}}failureId{{'}'}}</code> (MAIA's internal id).</span>
+                  <span class="field-hint">Runs against the job's configured connection. Key the source row on <code>'{{'{'}}sourceId{{'}'}}'</code> (quoted) — <em>not</em> <code>{{'{'}}failureId{{'}'}}</code> (MAIA's internal id). A fix must be scoped to the failing row or it won't save.</span>
+                  @if (sqlFixNeedsScopeShortcut(fixRuleForm.actionPayload)) {
+                    <button type="button" class="link-btn scope-shortcut" (click)="scopeFixPayloadToSourceId()">+ scope to the failing row — add <code>{{ scopeClauseFor(fixRuleForm.actionPayload) }} {{ fixScopeColumn }} = '{{'{'}}sourceId{{'}'}}'</code></button>
+                  }
                 } @else if (fixRuleForm.actionType === 'CopyFile') {
                   <input [ngModel]="fixRuleForm.actionPayload" (ngModelChange)="fixRuleForm.actionPayload = $event; syncFixRuleSignal()" placeholder="{sourceFilePath}|{inputFolder}\reprocess\{sourceFileName}" />
                   <span class="field-hint">Format <code>SOURCE|DEST</code>. Atomic copy, overwrite by default. <code>{{'{'}}sourceFilePath{{'}'}}</code> needs Input File Extraction (FS) or File Path Column (DB) on a scan rule.</span>
@@ -675,6 +678,9 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                           <button type="button" class="btn btn-ghost btn-icon" title="Remove step" (click)="removeStep(i)">✕</button>
                         </div>
                       </div>
+                      @if (step.actionType === 'SqlScript' && sqlFixNeedsScopeShortcut(step.actionPayload)) {
+                        <button type="button" class="link-btn step-scope" (click)="scopeStepToSourceId(step)">+ scope to the failing row — add <code>{{ scopeClauseFor(step.actionPayload) }} {{ fixScopeColumn }} = '{{'{'}}sourceId{{'}'}}'</code></button>
+                      }
                       <input [(ngModel)]="step.description" class="step-desc" placeholder="Description (optional)" />
                     </div>
                   }
@@ -783,6 +789,8 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
     .toggle-label { flex-direction: row; align-items: center; gap: 8px; cursor: pointer; }
     .toggle-label input[type="checkbox"] { width: 16px; height: 16px; margin: 0; flex: none; }
     .sql-area { font-family: ui-monospace, Menlo, Consolas, monospace; resize: vertical; }
+    .scope-shortcut { align-self: flex-start; margin-top: 6px; font-size: 12px; }
+    .step-scope { margin: 4px 0 0 32px; font-size: 11px; }
     .field-hint { font-size: 11px; color: var(--text-dim); }
     .drawer-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
     .edit-error { margin-top: 10px; padding: 8px 10px; border-radius: var(--radius-sm); background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; font-size: 12px; }
@@ -1379,5 +1387,46 @@ export class JobConfigComponent implements OnInit {
   private blankFixRule(): UpsertFixPolicyRuleRequest {
     return { jobTypeId: 0, errorTypeId: 0, monitoredJobId: null, actionToApply: '', fixCategory: 'Retry',
              actionType: 'Manual', actionPayload: null, isAutoHealEligible: false, enabled: true, steps: [] };
+  }
+
+  // ── SqlScript "scope to failing row" shortcut ─────────────────────────────
+  // The server-side write-guard rejects a SqlScript fix unless it references
+  // {sourceId} in its WHERE. This shortcut appends a starter scope clause so the
+  // operator doesn't have to hand-type it. Shown only when missing (and not an
+  // EXEC — those scope via a parameter). Operator edits the key column name.
+  sqlFixNeedsScopeShortcut(payload: string | null | undefined): boolean {
+    const q = (payload ?? '').trim();
+    if (!q) return false;
+    if (/^\s*EXEC\b/i.test(q)) return false;   // EXEC: add {sourceId} as a parameter by hand
+    return !/\{sourceId\}/i.test(q);            // already scoped → hide
+  }
+
+  /** WHERE when the payload has none yet, else AND — so the snippet appends cleanly. */
+  scopeClauseFor(payload: string | null | undefined): string {
+    return /\bWHERE\b/i.test(payload ?? '') ? 'AND' : 'WHERE';
+  }
+
+  /** Placeholder key column for the scope clause. Deliberately NOT derived from
+   *  the scan rule's SourceIdColumn — a fix may update a DIFFERENT table where
+   *  {sourceId} is an FK under another name, so any guess would be misleading.
+   *  An obvious bracketed placeholder forces the operator to fill in the real
+   *  target column; the guard only requires {sourceId} in the WHERE, not a
+   *  specific column, so this still saves and fails safe (ManualRequired) if
+   *  left unedited. */
+  readonly fixScopeColumn = '[KeyColumn]';
+
+  private appendSourceIdScope(payload: string | null | undefined): string {
+    const base = (payload ?? '').replace(/;\s*$/, '').trimEnd();   // drop a trailing ';'
+    return `${base} ${this.scopeClauseFor(base)} ${this.fixScopeColumn} = '{sourceId}'`;
+  }
+
+  scopeFixPayloadToSourceId() {
+    this.fixRuleForm.actionPayload = this.appendSourceIdScope(this.fixRuleForm.actionPayload);
+    this.syncFixRuleSignal();
+  }
+
+  scopeStepToSourceId(step: { actionPayload: string }) {
+    step.actionPayload = this.appendSourceIdScope(step.actionPayload);
+    this.syncFixRuleSignal();
   }
 }
