@@ -395,6 +395,9 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                     single-table rules can't. Runs under the source's connection login — use a least-privilege read-only login.
                   </span>
                 </div>
+                @if (sqlQueryNeedsWhereWarning()) {
+                  <div class="soft-warn span2">⚠️ This query has no <code>WHERE</code> clause — it will flag <strong>every</strong> returned row as a failure (up to 500). Add a <code>WHERE</code> to target specific problem rows, or confirm this is intentional (e.g., a pre-filtered view or aggregation).</div>
+                }
                 <div class="form-group">
                   <label>Result Column *</label>
                   <input [(ngModel)]="ruleForm.targetField" placeholder="IsStuck" />
@@ -1059,6 +1062,17 @@ export class JobConfigComponent implements OnInit {
   }
 
   // ── Scan Source CRUD ──────────────────────────────────────────────────────
+  /** Soft, non-blocking hint for a SqlQuery rule whose query has no row filter:
+   *  no WHERE, no HAVING, and not an EXEC (stored procs filter internally). Such a
+   *  query flags every returned row as a failure — bounded (500-row cap) but
+   *  usually a mistake. Read path, so warn-not-block; no server-side check. */
+  sqlQueryNeedsWhereWarning(): boolean {
+    const q = this.ruleForm.sourceTable ?? '';
+    if (!q.trim()) return false;              // empty → handled by required validation
+    if (/^\s*EXEC\b/i.test(q)) return false;  // stored proc — filtering lives inside it
+    return !/\bWHERE\b/i.test(q) && !/\bHAVING\b/i.test(q);
+  }
+
   isFileBased(scanTypeId: number): boolean { return scanTypeId === 1 || scanTypeId === 4; }
   scanTypeName(id: number): string { return this.scanTypes.find(t => t.id === id)?.name ?? String(id); }
 
