@@ -14,7 +14,7 @@ const SCAN_TYPES = [
   { id: 1, name: 'FileSystem' }, { id: 2, name: 'Database' },
   { id: 3, name: 'ApiEndpoint' }, { id: 4, name: 'FileContent' },
 ];
-const DB_CHECK_TYPES  = ['ColumnRange', 'ValueEquals'];
+const DB_CHECK_TYPES  = ['ColumnRange', 'ValueEquals', 'SqlQuery'];
 const FILE_FORMATS    = ['Xml'];
 const PREDICATE_TYPES = ['Equals', 'NotEquals', 'Contains', 'NotContains'];
 const SEVERITIES      = ['Low', 'Medium', 'High', 'Critical'];
@@ -383,43 +383,67 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                   @for (ct of dbCheckTypes; track ct) { <option [ngValue]="ct">{{ ct }}</option> }
                 </select>
               </div>
-              <div class="form-group">
-                <label>Source Table *</label>
-                <input [(ngModel)]="ruleForm.sourceTable" placeholder="dbo.Files" />
-              </div>
-              <div class="form-group">
-                <label>Target Field *</label>
-                <input [(ngModel)]="ruleForm.targetField" placeholder="FileStatusCode" />
-              </div>
-              @if (ruleForm.checkType === 'ValueEquals') {
+              @if (ruleForm.checkType === 'SqlQuery') {
                 <div class="form-group span2">
-                  <label>Expected Value (triggers failure)</label>
-                  <input [(ngModel)]="ruleForm.expectedValue" placeholder="5" />
+                  <label>Source Query *</label>
+                  <textarea [(ngModel)]="ruleForm.sourceTable" rows="4" class="sql-area"
+                            placeholder="SELECT OrderId, IsStuck FROM Orders o JOIN Shipments s ON … WHERE …&#10;— or —&#10;EXEC sp_CheckStuckOrders @threshold=60"></textarea>
+                  <span class="field-hint">
+                    Full SQL <code>SELECT</code> or a stored-procedure call (<code>EXEC sp_Name @p=…</code>), run as-is.
+                    <strong>Every row the query returns becomes a failure</strong> — put the condition in your
+                    <code>WHERE</code>/<code>JOIN</code> (there's no separate predicate). Handles cross-table checks the
+                    single-table rules can't. Runs under the source's connection login — use a least-privilege read-only login.
+                  </span>
+                </div>
+                <div class="form-group">
+                  <label>Result Column *</label>
+                  <input [(ngModel)]="ruleForm.targetField" placeholder="IsStuck" />
+                  <span class="field-hint">Result-set column whose value is shown on each failure.</span>
+                </div>
+                <div class="form-group">
+                  <label>Source ID Column <span class="text-muted">(row identity)</span></label>
+                  <input [(ngModel)]="ruleForm.sourceIdColumn" placeholder="OrderId" />
+                  <span class="field-hint">Result-set column used as the failure's <code>{{'{'}}sourceId{{'}'}}</code>. Blank → row number.</span>
+                </div>
+              } @else {
+                <div class="form-group">
+                  <label>Source Table *</label>
+                  <input [(ngModel)]="ruleForm.sourceTable" placeholder="dbo.Files" />
+                </div>
+                <div class="form-group">
+                  <label>Target Field *</label>
+                  <input [(ngModel)]="ruleForm.targetField" placeholder="FileStatusCode" />
+                </div>
+                @if (ruleForm.checkType === 'ValueEquals') {
+                  <div class="form-group span2">
+                    <label>Expected Value (triggers failure)</label>
+                    <input [(ngModel)]="ruleForm.expectedValue" placeholder="5" />
+                  </div>
+                }
+                @if (ruleForm.checkType === 'ColumnRange') {
+                  <div class="form-group">
+                    <label>Min Value</label>
+                    <input type="number" [(ngModel)]="ruleForm.minValue" placeholder="blank = −∞" />
+                  </div>
+                  <div class="form-group">
+                    <label>Max Value</label>
+                    <input type="number" [(ngModel)]="ruleForm.maxValue" placeholder="blank = +∞" />
+                  </div>
+                }
+                <div class="form-group">
+                  <label>Watermark Column <span class="text-muted">(scan cursor)</span></label>
+                  <input [(ngModel)]="ruleForm.watermarkColumn" placeholder="UpdateDate" />
+                </div>
+                <div class="form-group">
+                  <label>Source ID Column <span class="text-muted">(row identity)</span></label>
+                  <input [(ngModel)]="ruleForm.sourceIdColumn" placeholder="Id" />
+                </div>
+                <div class="form-group span2">
+                  <label>File Path Column</label>
+                  <input [(ngModel)]="ruleForm.filePathColumn" placeholder="e.g. FilePath  or  j.FilePath" />
+                  <span class="field-hint">Optional. Column on the source row holding the input file path → the <code>{{'{'}}sourceFilePath{{'}'}}</code> placeholder. No auto-JOIN — put any JOIN into Source Table and use <code>alias.Column</code> here.</span>
                 </div>
               }
-              @if (ruleForm.checkType === 'ColumnRange') {
-                <div class="form-group">
-                  <label>Min Value</label>
-                  <input type="number" [(ngModel)]="ruleForm.minValue" placeholder="blank = −∞" />
-                </div>
-                <div class="form-group">
-                  <label>Max Value</label>
-                  <input type="number" [(ngModel)]="ruleForm.maxValue" placeholder="blank = +∞" />
-                </div>
-              }
-              <div class="form-group">
-                <label>Watermark Column <span class="text-muted">(scan cursor)</span></label>
-                <input [(ngModel)]="ruleForm.watermarkColumn" placeholder="UpdateDate" />
-              </div>
-              <div class="form-group">
-                <label>Source ID Column <span class="text-muted">(row identity)</span></label>
-                <input [(ngModel)]="ruleForm.sourceIdColumn" placeholder="Id" />
-              </div>
-              <div class="form-group span2">
-                <label>File Path Column</label>
-                <input [(ngModel)]="ruleForm.filePathColumn" placeholder="e.g. FilePath  or  j.FilePath" />
-                <span class="field-hint">Optional. Column on the source row holding the input file path → the <code>{{'{'}}sourceFilePath{{'}'}}</code> placeholder. No auto-JOIN — put any JOIN into Source Table and use <code>alias.Column</code> here.</span>
-              </div>
             }
             <div class="form-group">
               <label>Severity</label>
@@ -755,6 +779,7 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
     }
     .toggle-label { flex-direction: row; align-items: center; gap: 8px; cursor: pointer; }
     .toggle-label input[type="checkbox"] { width: 16px; height: 16px; margin: 0; flex: none; }
+    .sql-area { font-family: ui-monospace, Menlo, Consolas, monospace; resize: vertical; }
     .field-hint { font-size: 11px; color: var(--text-dim); }
     .drawer-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
     .edit-error { margin-top: 10px; padding: 8px 10px; border-radius: var(--radius-sm); background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; font-size: 12px; }
