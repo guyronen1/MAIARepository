@@ -406,7 +406,22 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                 <div class="form-group">
                   <label>Source ID Column <span class="text-muted">(row identity)</span></label>
                   <input [(ngModel)]="ruleForm.sourceIdColumn" placeholder="OrderId" />
-                  <span class="field-hint">Result-set column used as the failure's <code>{{'{'}}sourceId{{'}'}}</code>. Blank → row number.</span>
+                  <span class="field-hint">
+                    Result-set column used as the failure's <code>{{'{'}}sourceId{{'}'}}</code>. Blank → row number.
+                    <strong>Set this</strong> so a new problem row is detected even while an earlier row's failure is still open
+                    (per-row dedup, case-insensitive).
+                  </span>
+                </div>
+                <div class="form-group span2">
+                  <label>Watermark Column <span class="text-muted">(scan cursor — optional)</span></label>
+                  <input [(ngModel)]="ruleForm.watermarkColumn" placeholder="UpdateDate" />
+                  <span class="field-hint">
+                    Incremental scanning, same as the single-table rules: each scan only processes rows whose value
+                    here exceeds the last one seen. <strong>The column must be in your <code>SELECT</code></strong>
+                    (e.g. add <code>UpdateDate</code> to the query). Blank → the whole query re-runs every tick and
+                    dedup relies on Source ID / open-failure state. For large result sets add
+                    <code>ORDER BY {{ ruleForm.watermarkColumn || 'UpdateDate' }} ASC</code> so the 500-row cap reads oldest-first.
+                  </span>
                 </div>
               } @else {
                 <div class="form-group">
