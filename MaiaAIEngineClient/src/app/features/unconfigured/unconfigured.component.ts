@@ -1,6 +1,6 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import {
   UnconfiguredService, UnconfiguredWindow,
   ClustersResponse, UnclassifiedCluster, PolicyGapsResponse, PolicyGap,
@@ -25,7 +25,7 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
 @Component({
   selector: 'app-unconfigured',
   standalone: true,
-  imports: [FormsModule, DrawerComponent, PluralizePipe],
+  imports: [FormsModule, DrawerComponent, PluralizePipe, RouterLink],
   template: `
     <div class="page">
       <div class="page-header">
@@ -60,7 +60,17 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
         @if (loadingA()) {
           <div class="loading-overlay"><span class="spinner"></span> Analyzing…</div>
         } @else if (!clusters() || clusters()!.clusters.length === 0) {
-          <div class="empty-state"><span class="empty-icon">✓</span><p>No recurring unclassified patterns in this window</p></div>
+          @if (clusters() && clusters()!.uncategorizedCount > 0) {
+            <!-- Failures exist but none recurred enough to cluster (ngram noise floor).
+                 Surface them so the dashboard "Unconfigured" KPI isn't a dead-end. -->
+            <div class="empty-state">
+              <span class="empty-icon">⚠️</span>
+              <p>{{ clusters()!.uncategorizedCount | pluralize:'unclassified failure' }} didn't form a recurring pattern — too few occurrences to cluster. Review individually to add a classification rule.</p>
+              <a class="btn btn-primary btn-sm" routerLink="/failures" [queryParams]="{ view: 'unclassified' }">Review unclassified failures</a>
+            </div>
+          } @else {
+            <div class="empty-state"><span class="empty-icon">✓</span><p>No recurring unclassified patterns in this window</p></div>
+          }
         } @else {
           <ul class="gap-list">
             @for (c of clusters()!.clusters; track c.suggestedFromHash) {
