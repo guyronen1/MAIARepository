@@ -11,6 +11,7 @@ import { FailuresByJobChartComponent } from './failures-by-job-chart.component';
 import { ResolutionMixChartComponent } from './resolution-mix-chart.component';
 import { FailureDetailComponent } from '../failures/failure-detail.component';
 import { DrawerComponent } from '../../shared/drawer/drawer.component';
+import { scanTypeLabelFromNames, scanTypeTitleFromSources } from '../../core/util/scan-type-label.util';
 
 type ChartRange = '24h' | '7d' | '30d';
 
@@ -697,18 +698,13 @@ export class DashboardComponent implements OnInit, OnDestroy {
    *  mixed types → "Mixed · N sources". Falls back to the job's legacy scanType
    *  string until the first worker-status poll arrives (sources empty). */
   scanTypeLabel(monitoredJobId: number, fallback: string): string {
-    const sources = this.sourcesFor(monitoredJobId);
-    if (sources.length === 0) return fallback;
-    const distinct = [...new Set(sources.map(s => s.scanTypeName))];
-    if (distinct.length === 1)
-      return sources.length === 1 ? distinct[0] : `${distinct[0]} · ${sources.length} sources`;
-    return `Mixed · ${sources.length} sources`;
+    return scanTypeLabelFromNames(this.sourcesFor(monitoredJobId).map(s => s.scanTypeName), fallback);
   }
 
   /** Tooltip for the scan-type label — lists every source with its type so a
    *  rolled-up "Mixed · 3 sources" stays inspectable on hover. */
   scanTypeTitle(monitoredJobId: number): string {
-    return this.sourcesFor(monitoredJobId).map(s => `${s.name} (${s.scanTypeName})`).join('\n');
+    return scanTypeTitleFromSources(this.sourcesFor(monitoredJobId));
   }
 
   relativeAge(iso: string): string {

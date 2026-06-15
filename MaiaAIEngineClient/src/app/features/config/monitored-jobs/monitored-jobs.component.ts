@@ -1,16 +1,12 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
-import { Observable } from 'rxjs';
 import { FormsModule } from '@angular/forms';
-import { RouterLink } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { ConfigService, JobType, UpsertJobRequest } from '../../../core/services/config.service';
 import { MonitoredJob } from '../../../core/models';
 import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
 import { DrawerComponent } from '../../../shared/drawer/drawer.component';
-
-const SCAN_TYPES = [
-  { id: 1, name: 'FileSystem' }, { id: 2, name: 'Database' },
-  { id: 3, name: 'ApiEndpoint' }, { id: 4, name: 'FileContent' },
-];
+import { scanTypeLabelFromNames, scanTypeTitleFromSources, scanIconForSources, scanIconForId }
+  from '../../../core/util/scan-type-label.util';
 
 /**
  * Tier 2.5 (d2d): the Monitored Jobs LIST. Add / edit / delete a job's identity
@@ -44,15 +40,21 @@ const SCAN_TYPES = [
             <div class="job-card">
               <div class="job-card-header">
                 <div class="job-lead">
-                  <span class="scan-icon">{{ scanIcon(j.scanTypeId) }}</span>
+                  <span class="scan-icon">{{ jobIcon(j) }}</span>
                   <div>
                     <div class="job-name">{{ j.displayName ?? j.name }}</div>
-                    <div class="text-muted text-sm">{{ j.name }} · {{ j.jobTypeName }} · {{ j.scanTypeName }}</div>
+                    <div class="text-muted text-sm" [title]="jobScanTitle(j)">{{ j.name }} · {{ j.jobTypeName }} · {{ jobScanLabel(j) }}</div>
                   </div>
                 </div>
                 <div class="job-meta">
-                  @if (j.logFolder) { <span class="meta-chip">📁 {{ j.logFolder }}</span> }
-                  @if (j.connectionName) { <span class="meta-chip">🔌 {{ j.connectionName }}</span> }
+                  <!-- Tier 2.5 Option 1: scan config is per-source, so the chips come
+                       from the job's sources, not the (vestigial) job-level columns. -->
+                  @for (s of j.sources; track s.scanSourceId) {
+                    @if (s.logFolder) { <span class="meta-chip">📁 {{ s.logFolder }}</span> }
+                    @else if (s.connectionName) { <span class="meta-chip">🔌 {{ s.connectionName }}</span> }
+                    @else if (s.logSourceUrl) { <span class="meta-chip">🌐 {{ s.logSourceUrl }}</span> }
+                  }
+                  @if (j.sources.length === 0) { <span class="meta-chip meta-warn">⚠ no sources</span> }
                   <span class="meta-chip">⏱ {{ j.pollingIntervalSeconds }}s</span>
                 </div>
                 <div class="job-actions">
@@ -98,58 +100,6 @@ const SCAN_TYPES = [
               </select>
             </div>
             <div class="form-group">
-              <label>Scan Type *</label>
-              <select [(ngModel)]="jobForm.scanTypeId">
-                @for (s of scanTypes; track s.id) {
-                  <option [ngValue]="s.id">{{ s.name }}</option>
-                }
-              </select>
-              <span class="field-hint">Sets the job's primary scan type. Add scan sources (incl. mixed types) on the Configure screen.</span>
-            </div>
-
-            @if (jobForm.scanTypeId === 1) {
-              <div class="form-group span2">
-                <label>Log Folder</label>
-                <input [(ngModel)]="jobForm.logFolder" placeholder="C:\logs\myapp" />
-              </div>
-              <div class="form-group span2">
-                <label>Search Patterns</label>
-                <input [(ngModel)]="jobForm.searchPatterns" placeholder="app*.log, error*.log" />
-              </div>
-              <div class="form-group span2">
-                <label>Input Folder</label>
-                <input [(ngModel)]="jobForm.inputFolder" placeholder="C:\input\deposits" />
-                <span class="field-hint">Optional. Base for relative input-path captures; absolute captures ignore it.</span>
-              </div>
-            }
-            @if (jobForm.scanTypeId === 2) {
-              <div class="form-group span2">
-                <label>Connection Name</label>
-                <input [(ngModel)]="jobForm.connectionName" placeholder="B2BTest (key from appsettings)" />
-              </div>
-            }
-            @if (jobForm.scanTypeId === 3) {
-              <div class="form-group span2">
-                <label>API URL</label>
-                <input [(ngModel)]="jobForm.logSourceUrl" placeholder="https://api.example.com/health" />
-              </div>
-            }
-            @if (jobForm.scanTypeId === 4) {
-              <div class="form-group span2">
-                <label>Folder to Scan</label>
-                <input [(ngModel)]="jobForm.logFolder" placeholder="C:\incoming\invoices" />
-                <span class="field-hint">Folder holding the input data files to inspect (not logs).</span>
-              </div>
-              <div class="form-group span2" style="flex-direction:row;align-items:center;gap:10px">
-                <label class="toggle">
-                  <input type="checkbox" [(ngModel)]="jobForm.includeSubfolders" />
-                  <span class="slider"></span>
-                </label>
-                <span class="text-sm">Include subfolders (scan recursively)</span>
-              </div>
-            }
-
-            <div class="form-group">
               <label>Poll Interval (seconds)</label>
               <input type="number" [(ngModel)]="jobForm.pollingIntervalSeconds" min="10" />
             </div>
@@ -166,6 +116,11 @@ const SCAN_TYPES = [
               <label>Description</label>
               <textarea [(ngModel)]="jobForm.description" rows="2" placeholder="Optional notes"></textarea>
             </div>
+            @if (!editingJob()?.monitoredJobId) {
+              <div class="form-group span2">
+                <span class="field-hint create-hint">A job is just identity. After you create it, you'll land on its Configure screen to add one or more <strong>Scan Sources</strong> (FileSystem / Database / API / FileContent) — that's what the job actually scans.</span>
+              </div>
+            }
           </div>
           <div class="drawer-foot">
             <button class="btn btn-ghost" (click)="closeDrawer()">Cancel</button>
@@ -214,14 +169,14 @@ const SCAN_TYPES = [
   `]
 })
 export class MonitoredJobsComponent implements OnInit {
-  private svc = inject(ConfigService);
+  private svc    = inject(ConfigService);
+  private router = inject(Router);
 
   loading  = signal(false);
   saving   = signal(false);
   jobs     = signal<MonitoredJob[]>([]);
   jobTypes = signal<JobType[]>([]);
 
-  readonly scanTypes = SCAN_TYPES;
   drawerOpen  = signal(false);
   editingJob  = signal<MonitoredJob | null>(null);
   jobForm: UpsertJobRequest = this.blankJob();
@@ -235,8 +190,17 @@ export class MonitoredJobsComponent implements OnInit {
     this.svc.getJobTypes().subscribe({ next: t => this.jobTypes.set(t) });
   }
 
-  scanIcon(id: number): string {
-    return ({ 1: '📁', 2: '🗄', 3: '🌐', 4: '📦' } as Record<number, string>)[id] ?? '📋';
+  // Tier 2.5 Option 1: a job's icon/label come from its SOURCES (shared with the
+  // dashboard via scan-type-label.util), not the vestigial job-level ScanType. Fall
+  // back to the legacy job field only until the first payload / for sourceless jobs.
+  jobIcon(j: MonitoredJob): string {
+    return j.sources.length ? scanIconForSources(j.sources) : scanIconForId(j.scanTypeId);
+  }
+  jobScanLabel(j: MonitoredJob): string {
+    return scanTypeLabelFromNames(j.sources.map(s => s.scanTypeName), j.scanTypeName);
+  }
+  jobScanTitle(j: MonitoredJob): string {
+    return scanTypeTitleFromSources(j.sources);
   }
 
   getJobTypeId(job: MonitoredJob): number {
@@ -265,11 +229,20 @@ export class MonitoredJobsComponent implements OnInit {
     if (!this.jobForm.name || !this.jobForm.jobTypeId) return;
     this.saving.set(true);
     const id = this.editingJob()?.monitoredJobId;
-    const req$: Observable<unknown> = id ? this.svc.updateJob(id, this.jobForm) : this.svc.createJob(this.jobForm);
-    req$.subscribe({
-      next: () => { this.closeDrawer(); this.reload(); },
-      error: () => this.saving.set(false),
-    });
+    if (id) {
+      this.svc.updateJob(id, this.jobForm).subscribe({
+        next: () => { this.closeDrawer(); this.reload(); },
+        error: () => this.saving.set(false),
+      });
+    } else {
+      // Two-step create (Option 1): a bare job has no sources yet and won't scan.
+      // Land the operator on its Configure screen, where "Add Source" is the obvious
+      // next action.
+      this.svc.createJob(this.jobForm).subscribe({
+        next: res => { this.closeDrawer(); this.router.navigate(['/config/monitored-jobs', res.monitoredJobId]); },
+        error: () => this.saving.set(false),
+      });
+    }
   }
 
   deleteJob(job: MonitoredJob) {
