@@ -668,20 +668,24 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
               <input [(ngModel)]="fixRuleForm.actionToApply" placeholder="e.g. Retry DTSX job via management API" />
             </div>
             <div class="form-group">
-              <label>Fix Category</label>
-              <!-- Part 2: coupling handled in setFixRuleCategory —
-                   Manual ↔ Manual is enforced both directions. -->
-              <select [ngModel]="fixRuleForm.fixCategory" (ngModelChange)="setFixRuleCategory($event)">
-                @for (c of fixCategories; track c) { <option [ngValue]="c">{{ c }}</option> }
+              <label>Execution Type *</label>
+              <!-- Primary choice — pick this first; Fix Category derives automatically.
+                   Disabled only when Fix Category is locked to Manual (operator
+                   chose Manual from Fix Category, which back-locks this to Manual). -->
+              <select [ngModel]="fixRuleForm.actionType" (ngModelChange)="setFixRuleActionType($event)"
+                      [disabled]="fixRuleForm.fixCategory === 'Manual'">
+                <option [ngValue]="''" disabled>Select execution type…</option>
+                @for (a of orderedActionTypes(); track a) { <option [ngValue]="a">{{ a }}</option> }
               </select>
             </div>
             <div class="form-group">
-              <label>Execution Type</label>
-              <!-- Part 2: disabled when FixCategory=Manual (locked to Manual).
-                   Part 3: options ordered by typical fit for the category. -->
-              <select [ngModel]="fixRuleForm.actionType" (ngModelChange)="setFixRuleActionType($event)"
-                      [disabled]="fixRuleForm.fixCategory === 'Manual'">
-                @for (a of orderedActionTypes(); track a) { <option [ngValue]="a">{{ a }}</option> }
+              <label>Fix Category</label>
+              <!-- Derives automatically when Execution Type is picked.
+                   Manual ↔ Manual is a hard coupling — picking Manual here
+                   locks Execution Type to Manual too (and vice versa). -->
+              <select [ngModel]="fixRuleForm.fixCategory" (ngModelChange)="setFixRuleCategory($event)">
+                <option [ngValue]="''" disabled>Derived from execution type…</option>
+                @for (c of fixCategories; track c) { <option [ngValue]="c">{{ c }}</option> }
               </select>
             </div>
             <div class="form-group">
@@ -697,7 +701,7 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                 </label>
               </div>
             </div>
-            @if (fixRuleForm.actionType !== 'Manual' && fixRuleForm.actionType !== 'Composite') {
+            @if (fixRuleForm.actionType && fixRuleForm.actionType !== 'Manual' && fixRuleForm.actionType !== 'Composite') {
               <div class="form-group span2">
                 <label>Action Payload</label>
                 @if (fixRuleForm.actionType === 'ApiCall') {
@@ -761,7 +765,7 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                 <div class="dup-warn">⚠ This payload uses <code>{{'{'}}sourceFilePath{{'}'}}</code>, but no scan rule on <strong>{{ j.displayName ?? j.name }}</strong> captures a file path. Set <strong>Input File Extraction</strong> (FS) or <strong>File Path Column</strong> (DB) on a scan rule, or the fix fails at runtime with an empty source path.</div>
               </div>
             }
-            @if (fixRuleForm.actionType !== 'Manual') {
+            @if (fixRuleForm.actionType && fixRuleForm.actionType !== 'Manual') {
               <div class="form-group span2">
                 <details class="token-legend">
                   <summary>Available placeholders</summary>
@@ -790,7 +794,9 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
           }
           <div class="drawer-foot">
             <button class="btn btn-ghost" (click)="fixDrawerOpen.set(false)">Cancel</button>
-            <button class="btn btn-primary" (click)="saveFixRule()" [disabled]="savingFix()">
+            <button class="btn btn-primary" (click)="saveFixRule()"
+                    [disabled]="savingFix() || !fixRuleForm.actionType"
+                    [title]="!fixRuleForm.actionType ? 'Select an execution type first' : ''">
               @if (savingFix()) { <span class="spinner"></span> } {{ editingFixRule() ? 'Save Changes' : 'Add Fix Option' }}
             </button>
           </div>
@@ -1010,12 +1016,14 @@ export class JobConfigComponent implements OnInit {
   orderedActionTypes = computed((): string[] => {
     const cat = this.fixRuleFormSignal().fixCategory;
     if (cat === 'Manual') return ['Manual'];
+    // No category yet (blank new form) — neutral order, nothing pre-biased.
+    if (!cat) return ['SqlScript', 'ApiCall', 'CopyFile', 'Script', 'StoredProcedure', 'Composite', 'Manual'];
     const orderMap: Record<string, string[]> = {
       'DbFix':      ['SqlScript', 'StoredProcedure', 'Composite', 'ApiCall', 'Script', 'CopyFile', 'Manual'],
       'FileRepair': ['CopyFile', 'Script', 'Composite', 'ApiCall', 'SqlScript', 'StoredProcedure', 'Manual'],
       'Retry':      ['ApiCall', 'Script', 'Composite', 'SqlScript', 'StoredProcedure', 'CopyFile', 'Manual'],
     };
-    return orderMap[cat] ?? ['ApiCall', 'Script', 'Composite', 'SqlScript', 'StoredProcedure', 'CopyFile', 'Manual'];
+    return orderMap[cat] ?? ['SqlScript', 'ApiCall', 'CopyFile', 'Script', 'StoredProcedure', 'Composite', 'Manual'];
   });
   fixDrawerOpen   = signal(false);
   savingFix       = signal(false);
@@ -1395,7 +1403,7 @@ export class JobConfigComponent implements OnInit {
   }
 
   saveFixRule() {
-    if (!this.fixRuleForm.actionToApply || !this.fixRuleForm.errorTypeId) return;
+    if (!this.fixRuleForm.actionType || !this.fixRuleForm.actionToApply || !this.fixRuleForm.errorTypeId) return;
     this.savingFix.set(true);
     this.fixRuleSaveConflict.set(null);
     this.fixRuleSaveError.set(null);
@@ -1549,18 +1557,20 @@ export class JobConfigComponent implements OnInit {
     this._collapsedSources.set(next);
   }
 
-  // Part 2 — hard coupling: Manual ↔ Manual enforced both directions.
-  // Part 3 — when unlocking from Manual, reset ActionType to the category default.
+  // Hard coupling: Manual ↔ Manual enforced both directions.
+  // No-default: category derives from execution type on first pick; unlocking
+  // Manual resets actionType to '' (operator must re-choose execution type
+  // explicitly — safer than auto-picking when any default could be wrong).
   setFixRuleCategory(next: string) {
-    const prev = this.fixRuleForm.fixCategory;
+    const prevActionType = this.fixRuleForm.actionType;
     this.fixRuleForm.fixCategory = next;
     if (next === 'Manual') {
       this.fixRuleForm.actionType    = 'Manual';
       this.fixRuleForm.actionPayload = null;
       this.fixRuleForm.steps         = [];
-    } else if (prev === 'Manual') {
-      // Unlocking — reset to the sensible default for the new category.
-      this.fixRuleForm.actionType = this.defaultActionTypeFor(next);
+    } else if (prevActionType === 'Manual') {
+      // Unlocking — clear actionType so the operator explicitly re-chooses.
+      this.fixRuleForm.actionType = '';
     }
     this.fixRuleSaveError.set(null);
     this.syncFixRuleSignal();
@@ -1570,19 +1580,37 @@ export class JobConfigComponent implements OnInit {
     const prev = this.fixRuleForm.actionType;
     this.fixRuleForm.actionType = next;
     if (next === 'Manual') {
-      // Hard coupling: Manual action type → Manual category.
       this.fixRuleForm.fixCategory   = 'Manual';
       this.fixRuleForm.actionPayload = null;
       this.fixRuleForm.steps         = [];
-    } else if (next === 'Composite') {
-      this.fixRuleForm.actionPayload = null;
-    } else if (prev === 'Composite') {
-      this.fixRuleForm.steps = [];
+    } else {
+      if (next === 'Composite') {
+        this.fixRuleForm.actionPayload = null;
+      } else if (prev === 'Composite') {
+        this.fixRuleForm.steps = [];
+      }
+      // Derive category when it is not yet set or was locked to Manual.
+      if (!this.fixRuleForm.fixCategory || this.fixRuleForm.fixCategory === 'Manual') {
+        this.fixRuleForm.fixCategory = this.defaultCategoryFor(next);
+      }
     }
     this.fixRuleSaveError.set(null);
     this.syncFixRuleSignal();
   }
 
+  // Reverse of the order-map above: execution type → most natural fix category.
+  private defaultCategoryFor(actionType: string): string {
+    const map: Record<string, string> = {
+      'SqlScript': 'DbFix', 'StoredProcedure': 'DbFix',
+      'CopyFile':  'FileRepair',
+      'Manual':    'Manual',
+      'ApiCall': 'Retry', 'Script': 'Retry', 'Composite': 'Retry',
+    };
+    return map[actionType] ?? 'Retry';
+  }
+
+  /** @deprecated — kept for the orderedActionTypes category-hint; category
+   *  no longer drives actionType default for new rules. */
   private defaultActionTypeFor(category: string): string {
     const defaults: Record<string, string> = {
       'DbFix': 'SqlScript', 'FileRepair': 'CopyFile', 'Retry': 'ApiCall',
@@ -1645,8 +1673,8 @@ export class JobConfigComponent implements OnInit {
   }
 
   private blankFixRule(): UpsertFixPolicyRuleRequest {
-    return { jobTypeId: 0, errorTypeId: 0, monitoredJobId: null, actionToApply: '', fixCategory: 'Retry',
-             actionType: 'ApiCall', actionPayload: null, isAutoHealEligible: false, enabled: true, steps: [] };
+    return { jobTypeId: 0, errorTypeId: 0, monitoredJobId: null, actionToApply: '', fixCategory: '',
+             actionType: '', actionPayload: null, isAutoHealEligible: false, enabled: true, steps: [] };
   }
 
   // ── SqlScript "scope to failing row" shortcut ─────────────────────────────
