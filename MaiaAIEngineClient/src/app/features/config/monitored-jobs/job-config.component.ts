@@ -77,7 +77,8 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                     <!-- Collapse toggle: only shown when the job has multiple sources.
                          Single-source jobs always show their rules (collapsing serves
                          no purpose and adds a pointless click). -->
-                    <button class="collapse-btn" (click)="toggleSource(s.scanSourceId)"
+                    <button class="collapse-btn" #colBtn
+                            (click)="toggleSource(s.scanSourceId); colBtn.blur()"
                             [title]="isSourceCollapsed(s.scanSourceId) ? 'Expand source rules' : 'Collapse source rules'">
                       {{ isSourceCollapsed(s.scanSourceId) ? '▶' : '▼' }}
                     </button>
@@ -394,7 +395,12 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
               </div>
               <div class="form-group">
                 <label>Predicate</label>
-                <select [(ngModel)]="ruleForm.extractorPredicateType">
+                <!-- Two-way bind splits into [ngModel]+(ngModelChange) so we can
+                     clear the stale predicate value when the operator switches to
+                     "None". Without this the invisible value field retains its old
+                     string and the backend returns PredicateIncomplete 400. -->
+                <select [ngModel]="ruleForm.extractorPredicateType"
+                        (ngModelChange)="onPredicateTypeChange($event)">
                   <option [ngValue]="null">None — filename match is the failure</option>
                   @for (p of predicateTypes; track p) { <option [ngValue]="p">{{ p }}</option> }
                 </select>
@@ -1422,16 +1428,31 @@ export class JobConfigComponent implements OnInit {
    *  job. That's the reliable proxy — pattern matching against future log lines
    *  isn't computable at config time. Never shown for SqlQuery (arbitrary result
    *  shape whose output can't be predicted). */
+  onPredicateTypeChange(next: string | null): void {
+    this.ruleForm.extractorPredicateType = next;
+    if (!next) this.ruleForm.extractorPredicateValue = null;
+  }
+
   scanRuleNeedsClassification(rule: ScanCheckRule): boolean {
     if (rule.checkType === 'SqlQuery') return false;
-    return this.effectiveClassRules().length === 0;
+    const effective = this.effectiveClassRules();
+    if (effective.length === 0) return true;
+    // Keyword-overlap heuristic: strip `*` from the scan rule's targetField and
+    // from each class rule's pattern, then check substring containment in either
+    // direction. If no class rule's literal overlaps with the rule's keyword,
+    // there's a likely classification gap.
+    const keyword = (rule.targetField ?? '').replace(/\*/g, '').trim().toLowerCase();
+    if (!keyword) return false;
+    return !effective.some(cr => {
+      const literal = cr.pattern.replace(/\*/g, '').trim().toLowerCase();
+      return literal && (literal.includes(keyword) || keyword.includes(literal));
+    });
   }
 
   /** Count of scan rules in a source that would show the ⚠ classification gap.
    *  Used for the rollup chip on collapsed source headers. */
   scanRulesNeedingClassCount(source: ScanSource): number {
-    if (this.effectiveClassRules().length > 0) return 0;
-    return source.scanCheckRules.filter(r => r.checkType !== 'SqlQuery').length;
+    return source.scanCheckRules.filter(r => this.scanRuleNeedsClassification(r)).length;
   }
 
   /** ⚠ on classification rule rows: no enabled fix policy covers this errorTypeCode. */
