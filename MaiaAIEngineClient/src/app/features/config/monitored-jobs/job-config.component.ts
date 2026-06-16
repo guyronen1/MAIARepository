@@ -122,21 +122,21 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                       <tbody>
                         @for (r of s.scanCheckRules; track r.checkRuleId) {
                           <tr>
-                            <td>
-                              <span class="badge badge-info">{{ r.checkType }}</span>
+                            <td><span class="badge badge-info">{{ r.checkType }}</span></td>
+                            <td class="font-mono">{{ r.targetField }}</td>
+                            <td class="text-sm">{{ ruleDetail(r) }}</td>
+                            <td><span class="badge" [class]="'badge-' + r.severity.toLowerCase()">{{ r.severity }}</span></td>
+                            <td class="rule-actions">
                               @if (scanRuleNeedsClassification(r)) {
                                 <button class="gap-warn gap-warn-btn"
                                         title="No classification rule covers this check's output — click to add one pre-filled with a matching pattern."
                                         (click)="openClassDrawerForScanRule(r)">⚠ No class rule</button>
                               }
+                              <span class="row-actions">
+                                <button class="btn btn-ghost btn-sm" (click)="openRuleDrawer(s, r)">Edit</button>
+                                <button class="btn btn-danger btn-sm" (click)="deleteRule(r)">✕</button>
+                              </span>
                             </td>
-                            <td class="font-mono">{{ r.targetField }}</td>
-                            <td class="text-sm">{{ ruleDetail(r) }}</td>
-                            <td><span class="badge" [class]="'badge-' + r.severity.toLowerCase()">{{ r.severity }}</span></td>
-                            <td class="rule-actions"><span class="row-actions">
-                              <button class="btn btn-ghost btn-sm" (click)="openRuleDrawer(s, r)">Edit</button>
-                              <button class="btn btn-danger btn-sm" (click)="deleteRule(r)">✕</button>
-                            </span></td>
                           </tr>
                         }
                       </tbody>
@@ -169,20 +169,20 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                     @for (r of j.rules; track r.ruleId) {
                       <tr>
                         <td class="font-mono">{{ r.pattern }}</td>
-                        <td>
-                          <span class="badge badge-classified">{{ r.errorTypeCode }}</span>
+                        <td><span class="badge badge-classified">{{ r.errorTypeCode }}</span></td>
+                        <td class="text-sm">{{ (r.confidence * 100).toFixed(0) }}%</td>
+                        <td class="text-sm text-muted">#{{ r.priority }}</td>
+                        <td class="rule-actions">
                           @if (classRuleNeedsFix(r)) {
                             <button class="gap-warn gap-warn-btn"
                                     title="No enabled fix option covers this error type — click to add one pre-filled with this error type."
                                     (click)="openFixRuleDrawerForClassRule(r)">⚠ No fix option</button>
                           }
+                          <span class="row-actions">
+                            <button class="btn btn-ghost btn-sm" (click)="openClassDrawer(r)">Edit</button>
+                            <button class="btn btn-danger btn-sm" (click)="deleteClassRule(r)">✕</button>
+                          </span>
                         </td>
-                        <td class="text-sm">{{ (r.confidence * 100).toFixed(0) }}%</td>
-                        <td class="text-sm text-muted">#{{ r.priority }}</td>
-                        <td class="rule-actions"><span class="row-actions">
-                          <button class="btn btn-ghost btn-sm" (click)="openClassDrawer(r)">Edit</button>
-                          <button class="btn btn-danger btn-sm" (click)="deleteClassRule(r)">✕</button>
-                        </span></td>
                       </tr>
                     }
                   </tbody>
