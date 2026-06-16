@@ -117,7 +117,7 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                   } @else {
                     <table class="data-table compact rule-table">
                       <thead>
-                        <tr><th style="width:16%">Check</th><th style="width:28%">Target</th><th style="width:32%">Detail</th><th style="width:12%">Severity</th><th style="width:12%"></th></tr>
+                        <tr><th style="width:14%">Check</th><th style="width:24%">Target</th><th style="width:26%">Detail</th><th style="width:12%">Severity</th><th style="width:24%"></th></tr>
                       </thead>
                       <tbody>
                         @for (r of s.scanCheckRules; track r.checkRuleId) {
@@ -164,7 +164,7 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
               @if (j.rules.length > 0) {
                 <div class="subsection-label">Linked to this job</div>
                 <table class="data-table compact">
-                  <thead><tr><th style="width:38%">Pattern</th><th style="width:23%">Error Type</th><th style="width:11%">Conf.</th><th style="width:10%">Pri.</th><th style="width:18%"></th></tr></thead>
+                  <thead><tr><th style="width:34%">Pattern</th><th style="width:20%">Error Type</th><th style="width:10%">Conf.</th><th style="width:10%">Pri.</th><th style="width:26%"></th></tr></thead>
                   <tbody>
                     @for (r of j.rules; track r.ruleId) {
                       <tr>
@@ -843,7 +843,10 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
     /* Change 3 — breathing room on scan-rule rows only (class/fix tables keep
        their density). */
     .rule-table td { padding-top: 10px; padding-bottom: 10px; }
-    .rule-actions { white-space: nowrap; text-align: right; }
+    .rule-actions { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+    /* Push Edit/Delete to the right edge of the cell regardless of whether
+       a gap badge is also present — badge floats left, buttons pin right. */
+    .rule-actions .row-actions { margin-left: auto; }
     /* Change 1 — secondary actions reveal on hover / keyboard focus; layout is
        reserved (opacity, not display) so rows don't shift. */
     .row-actions { display: inline-flex; gap: 4px; opacity: 0; transition: opacity 150ms ease; }
