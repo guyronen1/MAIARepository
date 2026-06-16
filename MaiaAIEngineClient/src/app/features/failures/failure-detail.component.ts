@@ -120,17 +120,23 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
                     <div class="rec-header">
                       <span class="badge" [class]="categoryBadge(rec.fixCategory)">{{ rec.fixCategory }}</span>
                       @if (rec.isExecuted) {
-                        @if (rec.fixCategory === 'Manual') {
-                          <!-- IsExecuted=true on a Manual rec means the
+                        @if (rec.policyActionType === 'Manual') {
+                          <!-- IsExecuted=true on a Manual-action rec means the
                                operator acknowledged it (the action is happening
                                off-system). Don't claim "Executed" — it would
-                               read as "the system ran the fix" which is false. -->
+                               read as "the system ran the fix" which is false.
+                               Decision: policyActionType (mechanism) is the truth,
+                               not fixCategory (intent) — they can differ. -->
                           <span class="badge badge-awaitingmanualaction">Acknowledged</span>
                         } @else {
                           <span class="badge badge-fixed">Executed</span>
                         }
                       }
-                      @if (rec.operatorApproved === true)  { <span class="badge badge-resolved">Approved</span> }
+                      <!-- "Approved" only shown in the narrow window between
+                           operator click and drain execution. Once executed,
+                           the terminal badge (Acknowledged / Executed) tells
+                           the full story — "Approved" on top would be noise. -->
+                      @if (rec.operatorApproved === true && !rec.isExecuted)  { <span class="badge badge-resolved">Approved</span> }
                       @if (rec.operatorApproved === false) { <span class="badge badge-failed">Rejected</span> }
                     </div>
 
@@ -194,12 +200,15 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
 
                       @if (!rec.isExecuted && rec.operatorApproved === null) {
                         <div class="rec-actions">
-                          <!-- Manual recs have no automated step — operator's
-                               approval IS the action ("yes, I'll do this thing").
-                               Honest verb. Same backend endpoint (approve still
-                               flips OperatorApproved=true); the use case routes
-                               the failure to AwaitingManualAction. -->
-                          @if (rec.fixCategory === 'Manual') {
+                          <!-- policyActionType=Manual → no automation will run;
+                               operator's click IS the action ("yes, I'll handle
+                               this off-system"). Honest verb: Acknowledge.
+                               Any other actionType → system executes something
+                               on approval. Verb: Approve.
+                               Using policyActionType (mechanism), NOT fixCategory
+                               (intent) — they can differ (e.g. DbFix+Manual,
+                               Retry+SqlScript). -->
+                          @if (rec.policyActionType === 'Manual') {
                             <button class="btn btn-success btn-sm" (click)="approve(rec)">✓ Acknowledge</button>
                           } @else {
                             <button class="btn btn-success btn-sm" (click)="approve(rec)">✓ Approve</button>
@@ -224,14 +233,14 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
                               ↻ Retry Fix
                             </button>
                           }
-                          @if (rec.fixCategory === 'Manual') {
+                          @if (rec.policyActionType === 'Manual') {
                             <button class="btn btn-success btn-sm" disabled>✓ Acknowledge</button>
                           } @else {
                             <button class="btn btn-success btn-sm" disabled>✓ Approve</button>
                           }
                           <button class="btn btn-danger btn-sm"  disabled>✕ Reject</button>
                           <span class="text-sm text-muted action-note">
-                            @if (rec.isExecuted && rec.fixCategory === 'Manual')   { Already acknowledged }
+                            @if (rec.isExecuted && rec.policyActionType === 'Manual') { Already acknowledged }
                             @else if (rec.isExecuted)                              { Already executed }
                             @else if (rec.operatorApproved === true)               { Already approved }
                             @else                                                  { Already rejected }

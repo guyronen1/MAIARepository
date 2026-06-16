@@ -622,14 +622,19 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
             </div>
             <div class="form-group">
               <label>Fix Category</label>
-              <select [(ngModel)]="fixRuleForm.fixCategory">
+              <!-- Part 2: coupling handled in setFixRuleCategory —
+                   Manual ↔ Manual is enforced both directions. -->
+              <select [ngModel]="fixRuleForm.fixCategory" (ngModelChange)="setFixRuleCategory($event)">
                 @for (c of fixCategories; track c) { <option [ngValue]="c">{{ c }}</option> }
               </select>
             </div>
             <div class="form-group">
               <label>Execution Type</label>
-              <select [ngModel]="fixRuleForm.actionType" (ngModelChange)="setFixRuleActionType($event)">
-                @for (a of actionTypes; track a) { <option [ngValue]="a">{{ a }}</option> }
+              <!-- Part 2: disabled when FixCategory=Manual (locked to Manual).
+                   Part 3: options ordered by typical fit for the category. -->
+              <select [ngModel]="fixRuleForm.actionType" (ngModelChange)="setFixRuleActionType($event)"
+                      [disabled]="fixRuleForm.fixCategory === 'Manual'">
+                @for (a of orderedActionTypes(); track a) { <option [ngValue]="a">{{ a }}</option> }
               </select>
             </div>
             <div class="form-group">
@@ -926,7 +931,21 @@ export class JobConfigComponent implements OnInit {
 
   // ── Fix Option drawer ─────────────────────────────────────────────────────
   readonly fixCategories = FIX_CATEGORIES;
-  readonly actionTypes   = ACTION_TYPES;
+
+  // Part 3 — soft guidance: order ActionType options with the most natural
+  // choices for the current FixCategory first, all types still available
+  // (DbFix+ApiCall can be legitimate — see CLAUDE.md decision).
+  // Exception: FixCategory=Manual → only 'Manual' shown (hard coupling).
+  orderedActionTypes = computed((): string[] => {
+    const cat = this.fixRuleFormSignal().fixCategory;
+    if (cat === 'Manual') return ['Manual'];
+    const orderMap: Record<string, string[]> = {
+      'DbFix':      ['SqlScript', 'StoredProcedure', 'Composite', 'ApiCall', 'Script', 'CopyFile', 'Manual'],
+      'FileRepair': ['CopyFile', 'Script', 'Composite', 'ApiCall', 'SqlScript', 'StoredProcedure', 'Manual'],
+      'Retry':      ['ApiCall', 'Script', 'Composite', 'SqlScript', 'StoredProcedure', 'CopyFile', 'Manual'],
+    };
+    return orderMap[cat] ?? ['ApiCall', 'Script', 'Composite', 'SqlScript', 'StoredProcedure', 'CopyFile', 'Manual'];
+  });
   fixDrawerOpen   = signal(false);
   savingFix       = signal(false);
   editingFixRule  = signal<FixPolicyRule | null>(null);
@@ -1282,9 +1301,16 @@ export class JobConfigComponent implements OnInit {
     this.fixRuleSaveConflict.set(null);
     this.fixRuleSaveError.set(null);
     if (rule) {
+      // Normalize legacy mismatches: only Manual↔Manual is a valid pair.
+      // If an existing rule has fixCategory=Manual but actionType≠Manual (or vice versa),
+      // enforce the coupling silently so the operator doesn't see an illegal state.
+      let fixCategory = rule.fixCategory;
+      let actionType  = rule.actionType;
+      if (fixCategory === 'Manual' && actionType !== 'Manual') actionType  = 'Manual';
+      if (actionType  === 'Manual' && fixCategory !== 'Manual') fixCategory = 'Manual';
       this.fixRuleForm = {
         jobTypeId: rule.jobTypeId, errorTypeId: rule.errorTypeId, monitoredJobId: rule.monitoredJobId,
-        actionToApply: rule.actionToApply, fixCategory: rule.fixCategory, actionType: rule.actionType,
+        actionToApply: rule.actionToApply, fixCategory, actionType,
         actionPayload: rule.actionPayload, isAutoHealEligible: rule.isAutoHealEligible, enabled: rule.enabled,
         steps: (rule.steps ?? []).map(s => ({ stepOrder: s.stepOrder, actionType: s.actionType,
                                               actionPayload: s.actionPayload, description: s.description })),
@@ -1336,13 +1362,45 @@ export class JobConfigComponent implements OnInit {
     return this.fixPolicies().some(p => p.monitoredJobId !== null && p.enabled && p.errorTypeCode === r.errorTypeCode);
   }
 
+  // Part 2 — hard coupling: Manual ↔ Manual enforced both directions.
+  // Part 3 — when unlocking from Manual, reset ActionType to the category default.
+  setFixRuleCategory(next: string) {
+    const prev = this.fixRuleForm.fixCategory;
+    this.fixRuleForm.fixCategory = next;
+    if (next === 'Manual') {
+      this.fixRuleForm.actionType    = 'Manual';
+      this.fixRuleForm.actionPayload = null;
+      this.fixRuleForm.steps         = [];
+    } else if (prev === 'Manual') {
+      // Unlocking — reset to the sensible default for the new category.
+      this.fixRuleForm.actionType = this.defaultActionTypeFor(next);
+    }
+    this.fixRuleSaveError.set(null);
+    this.syncFixRuleSignal();
+  }
+
   setFixRuleActionType(next: string) {
     const prev = this.fixRuleForm.actionType;
     this.fixRuleForm.actionType = next;
-    if (next === 'Composite') this.fixRuleForm.actionPayload = null;
-    else if (prev === 'Composite') this.fixRuleForm.steps = [];
+    if (next === 'Manual') {
+      // Hard coupling: Manual action type → Manual category.
+      this.fixRuleForm.fixCategory   = 'Manual';
+      this.fixRuleForm.actionPayload = null;
+      this.fixRuleForm.steps         = [];
+    } else if (next === 'Composite') {
+      this.fixRuleForm.actionPayload = null;
+    } else if (prev === 'Composite') {
+      this.fixRuleForm.steps = [];
+    }
     this.fixRuleSaveError.set(null);
     this.syncFixRuleSignal();
+  }
+
+  private defaultActionTypeFor(category: string): string {
+    const defaults: Record<string, string> = {
+      'DbFix': 'SqlScript', 'FileRepair': 'CopyFile', 'Retry': 'ApiCall',
+    };
+    return defaults[category] ?? 'ApiCall';
   }
 
   syncFixRuleSignal() { this.fixRuleFormSignal.set({ ...this.fixRuleForm }); }
@@ -1401,7 +1459,7 @@ export class JobConfigComponent implements OnInit {
 
   private blankFixRule(): UpsertFixPolicyRuleRequest {
     return { jobTypeId: 0, errorTypeId: 0, monitoredJobId: null, actionToApply: '', fixCategory: 'Retry',
-             actionType: 'Manual', actionPayload: null, isAutoHealEligible: false, enabled: true, steps: [] };
+             actionType: 'ApiCall', actionPayload: null, isAutoHealEligible: false, enabled: true, steps: [] };
   }
 
   // ── SqlScript "scope to failing row" shortcut ─────────────────────────────
