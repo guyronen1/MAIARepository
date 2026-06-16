@@ -125,8 +125,9 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                             <td>
                               <span class="badge badge-info">{{ r.checkType }}</span>
                               @if (scanRuleNeedsClassification(r)) {
-                                <span class="gap-warn"
-                                      title="No classification rule covers this check type's output — failures it produces won't be labeled. Add a classification rule or check /unconfigured for cluster suggestions.">⚠</span>
+                                <button class="gap-warn gap-warn-btn"
+                                        title="No classification rule covers this check's output — click to add one pre-filled with a matching pattern."
+                                        (click)="openClassDrawerForScanRule(r)">⚠ No class rule</button>
                               }
                             </td>
                             <td class="font-mono">{{ r.targetField }}</td>
@@ -171,8 +172,9 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                         <td>
                           <span class="badge badge-classified">{{ r.errorTypeCode }}</span>
                           @if (classRuleNeedsFix(r)) {
-                            <span class="gap-warn"
-                                  title="No enabled fix option covers this error type — matched failures won't auto-heal. Add a fix option in the Fix Options section below.">⚠</span>
+                            <button class="gap-warn gap-warn-btn"
+                                    title="No enabled fix option covers this error type — click to add one pre-filled with this error type."
+                                    (click)="openFixRuleDrawerForClassRule(r)">⚠ No fix option</button>
                           }
                         </td>
                         <td class="text-sm">{{ (r.confidence * 100).toFixed(0) }}%</td>
@@ -225,8 +227,9 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                       <td>
                         <span class="badge badge-classified">{{ p.errorTypeCode }}</span>
                         @if (fixHasNoClassCoverage(p)) {
-                          <span class="gap-warn"
-                                title="No classification rule on this job produces this error type — this fix won't trigger automatically. Add a classification rule or check the reachability warning in the fix drawer.">⚠</span>
+                          <button class="gap-warn gap-warn-btn"
+                                  title="No classification rule produces this error type — this fix won't trigger. Click to add a classification rule pre-filled with this error type."
+                                  (click)="openClassDrawerForFixGap(p)">⚠ No class rule</button>
                         }
                       </td>
                       <td class="text-sm">{{ p.actionType }}@if (p.actionType === 'Composite') { · {{ p.steps.length }} steps }</td>
@@ -916,14 +919,24 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
     .link-rule-pattern { font-size: 12px; margin-bottom: 4px; word-break: break-all; }
     .link-rule-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
-    /* Coverage gap indicators — quiet amber hint, never alarming.
-       A gap may be intentional (operator plans to configure downstream later). */
-    .gap-warn { display: inline-flex; align-items: center; color: #b45309; font-size: 12px;
-                margin-left: 5px; cursor: help; line-height: 1; }
-    /* Rollup chip shown on a collapsed source header when it contains uncovered rules. */
-    .collapsed-gap { display: inline-flex; align-items: center; gap: 3px; font-size: 11px;
-                     color: #b45309; background: #fffbeb; border: 1px solid #fde68a;
-                     border-radius: 4px; padding: 1px 6px; white-space: nowrap; margin-left: 4px; }
+    /* Coverage gap indicators — amber, noticeable but never alarming.
+       A gap may be intentional (operator plans to configure downstream later).
+       .gap-warn is the shared pill style; .gap-warn-btn makes it a clickable
+       button (browser resets need to be undone: background/border/cursor). */
+    .gap-warn, .gap-warn-btn {
+      display: inline-flex; align-items: center; gap: 3px;
+      color: #92400e; background: #fef3c7; border: 1px solid #f59e0b;
+      border-radius: 4px; padding: 2px 7px;
+      font-size: 12px; font-weight: 600; margin-left: 6px;
+      line-height: 1.4; white-space: nowrap;
+    }
+    .gap-warn-btn { cursor: pointer; font-family: inherit; }
+    .gap-warn-btn:hover { background: #fde68a; border-color: #d97706; }
+    /* Rollup chip on a collapsed source header — matches the inline pill. */
+    .collapsed-gap { display: inline-flex; align-items: center; gap: 3px;
+                     color: #92400e; background: #fef3c7; border: 1px solid #f59e0b;
+                     border-radius: 4px; padding: 2px 8px; font-size: 12px; font-weight: 600;
+                     white-space: nowrap; margin-left: 6px; }
 
     /* Per-source collapse chevron — only rendered for multi-source jobs. */
     .collapse-btn { background: none; border: none; padding: 0 4px 0 0; cursor: pointer;
@@ -1465,6 +1478,59 @@ export class JobConfigComponent implements OnInit {
    *  already built into the fix drawer). */
   fixHasNoClassCoverage(policy: FixPolicyRule): boolean {
     return !this.effectiveClassRules().some(r => r.errorTypeCode === policy.errorTypeCode);
+  }
+
+  // ── Gap-marker click-throughs ─────────────────────────────────────────────
+
+  /** Scan-rule ⚠ click: open the classification drawer pre-filled with a
+   *  pattern derived from what the rule's ErrorMessage will look like.
+   *  - ErrorKeyword → pattern is the keyword (strip *)
+   *  - ValueEquals / ColumnRange → pattern like "TargetField=ExpectedValue"
+   *  - FileContent → pattern is the filename keyword (strip *)
+   *  Leaves ErrorType blank so the operator picks one explicitly. */
+  openClassDrawerForScanRule(rule: ScanCheckRule): void {
+    const pattern = this.classPatternForScanRule(rule);
+    this.editingClassRule.set(null);
+    this.classRuleForm = { ...this.blankClassRule(), pattern };
+    this.classDrawerOpen.set(true);
+  }
+
+  private classPatternForScanRule(rule: ScanCheckRule): string {
+    const target = (rule.targetField ?? '').replace(/\*/g, '').trim();
+    switch (rule.checkType) {
+      case 'ErrorKeyword':  return target;                                    // the keyword itself
+      case 'FileContent':   return target;                                    // filename keyword
+      case 'ValueEquals':   return target && rule.expectedValue
+                              ? `${target}=${rule.expectedValue}` : target;   // e.g. "FileStatusCode=5"
+      case 'ColumnRange':   return target;                                    // just the column name
+      default:              return target;
+    }
+  }
+
+  /** Classification-rule ⚠ click: open the fix drawer pre-filled with the
+   *  error type that has no fix option, scoped to this job (override). */
+  openFixRuleDrawerForClassRule(rule: RuleOverride): void {
+    const job = this.job()!;
+    const et  = this.errorTypes().find(e => e.code === rule.errorTypeCode);
+    this.openFixRuleDrawer(null);                 // resets form to per-job blank
+    if (et) {
+      this.fixRuleForm.errorTypeId = et.errorTypeId;
+      this.syncFixRuleSignal();
+    }
+  }
+
+  /** Fix-options ⚠ click: open the classification drawer pre-filled with the
+   *  error type that has no class rule coverage — operator adds the upstream
+   *  classification rule to complete the pipeline. */
+  openClassDrawerForFixGap(policy: FixPolicyRule): void {
+    const et = this.errorTypes().find(e => e.code === policy.errorTypeCode);
+    this.editingClassRule.set(null);
+    this.classRuleForm = {
+      ...this.blankClassRule(),
+      errorTypeId: et?.errorTypeId ?? 0,
+      pattern: '',
+    };
+    this.classDrawerOpen.set(true);
   }
 
   // ── Per-source collapse (only for jobs with 2+ sources) ──────────────────
