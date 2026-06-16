@@ -73,11 +73,29 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
             @for (s of j.sources; track s.scanSourceId) {
               <div class="source-block">
                 <div class="source-head">
+                  @if (j.sources.length > 1) {
+                    <!-- Collapse toggle: only shown when the job has multiple sources.
+                         Single-source jobs always show their rules (collapsing serves
+                         no purpose and adds a pointless click). -->
+                    <button class="collapse-btn" (click)="toggleSource(s.scanSourceId)"
+                            [title]="isSourceCollapsed(s.scanSourceId) ? 'Expand source rules' : 'Collapse source rules'">
+                      {{ isSourceCollapsed(s.scanSourceId) ? '▶' : '▼' }}
+                    </button>
+                  }
                   <span class="scan-icon">{{ scanIcon(s.scanTypeId) }}</span>
                   <strong>{{ s.name }}</strong>
                   <span class="badge badge-info">{{ s.scanTypeName }}</span>
                   <span class="source-config text-muted text-sm">{{ sourceConfig(s) }}</span>
                   @if (!s.isActive) { <span class="badge badge-failed">Inactive</span> }
+                  <!-- Coverage rollup: visible only when collapsed and there are uncovered rules.
+                       Lets the operator scan collapsed headers at a glance and expand only
+                       what needs attention. -->
+                  @if (j.sources.length > 1 && isSourceCollapsed(s.scanSourceId) && scanRulesNeedingClassCount(s) > 0) {
+                    <span class="collapsed-gap"
+                          title="Some scan rules have no matching classification rule — failures they produce won't be labeled">
+                      ⚠ {{ scanRulesNeedingClassCount(s) }} {{ scanRulesNeedingClassCount(s) === 1 ? 'rule needs' : 'rules need' }} classification
+                    </span>
+                  }
                   <span class="source-tools">
                     @if (s.scanTypeName !== 'ApiEndpoint') {
                       <span class="rule-count">{{ s.scanCheckRules.length }} {{ s.scanCheckRules.length === 1 ? 'rule' : 'rules' }}</span>
@@ -90,30 +108,38 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                   </span>
                 </div>
 
-                @if (s.scanTypeName === 'ApiEndpoint') {
-                  <p class="source-note text-muted text-sm">API endpoint check — no rules needed.</p>
-                } @else if (s.scanCheckRules.length === 0) {
-                  <p class="source-note text-muted text-sm">No rules on this source yet.</p>
-                } @else {
-                  <table class="data-table compact rule-table">
-                    <thead>
-                      <tr><th style="width:16%">Check</th><th style="width:28%">Target</th><th style="width:32%">Detail</th><th style="width:12%">Severity</th><th style="width:12%"></th></tr>
-                    </thead>
-                    <tbody>
-                      @for (r of s.scanCheckRules; track r.checkRuleId) {
-                        <tr>
-                          <td><span class="badge badge-info">{{ r.checkType }}</span></td>
-                          <td class="font-mono">{{ r.targetField }}</td>
-                          <td class="text-sm">{{ ruleDetail(r) }}</td>
-                          <td><span class="badge" [class]="'badge-' + r.severity.toLowerCase()">{{ r.severity }}</span></td>
-                          <td class="rule-actions"><span class="row-actions">
-                            <button class="btn btn-ghost btn-sm" (click)="openRuleDrawer(s, r)">Edit</button>
-                            <button class="btn btn-danger btn-sm" (click)="deleteRule(r)">✕</button>
-                          </span></td>
-                        </tr>
-                      }
-                    </tbody>
-                  </table>
+                @if (!isSourceCollapsed(s.scanSourceId)) {
+                  @if (s.scanTypeName === 'ApiEndpoint') {
+                    <p class="source-note text-muted text-sm">API endpoint check — no rules needed.</p>
+                  } @else if (s.scanCheckRules.length === 0) {
+                    <p class="source-note text-muted text-sm">No rules on this source yet.</p>
+                  } @else {
+                    <table class="data-table compact rule-table">
+                      <thead>
+                        <tr><th style="width:16%">Check</th><th style="width:28%">Target</th><th style="width:32%">Detail</th><th style="width:12%">Severity</th><th style="width:12%"></th></tr>
+                      </thead>
+                      <tbody>
+                        @for (r of s.scanCheckRules; track r.checkRuleId) {
+                          <tr>
+                            <td>
+                              <span class="badge badge-info">{{ r.checkType }}</span>
+                              @if (scanRuleNeedsClassification(r)) {
+                                <span class="gap-warn"
+                                      title="No classification rule covers this check type's output — failures it produces won't be labeled. Add a classification rule or check /unconfigured for cluster suggestions.">⚠</span>
+                              }
+                            </td>
+                            <td class="font-mono">{{ r.targetField }}</td>
+                            <td class="text-sm">{{ ruleDetail(r) }}</td>
+                            <td><span class="badge" [class]="'badge-' + r.severity.toLowerCase()">{{ r.severity }}</span></td>
+                            <td class="rule-actions"><span class="row-actions">
+                              <button class="btn btn-ghost btn-sm" (click)="openRuleDrawer(s, r)">Edit</button>
+                              <button class="btn btn-danger btn-sm" (click)="deleteRule(r)">✕</button>
+                            </span></td>
+                          </tr>
+                        }
+                      </tbody>
+                    </table>
+                  }
                 }
               </div>
             }
@@ -141,13 +167,19 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                     @for (r of j.rules; track r.ruleId) {
                       <tr>
                         <td class="font-mono">{{ r.pattern }}</td>
-                        <td><span class="badge badge-classified">{{ r.errorTypeCode }}</span></td>
+                        <td>
+                          <span class="badge badge-classified">{{ r.errorTypeCode }}</span>
+                          @if (classRuleNeedsFix(r)) {
+                            <span class="gap-warn"
+                                  title="No enabled fix option covers this error type — matched failures won't auto-heal. Add a fix option in the Fix Options section below.">⚠</span>
+                          }
+                        </td>
                         <td class="text-sm">{{ (r.confidence * 100).toFixed(0) }}%</td>
                         <td class="text-sm text-muted">#{{ r.priority }}</td>
-                        <td class="rule-actions">
+                        <td class="rule-actions"><span class="row-actions">
                           <button class="btn btn-ghost btn-sm" (click)="openClassDrawer(r)">Edit</button>
                           <button class="btn btn-danger btn-sm" (click)="deleteClassRule(r)">✕</button>
-                        </td>
+                        </span></td>
                       </tr>
                     }
                   </tbody>
@@ -189,7 +221,13 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                 <tbody>
                   @for (p of fixPolicies(); track p.ruleId) {
                     <tr [class.shadowed]="isShadowedDefault(p)">
-                      <td><span class="badge badge-classified">{{ p.errorTypeCode }}</span></td>
+                      <td>
+                        <span class="badge badge-classified">{{ p.errorTypeCode }}</span>
+                        @if (fixHasNoClassCoverage(p)) {
+                          <span class="gap-warn"
+                                title="No classification rule on this job produces this error type — this fix won't trigger automatically. Add a classification rule or check the reachability warning in the fix drawer.">⚠</span>
+                        }
+                      </td>
                       <td class="text-sm">{{ p.actionType }}@if (p.actionType === 'Composite') { · {{ p.steps.length }} steps }</td>
                       <td class="text-sm">
                         @if (p.monitoredJobId) { <span class="badge badge-info">Override</span> }
@@ -197,10 +235,10 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                       </td>
                       <td>{{ p.isAutoHealEligible ? '✓' : '—' }}</td>
                       <td><span class="badge" [class]="p.enabled ? 'badge-resolved' : 'badge-failed'">{{ p.enabled ? 'Enabled' : 'Disabled' }}</span></td>
-                      <td class="rule-actions">
+                      <td class="rule-actions"><span class="row-actions">
                         <button class="btn btn-ghost btn-sm" (click)="openFixRuleDrawer(p)">Edit</button>
                         <button class="btn btn-danger btn-sm" (click)="deleteFixRule(p)">✕</button>
-                      </td>
+                      </span></td>
                     </tr>
                   }
                 </tbody>
@@ -871,6 +909,20 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
     .link-rule-item:hover { border-color: var(--primary); background: var(--primary-light); }
     .link-rule-pattern { font-size: 12px; margin-bottom: 4px; word-break: break-all; }
     .link-rule-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+    /* Coverage gap indicators — quiet amber hint, never alarming.
+       A gap may be intentional (operator plans to configure downstream later). */
+    .gap-warn { display: inline-flex; align-items: center; color: #b45309; font-size: 12px;
+                margin-left: 5px; cursor: help; line-height: 1; }
+    /* Rollup chip shown on a collapsed source header when it contains uncovered rules. */
+    .collapsed-gap { display: inline-flex; align-items: center; gap: 3px; font-size: 11px;
+                     color: #b45309; background: #fffbeb; border: 1px solid #fde68a;
+                     border-radius: 4px; padding: 1px 6px; white-space: nowrap; margin-left: 4px; }
+
+    /* Per-source collapse chevron — only rendered for multi-source jobs. */
+    .collapse-btn { background: none; border: none; padding: 0 4px 0 0; cursor: pointer;
+                    color: var(--text-muted); font-size: 11px; flex-shrink: 0; line-height: 1; }
+    .collapse-btn:hover { color: var(--text); }
   `]
 })
 export class JobConfigComponent implements OnInit {
@@ -1360,6 +1412,54 @@ export class JobConfigComponent implements OnInit {
   isShadowedDefault(r: FixPolicyRule): boolean {
     if (r.monitoredJobId !== null) return false;
     return this.fixPolicies().some(p => p.monitoredJobId !== null && p.enabled && p.errorTypeCode === r.errorTypeCode);
+  }
+
+  // ── Coverage gap indicators ───────────────────────────────────────────────
+  // Quiet config-time hints — a gap may be intentional (operator plans the
+  // downstream piece later). Inform, don't block or error-style.
+
+  /** ⚠ on scan rule rows: fires when there are ZERO effective class rules for this
+   *  job. That's the reliable proxy — pattern matching against future log lines
+   *  isn't computable at config time. Never shown for SqlQuery (arbitrary result
+   *  shape whose output can't be predicted). */
+  scanRuleNeedsClassification(rule: ScanCheckRule): boolean {
+    if (rule.checkType === 'SqlQuery') return false;
+    return this.effectiveClassRules().length === 0;
+  }
+
+  /** Count of scan rules in a source that would show the ⚠ classification gap.
+   *  Used for the rollup chip on collapsed source headers. */
+  scanRulesNeedingClassCount(source: ScanSource): number {
+    if (this.effectiveClassRules().length > 0) return 0;
+    return source.scanCheckRules.filter(r => r.checkType !== 'SqlQuery').length;
+  }
+
+  /** ⚠ on classification rule rows: no enabled fix policy covers this errorTypeCode. */
+  classRuleNeedsFix(rule: RuleOverride): boolean {
+    return !this.fixPolicies().some(p => p.errorTypeCode === rule.errorTypeCode && p.enabled);
+  }
+
+  /** ⚠ on fix policy rows: no effective class rule produces this errorTypeCode,
+   *  so the fix won't trigger automatically (mirrors the reachability warning
+   *  already built into the fix drawer). */
+  fixHasNoClassCoverage(policy: FixPolicyRule): boolean {
+    return !this.effectiveClassRules().some(r => r.errorTypeCode === policy.errorTypeCode);
+  }
+
+  // ── Per-source collapse (only for jobs with 2+ sources) ──────────────────
+  // Default: all sources expanded (show the full picture on load).
+  // Single-source jobs: no collapse affordance at all.
+
+  private _collapsedSources = signal<Set<number>>(new Set<number>());
+
+  isSourceCollapsed(sourceId: number): boolean {
+    return this._collapsedSources().has(sourceId);
+  }
+
+  toggleSource(sourceId: number): void {
+    const next = new Set(this._collapsedSources());
+    next.has(sourceId) ? next.delete(sourceId) : next.add(sourceId);
+    this._collapsedSources.set(next);
   }
 
   // Part 2 — hard coupling: Manual ↔ Manual enforced both directions.
