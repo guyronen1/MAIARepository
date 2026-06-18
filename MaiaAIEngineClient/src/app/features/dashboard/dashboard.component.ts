@@ -34,7 +34,21 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
     <div class="page">
       <div class="page-header">
         <div class="page-title">
-          <h1>Dashboard</h1>
+          <div class="title-row">
+            <h1>Dashboard</h1>
+            <button class="worker-pill"
+                    [class.paused]="isSystemPaused()"
+                    [disabled]="pauseToggling()"
+                    (click)="togglePause()"
+                    [title]="isSystemPaused() ? 'Monitoring is paused — click to resume' : 'Monitoring is live — click to pause'">
+              @if (pauseToggling()) {
+                <span class="pill-spinner"></span>
+              } @else {
+                <span class="pill-dot"></span>
+              }
+              {{ isSystemPaused() ? 'Paused' : 'Live' }}
+            </button>
+          </div>
           <p class="text-muted text-sm">Real-time monitoring overview</p>
         </div>
 
@@ -306,6 +320,32 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
       gap: 16px;
     }
     .page-title { display: flex; flex-direction: column; }
+    .title-row  { display: flex; align-items: center; gap: 10px; }
+    /* Live / Paused worker-control pill */
+    .worker-pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 10px; border-radius: 12px; border: 1px solid;
+      font-size: 11px; font-weight: 600; letter-spacing: 0.03em;
+      cursor: pointer; transition: opacity 0.15s, background 0.15s;
+      background: #dcfce7; color: #15803d; border-color: #86efac;
+      &.paused { background: #fef3c7; color: #b45309; border-color: #fcd34d; }
+      &:hover:not(:disabled) { opacity: 0.8; }
+      &:disabled { opacity: 0.55; cursor: default; }
+    }
+    .pill-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: currentColor;
+      .worker-pill:not(.paused) & { animation: pulse-dot 2s ease-in-out infinite; }
+    }
+    .pill-spinner {
+      width: 10px; height: 10px; border-radius: 50%;
+      border: 2px solid currentColor; border-top-color: transparent;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.4; }
+    }
     .activity-slot {
       align-self: start;
       min-width: 0;
@@ -794,6 +834,22 @@ export class DashboardComponent implements OnInit, OnDestroy {
     // 5s snapshot poll will pick up any new failures / lease state on its own.
     this.scanSvc.scanById(job.monitoredJobId).subscribe({
       next: r => this.lastScan.set(r)
+    });
+  }
+
+  // ── Worker pause/resume toggle ────────────────────────────────────────
+  isSystemPaused = computed(() => this.workerStatus()?.isPaused ?? false);
+  pauseToggling  = signal(false);
+
+  togglePause(): void {
+    if (this.pauseToggling()) return;
+    this.pauseToggling.set(true);
+    const call = this.isSystemPaused()
+      ? this.scanSvc.resumeWorker()
+      : this.scanSvc.pauseWorker();
+    call.subscribe({
+      next:  () => this.pauseToggling.set(false),
+      error: () => this.pauseToggling.set(false),
     });
   }
 }

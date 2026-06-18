@@ -22,4 +22,16 @@ export class ScanService {
       `${this.base}/classify-pending`
     );
   }
+
+  pauseWorker(): Observable<{ isPaused: boolean }> {
+    return this.http.post<{ isPaused: boolean }>(
+      `${environment.apiUrl}/admin/worker/pause`, {}
+    );
+  }
+
+  resumeWorker(): Observable<{ isPaused: boolean }> {
+    return this.http.post<{ isPaused: boolean }>(
+      `${environment.apiUrl}/admin/worker/resume`, {}
+    );
+  }
 }

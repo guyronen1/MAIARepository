@@ -60,6 +60,8 @@ export interface JobLastScanRow {
 
 export interface WorkerStatus {
   workerAlive:        boolean;
+  /** True while the operator has paused the scan loop via the dashboard toggle. */
+  isPaused:           boolean;
   lastActivityAt:     string | null;
   /** 2 × max(PollingIntervalSeconds) across active jobs. Computed server-side. */
   aliveWindowSeconds: number;
