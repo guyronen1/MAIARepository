@@ -566,7 +566,7 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
             <div class="dup-warn save-error" role="alert">
               ⚠ {{ classRuleSaveError() }}
               @if (classRuleConflictId()) {
-                <br><button class="link-btn" (click)="linkConflictingClassRule()">Link the existing rule instead</button>
+                <br><button class="link-btn" (click)="linkConflictingClassRule()">{{ editingClassRule() ? 'Swap to existing rule' : 'Link the existing rule instead' }}</button>
               }
             </div>
           }
@@ -1365,11 +1365,24 @@ export class JobConfigComponent implements OnInit {
   }
 
   linkConflictingClassRule() {
-    const ruleId = this.classRuleConflictId();
+    const ruleId      = this.classRuleConflictId();
+    const oldRule     = this.editingClassRule(); // set when editing, null when creating
+    const jobId       = this.job()!.monitoredJobId;
     if (!ruleId) return;
     this.savingClass.set(true);
-    this.svc.linkJobClassificationRule(this.job()!.monitoredJobId, ruleId).subscribe({
-      next: () => { this.classDrawerOpen.set(false); this.savingClass.set(false); this.reload(); },
+    this.svc.linkJobClassificationRule(jobId, ruleId).subscribe({
+      next: () => {
+        // Edit mode: unlink the rule that was being edited so the job swaps
+        // to the existing rule instead of holding both.
+        if (oldRule && oldRule.ruleId !== ruleId) {
+          this.svc.deleteJobClassificationRule(jobId, oldRule.ruleId).subscribe({
+            next:  () => { this.classDrawerOpen.set(false); this.savingClass.set(false); this.reload(); },
+            error: () => { this.classDrawerOpen.set(false); this.savingClass.set(false); this.reload(); },
+          });
+        } else {
+          this.classDrawerOpen.set(false); this.savingClass.set(false); this.reload();
+        }
+      },
       error: (err: any) => {
         this.savingClass.set(false);
         this.classRuleSaveError.set(err?.error?.message || 'Link failed.');
