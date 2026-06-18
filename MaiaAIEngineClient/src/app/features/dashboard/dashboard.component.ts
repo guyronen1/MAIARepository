@@ -188,7 +188,7 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
                       }
                     </span>
                     <span class="row-job-name" dir="auto">{{ j.displayName ?? j.name }}</span>
-                    <span class="row-meta" [title]="scanTypeTitle(j.monitoredJobId)">{{ scanTypeLabel(j.monitoredJobId, j.scanTypeName) }} · {{ j.jobTypeName }}</span>
+                    <span class="row-meta" [title]="scanTypeTitle(j.monitoredJobId)">{{ scanTypeLabel(j.monitoredJobId, '') }} · {{ j.jobTypeName }}</span>
 
                     @if (lastScanFor(j.monitoredJobId); as ls) {
                       <span class="row-badge badge" [class]="lastScanBadgeClass(j.monitoredJobId)">
@@ -276,6 +276,7 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
            on the dashboard instead of routing to /failures. -->
       <app-drawer
           [open]="selectedFailureId() !== null"
+          [width]="'760px'"
           [ariaLabel]="'Failure ' + selectedFailureId() + ' detail'"
           (close)="selectedFailureId.set(null)">
         <ng-container drawer-title>

@@ -153,6 +153,7 @@ const PAGE_SIZE = 50;
            title, the ↑/↓ nav controls, and the body (failure detail). -->
       <app-drawer
           [open]="selectedId() !== null"
+          [width]="'760px'"
           [ariaLabel]="'Failure ' + selectedId() + ' detail'"
           (close)="closeDrawer()">
         <ng-container drawer-title>

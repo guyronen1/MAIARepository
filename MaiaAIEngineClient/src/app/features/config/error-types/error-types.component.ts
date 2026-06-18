@@ -251,8 +251,9 @@ export class ErrorTypesComponent implements OnInit {
   sevBadge(s: string): string {
     switch ((s ?? '').toLowerCase()) {
       case 'critical': return 'badge-failed';
-      case 'high':     return 'badge-warning';
-      case 'medium':   return 'badge-info';
+      case 'high':     return 'badge-high';
+      case 'medium':   return 'badge-medium';
+      case 'low':      return 'badge-low';
       default:         return 'badge-muted';
     }
   }

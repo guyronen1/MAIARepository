@@ -38,9 +38,4 @@ export class RecommendationsService {
     return this.http.post<{ message: string }>(`${this.base}/fix/execute-fixes`, {});
   }
 
-  runPipeline(): Observable<{ classifications: number; message: string }> {
-    return this.http.post<{ classifications: number; message: string }>(
-      `${this.base}/process/run-pipeline`, {}
-    );
-  }
 }

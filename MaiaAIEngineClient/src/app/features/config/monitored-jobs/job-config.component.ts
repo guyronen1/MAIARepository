@@ -253,7 +253,7 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
 
         <!-- ── Edit Job drawer (identity only; scan config lives on sources) ── -->
         <app-drawer [open]="editOpen()" [ariaLabel]="'Edit job ' + j.name" (close)="editOpen.set(false)">
-          <ng-container drawer-title><span class="text-muted text-sm">Edit Job</span> &nbsp;<strong>{{ j.name }}</strong></ng-container>
+          <ng-container drawer-title>Edit Job &nbsp;<span class="drawer-title-sub">{{ j.name }}</span></ng-container>
           <div class="form-grid">
             <div class="form-group span2">
               <label>Name *</label>
@@ -294,7 +294,7 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
 
         <!-- ── Scan Source drawer (config branches on ScanType; immutable on edit) ── -->
         <app-drawer [open]="sourceDrawerOpen()" [ariaLabel]="'Scan source'" (close)="sourceDrawerOpen.set(false)">
-          <ng-container drawer-title><span class="text-muted text-sm">{{ editingSourceId() ? 'Edit' : 'New' }} Scan Source</span></ng-container>
+          <ng-container drawer-title>{{ editingSourceId() ? 'Edit' : 'New' }} Scan Source</ng-container>
           <div class="form-grid">
             <div class="form-group span2">
               <label>Name *</label>
@@ -361,8 +361,8 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
         <!-- ── Scan Rule drawer (config branches on the source's ScanType) ────── -->
         <app-drawer [open]="ruleDrawerOpen()" [ariaLabel]="'Scan rule'" (close)="ruleDrawerOpen.set(false)">
           <ng-container drawer-title>
-            <span class="text-muted text-sm">{{ editingRuleId() ? 'Edit' : 'New' }} Scan Rule</span>
-            @if (editingRuleSource(); as src) { &nbsp;<strong>{{ src.name }}</strong> }
+            {{ editingRuleId() ? 'Edit' : 'New' }} Scan Rule
+            @if (editingRuleSource(); as src) { &nbsp;<span class="drawer-title-sub">{{ src.name }}</span> }
           </ng-container>
           <div class="form-grid">
             @if (editingRuleSource()?.scanTypeId === 1) {
@@ -535,7 +535,7 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
 
         <!-- ── Classification Rule drawer ────────────────────────────────────── -->
         <app-drawer [open]="classDrawerOpen()" [ariaLabel]="'Classification rule'" (close)="classDrawerOpen.set(false)">
-          <ng-container drawer-title><span class="text-muted text-sm">{{ editingClassRule() ? 'Edit' : 'New' }} Classification Rule</span></ng-container>
+          <ng-container drawer-title>{{ editingClassRule() ? 'Edit' : 'New' }} Classification Rule</ng-container>
           <div class="form-grid">
             <div class="form-group span2">
               <label>Match Pattern *</label>
@@ -562,6 +562,14 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
               <label class="toggle-label"><input type="checkbox" [(ngModel)]="classRuleForm.isActive" /> Active</label>
             </div>
           </div>
+          @if (classRuleSaveError()) {
+            <div class="dup-warn save-error" role="alert">
+              ⚠ {{ classRuleSaveError() }}
+              @if (classRuleConflictId()) {
+                <br><button class="link-btn" (click)="linkConflictingClassRule()">Link the existing rule instead</button>
+              }
+            </div>
+          }
           <div class="drawer-foot">
             <button class="btn btn-ghost" (click)="classDrawerOpen.set(false)">Cancel</button>
             <button class="btn btn-primary" (click)="saveClassRule()" [disabled]="savingClass()">
@@ -572,7 +580,7 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
 
         <!-- ── Link Existing Classification Rule drawer ──────────────────────── -->
         <app-drawer [open]="linkDrawerOpen()" [ariaLabel]="'Link classification rule'" (close)="linkDrawerOpen.set(false)">
-          <ng-container drawer-title><span class="text-muted text-sm">Link Existing Classification Rule</span></ng-container>
+          <ng-container drawer-title>Link Existing Classification Rule</ng-container>
           <div class="form-group" style="margin-bottom:12px">
             <input [ngModel]="linkRuleSearch()" (ngModelChange)="linkRuleSearch.set($event)" placeholder="Search by pattern or error type…" />
           </div>
@@ -601,7 +609,7 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
 
         <!-- ── Fix Option drawer ─────────────────────────────────────────────── -->
         <app-drawer [open]="fixDrawerOpen()" [ariaLabel]="'Fix option'" (close)="fixDrawerOpen.set(false)">
-          <ng-container drawer-title><span class="text-muted text-sm">{{ editingFixRule() ? 'Edit' : 'New' }} Fix Option</span></ng-container>
+          <ng-container drawer-title>{{ editingFixRule() ? 'Edit' : 'New' }} Fix Option</ng-container>
           <div class="drawer-context-banner">
             <span class="banner-icon" aria-hidden="true">i</span>
             <span>
@@ -669,24 +677,17 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
             </div>
             <div class="form-group">
               <label>Execution Type *</label>
-              <!-- Primary choice — pick this first; Fix Category derives automatically.
-                   Disabled only when Fix Category is locked to Manual (operator
-                   chose Manual from Fix Category, which back-locks this to Manual). -->
-              <select [ngModel]="fixRuleForm.actionType" (ngModelChange)="setFixRuleActionType($event)"
-                      [disabled]="fixRuleForm.fixCategory === 'Manual'">
+              <select [ngModel]="fixRuleForm.actionType" (ngModelChange)="setFixRuleActionType($event)">
                 <option [ngValue]="''" disabled>Select execution type…</option>
                 @for (a of orderedActionTypes(); track a) { <option [ngValue]="a">{{ a }}</option> }
               </select>
             </div>
             <div class="form-group">
               <label>Fix Category</label>
-              <!-- Derives automatically when Execution Type is picked.
-                   Manual ↔ Manual is a hard coupling — picking Manual here
-                   locks Execution Type to Manual too (and vice versa). -->
-              <select [ngModel]="fixRuleForm.fixCategory" (ngModelChange)="setFixRuleCategory($event)">
-                <option [ngValue]="''" disabled>Derived from execution type…</option>
-                @for (c of fixCategories; track c) { <option [ngValue]="c">{{ c }}</option> }
-              </select>
+              <!-- Read-only — derived automatically from Execution Type.
+                   Manual execution type locks both to Manual; any other
+                   execution type auto-assigns the natural category. -->
+              <input [value]="fixRuleForm.fixCategory || 'Derived from execution type'" readonly />
             </div>
             <div class="form-group">
               <label>Behaviour</label>
@@ -865,6 +866,7 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
     .toggle-label { flex-direction: row; align-items: center; gap: 8px; cursor: pointer; }
     .toggle-label input[type="checkbox"] { width: 16px; height: 16px; margin: 0; flex: none; }
     .sql-area { font-family: ui-monospace, Menlo, Consolas, monospace; resize: vertical; }
+    .form-group input[readonly] { background: var(--surface-2, #f8fafc); color: var(--text-muted); cursor: default; border-style: dashed; }
     .scope-shortcut { align-self: flex-start; margin-top: 6px; font-size: 12px; }
     .step-scope { margin: 4px 0 0 32px; font-size: 11px; }
     .field-hint { font-size: 11px; color: var(--text-dim); }
@@ -951,6 +953,9 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
     .collapse-btn { background: none; border: none; padding: 0 4px 0 0; cursor: pointer;
                     color: var(--text-muted); font-size: 11px; flex-shrink: 0; line-height: 1; }
     .collapse-btn:hover { color: var(--text); }
+    /* Secondary entity name in drawer headers — slightly muted, normal weight,
+       so the drawer type label reads as the primary identifier. */
+    .drawer-title-sub { font-weight: 400; color: var(--text-muted); font-size: 13px; }
   `]
 })
 export class JobConfigComponent implements OnInit {
@@ -993,10 +998,12 @@ export class JobConfigComponent implements OnInit {
   ruleForm: UpsertScanRuleRequest & { isActive: boolean } = this.blankScanRule();
 
   // ── Classification Rule drawers ───────────────────────────────────────────
-  classDrawerOpen  = signal(false);
-  savingClass      = signal(false);
-  editingClassRule = signal<RuleOverride | null>(null);
+  classDrawerOpen     = signal(false);
+  savingClass         = signal(false);
+  editingClassRule    = signal<RuleOverride | null>(null);
   classRuleForm: UpsertJobClassificationRuleRequest = this.blankClassRule();
+  classRuleSaveError  = signal<string | null>(null);
+  classRuleConflictId = signal<number | null>(null);
   // Link-existing drawer.
   linkDrawerOpen   = signal(false);
   loadingLinkRules = signal(false);
@@ -1018,9 +1025,10 @@ export class JobConfigComponent implements OnInit {
   // Exception: FixCategory=Manual → only 'Manual' shown (hard coupling).
   orderedActionTypes = computed((): string[] => {
     const cat = this.fixRuleFormSignal().fixCategory;
-    if (cat === 'Manual') return ['Manual'];
-    // No category yet (blank new form) — neutral order, nothing pre-biased.
-    if (!cat) return ['SqlScript', 'ApiCall', 'CopyFile', 'Script', 'StoredProcedure', 'Composite', 'Manual'];
+    // No category yet, or Manual — neutral order so the operator can pick freely.
+    // (Manual is never locked here: since Fix Category is read-only/derived,
+    //  the operator escapes Manual by simply picking a different execution type.)
+    if (!cat || cat === 'Manual') return ['SqlScript', 'ApiCall', 'CopyFile', 'Script', 'StoredProcedure', 'Composite', 'Manual'];
     const orderMap: Record<string, string[]> = {
       'DbFix':      ['SqlScript', 'StoredProcedure', 'Composite', 'ApiCall', 'Script', 'CopyFile', 'Manual'],
       'FileRepair': ['CopyFile', 'Script', 'Composite', 'ApiCall', 'SqlScript', 'StoredProcedure', 'Manual'],
@@ -1071,8 +1079,10 @@ export class JobConfigComponent implements OnInit {
     if (!job) return [];
     const jt = this.getJobTypeId(job);
     const linked = job.rules ?? [];
+    const linkedToThisJob = new Set(linked.map(r => r.ruleId));
     const linkedAnywhere = new Set(this.allJobs().flatMap(j => j.rules.map(r => r.ruleId)));
-    const defaults = this.allClassRules().filter(r => r.jobTypeId === jt && r.isActive && !linkedAnywhere.has(r.ruleId));
+    const defaults = this.allClassRules().filter(r =>
+      r.jobTypeId === jt && r.isActive && !linkedToThisJob.has(r.ruleId) && !linkedAnywhere.has(r.ruleId));
     return [
       ...linked.map(r => ({ ruleId: r.ruleId, pattern: r.pattern, errorTypeCode: r.errorTypeCode })),
       ...defaults.map(r => ({ ruleId: r.ruleId, pattern: r.pattern, errorTypeCode: r.errorTypeCode })),
@@ -1097,9 +1107,10 @@ export class JobConfigComponent implements OnInit {
     const job = this.job();
     if (!job) return [];
     const jt = this.getJobTypeId(job);
+    const linkedToThisJob = new Set((job.rules ?? []).map(r => r.ruleId));
     const linkedAnywhere = new Set(this.allJobs().flatMap(j => j.rules.map(r => r.ruleId)));
     return this.allClassRules()
-      .filter(r => r.jobTypeId === jt && r.isActive && !linkedAnywhere.has(r.ruleId))
+      .filter(r => r.jobTypeId === jt && r.isActive && !linkedToThisJob.has(r.ruleId) && !linkedAnywhere.has(r.ruleId))
       .sort((a, b) => a.priority - b.priority);
   });
 
@@ -1154,11 +1165,6 @@ export class JobConfigComponent implements OnInit {
     const jt = this.jobTypes().find(t => t.name === j.jobTypeName);
     this.jobForm = {
       name: j.name, displayName: j.displayName, jobTypeId: jt?.jobTypeId ?? 0,
-      // Scan config now lives on sources; preserve the job's legacy columns
-      // unchanged — this form only edits identity + cadence.
-      scanTypeId: j.scanTypeId, logFolder: j.logFolder, searchPatterns: j.searchPatterns,
-      inputFolder: j.inputFolder, includeSubfolders: j.includeSubfolders,
-      connectionName: j.connectionName, logSourceUrl: j.logSourceUrl,
       pollingIntervalSeconds: j.pollingIntervalSeconds, isActive: j.isActive,
       description: j.description,
     };
@@ -1179,10 +1185,8 @@ export class JobConfigComponent implements OnInit {
   }
 
   private blankJob(): UpsertJobRequest {
-    return { name: '', displayName: null, jobTypeId: 0, scanTypeId: 1, logFolder: null,
-             searchPatterns: null, inputFolder: null, includeSubfolders: false,
-             connectionName: null, logSourceUrl: null, pollingIntervalSeconds: 300,
-             isActive: true, description: null };
+    return { name: '', displayName: null, jobTypeId: 0,
+             pollingIntervalSeconds: 300, isActive: true, description: null };
   }
 
   // ── Scan Source CRUD ──────────────────────────────────────────────────────
@@ -1319,6 +1323,8 @@ export class JobConfigComponent implements OnInit {
   // ── Classification Rule CRUD ──────────────────────────────────────────────
   openClassDrawer(rule: RuleOverride | null) {
     this.editingClassRule.set(rule);
+    this.classRuleSaveError.set(null);
+    this.classRuleConflictId.set(null);
     if (rule) {
       const et = this.errorTypes().find(e => e.code === rule.errorTypeCode);
       this.classRuleForm = { errorTypeId: et?.errorTypeId ?? 0, pattern: rule.pattern,
@@ -1332,6 +1338,8 @@ export class JobConfigComponent implements OnInit {
   saveClassRule() {
     if (!this.classRuleForm.pattern?.trim() || !this.classRuleForm.errorTypeId) return;
     this.savingClass.set(true);
+    this.classRuleSaveError.set(null);
+    this.classRuleConflictId.set(null);
     const job = this.job()!;
     const ruleId = this.editingClassRule()?.ruleId;
     const req$: Observable<unknown> = ruleId
@@ -1343,7 +1351,29 @@ export class JobConfigComponent implements OnInit {
       : this.svc.createJobClassificationRule(job.monitoredJobId, this.classRuleForm);
     req$.subscribe({
       next: () => { this.classDrawerOpen.set(false); this.savingClass.set(false); this.reload(); },
-      error: () => this.savingClass.set(false),
+      error: (err: any) => {
+        this.savingClass.set(false);
+        const body = err?.error;
+        if (err?.status === 409 && body?.error === 'DuplicateClassificationRule') {
+          this.classRuleConflictId.set(body.conflictingRuleId ?? null);
+          this.classRuleSaveError.set(body.message);
+        } else {
+          this.classRuleSaveError.set(body?.message || 'Save failed. Check the server logs.');
+        }
+      },
+    });
+  }
+
+  linkConflictingClassRule() {
+    const ruleId = this.classRuleConflictId();
+    if (!ruleId) return;
+    this.savingClass.set(true);
+    this.svc.linkJobClassificationRule(this.job()!.monitoredJobId, ruleId).subscribe({
+      next: () => { this.classDrawerOpen.set(false); this.savingClass.set(false); this.reload(); },
+      error: (err: any) => {
+        this.savingClass.set(false);
+        this.classRuleSaveError.set(err?.error?.message || 'Link failed.');
+      },
     });
   }
 
@@ -1461,15 +1491,16 @@ export class JobConfigComponent implements OnInit {
     if (rule.checkType === 'SqlQuery') return false;
     const effective = this.effectiveClassRules();
     if (effective.length === 0) return true;
-    // Keyword-overlap heuristic: strip `*` from the scan rule's targetField and
-    // from each class rule's pattern, then check substring containment in either
-    // direction. If no class rule's literal overlaps with the rule's keyword,
-    // there's a likely classification gap.
-    const keyword = (rule.targetField ?? '').replace(/\*/g, '').trim().toLowerCase();
+    // Use the same composite pattern classPatternForScanRule produces so the
+    // comparison is apples-to-apples. For ValueEquals this is "Field=Value"
+    // (e.g. "FileStatusCode=5") — comparing only targetField against a pattern
+    // like "FileStatusCode=5" would always fail because "FileStatusCode" doesn't
+    // contain "FileStatusCode=5", producing a false ⚠ even when the rule IS linked.
+    const keyword = this.classPatternForScanRule(rule).toLowerCase();
     if (!keyword) return false;
     return !effective.some(cr => {
       const literal = cr.pattern.replace(/\*/g, '').trim().toLowerCase();
-      return literal && (literal.includes(keyword) || keyword.includes(literal));
+      return literal && keyword.includes(literal);
     });
   }
 
@@ -1588,14 +1619,19 @@ export class JobConfigComponent implements OnInit {
       this.fixRuleForm.steps         = [];
     } else {
       if (next === 'Composite') {
+        // Composite uses steps, not a header payload — clear it.
         this.fixRuleForm.actionPayload = null;
-      } else if (prev === 'Composite') {
+      } else {
+        // Any execution-type change clears the payload — Script payloads don't
+        // belong in SqlScript fields and vice versa.
+        if (next !== prev) this.fixRuleForm.actionPayload = null;
+      }
+      if (prev === 'Composite') {
         this.fixRuleForm.steps = [];
       }
-      // Derive category when it is not yet set or was locked to Manual.
-      if (!this.fixRuleForm.fixCategory || this.fixRuleForm.fixCategory === 'Manual') {
-        this.fixRuleForm.fixCategory = this.defaultCategoryFor(next);
-      }
+      // Always re-derive the category — Fix Category is read-only so it must
+      // always reflect the current execution type, not a stale prior selection.
+      this.fixRuleForm.fixCategory = this.defaultCategoryFor(next);
     }
     this.fixRuleSaveError.set(null);
     this.syncFixRuleSignal();

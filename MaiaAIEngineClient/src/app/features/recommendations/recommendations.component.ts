@@ -42,10 +42,6 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
               @if (running()) { <span class="spinner"></span> }
               Classify Pending
             </button>
-            <button class="btn btn-primary btn-sm" (click)="runPipeline()" [disabled]="running()">
-              @if (running()) { <span class="spinner"></span> }
-              Run Full Pipeline
-            </button>
           </div>
         }
       </div>
@@ -183,6 +179,7 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
            all come along for free. -->
       <app-drawer
           [open]="selectedFailureId() !== null"
+          [width]="'760px'"
           [ariaLabel]="'Failure ' + selectedFailureId() + ' detail'"
           (close)="closeDrawer()">
         <ng-container drawer-title>
@@ -388,18 +385,6 @@ export class RecommendationsComponent implements OnInit {
     this.scanSvc.classifyPending().subscribe({
       next: r => {
         this.banner.set(`Classified ${pluralize(r.classified, 'failure')}, ${pluralize(r.suggestions, 'suggestion')} generated.`);
-        this.running.set(false);
-        this.load();
-      },
-      error: () => this.running.set(false)
-    });
-  }
-
-  runPipeline() {
-    this.running.set(true);
-    this.svc.runPipeline().subscribe({
-      next: r => {
-        this.banner.set(`Pipeline complete — ${pluralize(r.classifications, 'classification')}. ${r.message}`);
         this.running.set(false);
         this.load();
       },

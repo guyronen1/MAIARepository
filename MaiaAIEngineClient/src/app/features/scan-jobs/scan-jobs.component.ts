@@ -5,6 +5,7 @@ import { ScanService } from '../../core/services/scan.service';
 import { MonitoredJobsService } from '../../core/services/monitored-jobs.service';
 import { PolledData, WorkerStatusService } from '../../core/services/worker-status.service';
 import { MonitoredJob, ScanResult, WorkerStatus } from '../../core/models';
+import { scanIconForSources } from '../../core/util/scan-type-label.util';
 
 interface ScanRun { job: MonitoredJob; result: ScanResult | null; running: boolean; error: string | null; }
 
@@ -45,10 +46,10 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
                     @default          { — }
                   }
                 </span>
-                <div class="job-icon">{{ scanTypeIcon(run.job.scanTypeId) }}</div>
+                <div class="job-icon">{{ jobIcon(run.job) }}</div>
                 <div class="job-title">
                   <strong>{{ run.job.displayName ?? run.job.name }}</strong>
-                  <span class="text-muted text-sm">{{ run.job.jobTypeName }} · {{ run.job.scanTypeName }}</span>
+                  <span class="text-muted text-sm">{{ run.job.jobTypeName }}</span>
                 </div>
                 <button class="btn btn-primary btn-sm" (click)="scan(run)" [disabled]="run.running">
                   @if (run.running) { <span class="spinner"></span> }
@@ -58,11 +59,13 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
               </div>
 
               <div class="job-meta">
-                @if (run.job.logFolder) {
-                  <span class="meta-item">📁 {{ run.job.logFolder }} / {{ run.job.searchPatterns }}</span>
-                }
-                @if (run.job.connectionName) {
-                  <span class="meta-item">🗄 {{ run.job.connectionName }}</span>
+                @for (s of run.job.sources; track s.scanSourceId) {
+                  @if (s.logFolder) {
+                    <span class="meta-item">📁 {{ s.logFolder }}</span>
+                  }
+                  @if (s.connectionName) {
+                    <span class="meta-item">🗄 {{ s.connectionName }}</span>
+                  }
                 }
                 <span class="meta-item">{{ run.job.scanCheckRules.length }} check rules</span>
               </div>
@@ -229,8 +232,7 @@ export class ScanJobsComponent implements OnInit, OnDestroy {
     });
   }
 
-  scanTypeIcon(id: number): string {
-    const icons: Record<number, string> = { 1: '📁', 2: '🗄', 3: '🌐' };
-    return icons[id] ?? '📋';
+  jobIcon(job: MonitoredJob): string {
+    return job.sources.length ? scanIconForSources(job.sources) : '📋';
   }
 }

@@ -33,11 +33,16 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
           <h1>Unconfigured</h1>
           <p class="text-muted text-sm">Failures MAIA detected but can't fully act on — gaps in classification or fix policy.</p>
         </div>
-        <div class="window-toggle">
-          <button class="btn btn-sm" [class.btn-primary]="window() === '30d'" [class.btn-ghost]="window() !== '30d'"
-                  (click)="setWindow('30d')">30 days</button>
-          <button class="btn btn-sm" [class.btn-primary]="window() === 'all'" [class.btn-ghost]="window() !== 'all'"
-                  (click)="setWindow('all')">All time</button>
+        <div class="header-actions">
+          <button class="btn btn-ghost btn-sm" [disabled]="reclassing()" (click)="runClassifyPending()" title="Re-classify unclassified failures and generate recommendations using current rules.">
+            @if (reclassing()) { <span class="spinner"></span> } Re-classify &amp; generate suggestions
+          </button>
+          <div class="window-toggle">
+            <button class="btn btn-sm" [class.btn-primary]="window() === '30d'" [class.btn-ghost]="window() !== '30d'"
+                    (click)="setWindow('30d')">30 days</button>
+            <button class="btn btn-sm" [class.btn-primary]="window() === 'all'" [class.btn-ghost]="window() !== 'all'"
+                    (click)="setWindow('all')">All time</button>
+          </div>
         </div>
       </div>
 
@@ -190,6 +195,7 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
   styles: [`
     h1 { font-size: 22px; font-weight: 700; }
     .page-header { display: flex; justify-content: space-between; align-items: flex-start; }
+    .header-actions { display: flex; align-items: center; gap: 10px; }
     .window-toggle { display: flex; gap: 6px; }
     .ai-chip { background: linear-gradient(135deg, var(--primary), var(--accent)); color:#fff; font-size:10px; font-weight:800; padding:2px 7px; border-radius:6px; margin-right:6px; }
     .ai-chip.b { background: linear-gradient(135deg, #f59e0b, #d97706); }
@@ -225,13 +231,14 @@ export class UnconfiguredComponent implements OnInit {
   private scanSvc = inject(ScanService);
   private router  = inject(Router);
 
-  window     = signal<UnconfiguredWindow>('30d');
-  loadingA   = signal(false);
-  loadingB   = signal(false);
-  clusters   = signal<ClustersResponse | null>(null);
-  gaps       = signal<PolicyGapsResponse | null>(null);
-  banner     = signal<string | null>(null);
+  window      = signal<UnconfiguredWindow>('30d');
+  loadingA    = signal(false);
+  loadingB    = signal(false);
+  clusters    = signal<ClustersResponse | null>(null);
+  gaps        = signal<PolicyGapsResponse | null>(null);
+  banner      = signal<string | null>(null);
   showSamples = signal<Set<string>>(new Set());
+  reclassing  = signal(false);
 
   jobTypes   = signal<JobType[]>([]);
   errorTypes = signal<ErrorType[]>([]);
@@ -311,6 +318,18 @@ export class UnconfiguredComponent implements OnInit {
         });
       },
       error: (err) => { this.saving.set(false); this.saveError.set(err?.error?.message || err?.message || 'Save failed.'); },
+    });
+  }
+
+  runClassifyPending() {
+    this.reclassing.set(true);
+    this.scanSvc.classifyPending().subscribe({
+      next: r => {
+        this.banner.set(`Re-classified ${r.classified} failure(s), ${r.suggestions} suggestion(s) generated.`);
+        this.reclassing.set(false);
+        this.reload();
+      },
+      error: () => { this.banner.set('Re-classification failed — check server logs.'); this.reclassing.set(false); },
     });
   }
 

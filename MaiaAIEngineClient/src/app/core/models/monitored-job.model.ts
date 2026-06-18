@@ -65,17 +65,6 @@ export interface MonitoredJob {
   name:                    string;
   displayName:             string | null;
   jobTypeName:             string;
-  scanTypeId:              number;
-  scanTypeName:            string;
-  logFolder:               string | null;
-  searchPatterns:          string | null;
-  /** Optional base folder for relative InputPathPattern captures.
-   *  FS-scan jobs only; ignored when the regex captures an absolute path. */
-  inputFolder:             string | null;
-  /** FileContent scans: recurse into subdirectories of logFolder. */
-  includeSubfolders:       boolean;
-  connectionName:          string | null;
-  logSourceUrl:            string | null;
   pollingIntervalSeconds:  number;
   isActive:                boolean;
   description:             string | null;

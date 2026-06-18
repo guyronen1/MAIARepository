@@ -23,6 +23,13 @@ import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
         <button class="btn btn-primary" (click)="openDrawer(null)">+ Add Rule</button>
       </div>
 
+      @if (deleteError()) {
+        <div style="margin-bottom:12px;padding:8px 12px;border-radius:6px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;font-size:13px;display:flex;align-items:center;gap:8px">
+          ⚠ {{ deleteError() }}
+          <button class="btn btn-ghost btn-sm" style="margin-left:auto" (click)="deleteError.set(null)">✕</button>
+        </div>
+      }
+
       <!-- Filter bar -->
       <div class="filter-bar">
         <div class="form-group">
@@ -317,9 +324,10 @@ import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
 export class ClassificationRulesComponent implements OnInit {
   private svc = inject(ConfigService);
 
-  loading    = signal(false);
-  saving     = signal(false);
-  drawerOpen = signal(false);
+  loading     = signal(false);
+  saving      = signal(false);
+  drawerOpen  = signal(false);
+  deleteError = signal<string | null>(null);
   rules      = signal<ClassificationRule[]>([]);
   jobTypes   = signal<JobType[]>([]);
   errorTypes = signal<ErrorType[]>([]);
@@ -414,7 +422,11 @@ export class ClassificationRulesComponent implements OnInit {
 
   deleteRule(rule: ClassificationRule) {
     if (!confirm(`Delete rule "${rule.pattern}"?`)) return;
-    this.svc.deleteClassificationRule(rule.ruleId).subscribe({ next: () => this.reload() });
+    this.deleteError.set(null);
+    this.svc.deleteClassificationRule(rule.ruleId).subscribe({
+      next:  () => this.reload(),
+      error: (err) => this.deleteError.set(err?.error?.message ?? 'Delete failed — check console for details.'),
+    });
   }
 
   closeDrawer() { this.drawerOpen.set(false); this.saving.set(false); }

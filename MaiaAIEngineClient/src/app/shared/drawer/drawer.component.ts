@@ -1,4 +1,4 @@
-import { Component, HostListener, inject, input, output } from '@angular/core';
+import { Component, HostListener, inject, input, output, computed } from '@angular/core';
 import { NavigationHistoryService } from '../../core/services/navigation-history.service';
 
 /**
@@ -24,7 +24,7 @@ import { NavigationHistoryService } from '../../core/services/navigation-history
   template: `
     @if (open()) {
       <div class="drawer-backdrop" (click)="close.emit()" aria-hidden="true"></div>
-      <aside class="drawer" role="dialog" aria-modal="true" [attr.aria-label]="ariaLabel()">
+      <aside class="drawer" role="dialog" aria-modal="true" [attr.aria-label]="ariaLabel()" [style.width]="width()">
         <header class="drawer-header">
           <div class="drawer-title">
             @if (navHistory.previousLabel(); as backLabel) {
@@ -60,11 +60,8 @@ import { NavigationHistoryService } from '../../core/services/navigation-history
     .drawer {
       position: fixed;
       top: 0; right: 0;
-      width: 760px;
       max-width: 100vw;
-      /* Auto-size to content; cap at viewport and let the body scroll. */
-      height: auto;
-      max-height: 100vh;
+      height: 100vh;
       background: var(--surface);
       border-left: 1px solid var(--border);
       box-shadow: -8px 0 24px rgba(15, 23, 42, 0.12);
@@ -85,7 +82,7 @@ import { NavigationHistoryService } from '../../core/services/navigation-history
       background: var(--surface);
       flex-shrink: 0;
     }
-    .drawer-title { display: flex; align-items: center; gap: 6px; font-size: 14px; flex-wrap: wrap; }
+    .drawer-title { display: flex; align-items: center; gap: 6px; font-size: 15px; font-weight: 600; flex-wrap: wrap; }
     .drawer-back {
       font-size: 12px;
       color: var(--primary, #6366f1);
@@ -111,6 +108,7 @@ export class DrawerComponent {
 
   open      = input<boolean>(false);
   ariaLabel = input<string>('Detail');
+  width     = input<string>('600px');
 
   close = output<void>();
 

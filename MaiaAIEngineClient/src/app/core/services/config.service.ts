@@ -53,13 +53,8 @@ export interface FixPolicyRule {
 }
 
 export interface UpsertJobRequest {
-  name: string; displayName: string | null; jobTypeId: number; scanTypeId: number;
-  logFolder: string | null; searchPatterns: string | null; connectionName: string | null;
-  logSourceUrl: string | null; pollingIntervalSeconds: number; isActive: boolean; description: string | null;
-  /** Optional base folder for relative InputPathPattern captures (FS jobs). */
-  inputFolder: string | null;
-  /** FileContent scans: recurse into subdirectories of logFolder. */
-  includeSubfolders: boolean;
+  name: string; displayName: string | null; jobTypeId: number;
+  pollingIntervalSeconds: number; isActive: boolean; description: string | null;
 }
 export interface UpsertScanSourceRequest {
   name: string; scanTypeId: number;

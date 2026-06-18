@@ -5,7 +5,7 @@ import { ConfigService, JobType, UpsertJobRequest } from '../../../core/services
 import { MonitoredJob } from '../../../core/models';
 import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
 import { DrawerComponent } from '../../../shared/drawer/drawer.component';
-import { scanTypeLabelFromNames, scanTypeTitleFromSources, scanIconForSources, scanIconForId }
+import { scanTypeLabelFromNames, scanTypeTitleFromSources, scanIconForSources }
   from '../../../core/util/scan-type-label.util';
 
 /**
@@ -194,10 +194,10 @@ export class MonitoredJobsComponent implements OnInit {
   // dashboard via scan-type-label.util), not the vestigial job-level ScanType. Fall
   // back to the legacy job field only until the first payload / for sourceless jobs.
   jobIcon(j: MonitoredJob): string {
-    return j.sources.length ? scanIconForSources(j.sources) : scanIconForId(j.scanTypeId);
+    return j.sources.length ? scanIconForSources(j.sources) : '📋';
   }
   jobScanLabel(j: MonitoredJob): string {
-    return scanTypeLabelFromNames(j.sources.map(s => s.scanTypeName), j.scanTypeName);
+    return scanTypeLabelFromNames(j.sources.map(s => s.scanTypeName), '');
   }
   jobScanTitle(j: MonitoredJob): string {
     return scanTypeTitleFromSources(j.sources);
@@ -213,9 +213,6 @@ export class MonitoredJobsComponent implements OnInit {
       const jt = this.jobTypes().find(t => t.name === job.jobTypeName);
       this.jobForm = {
         name: job.name, displayName: job.displayName, jobTypeId: jt?.jobTypeId ?? 0,
-        scanTypeId: job.scanTypeId, logFolder: job.logFolder, searchPatterns: job.searchPatterns,
-        inputFolder: job.inputFolder, includeSubfolders: job.includeSubfolders,
-        connectionName: job.connectionName, logSourceUrl: job.logSourceUrl,
         pollingIntervalSeconds: job.pollingIntervalSeconds, isActive: job.isActive,
         description: job.description,
       };
@@ -275,9 +272,7 @@ export class MonitoredJobsComponent implements OnInit {
   }
 
   private blankJob(): UpsertJobRequest {
-    return { name: '', displayName: null, jobTypeId: 0, scanTypeId: 1, logFolder: null,
-             searchPatterns: null, inputFolder: null, includeSubfolders: false,
-             connectionName: null, logSourceUrl: null,
+    return { name: '', displayName: null, jobTypeId: 0,
              pollingIntervalSeconds: 300, isActive: true, description: null };
   }
 }
