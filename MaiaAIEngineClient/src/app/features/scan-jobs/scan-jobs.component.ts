@@ -219,13 +219,15 @@ export class ScanJobsComponent implements OnInit, OnDestroy {
   scanAll() {
     this.allRunning.set(true);
     this.scanSvc.scanAll().subscribe({
-      next: results => {
-        const map = new Map(results.map(r => [r.jobName, r]));
-        this.runs.update(runs => runs.map(run => ({
-          ...run,
-          result: map.get(run.job.name) ?? null,
-          running: false
-        })));
+      next: (results: any[]) => {
+        const byId = new Map(results.map(r => [r.monitoredJobId ?? r.MonitoredJobId, r]));
+        this.runs.update(runs => runs.map(run => {
+          const r = byId.get(run.job.monitoredJobId);
+          if (!r) return { ...run, running: false };
+          if (r.skipped || r.Skipped)
+            return { ...run, running: false, error: 'Already scanning — skipped' };
+          return { ...run, running: false, result: r as any, error: null };
+        }));
         this.allRunning.set(false);
       },
       error: () => this.allRunning.set(false)
