@@ -4,7 +4,7 @@ import { PolledData, WorkerStatusService } from '../../core/services/worker-stat
 import { WorkerStatus } from '../../core/models';
 import { pluralize } from '../../core/pipes/pluralize.pipe';
 
-type DotState = 'green' | 'yellow' | 'red' | 'gray';
+type DotState = 'green' | 'yellow' | 'red' | 'gray' | 'paused';
 
 @Component({
   selector: 'app-top-bar',
@@ -95,6 +95,13 @@ type DotState = 'green' | 'yellow' | 'red' | 'gray';
       border: 1px solid var(--border);
       .dot { background: var(--text-muted); }
     }
+    /* Paused = operator paused the scan loop */
+    .state-paused {
+      color: #b45309;
+      background: #fef3c7;
+      border: 1px solid #fcd34d;
+      .dot { background: #b45309; }
+    }
     @keyframes dot-pulse {
       0%, 100% { opacity: 0.65; }
       50%      { opacity: 1; }
@@ -135,6 +142,7 @@ export class TopBarComponent {
   dotState = computed<DotState>(() => {
     const s = this.status();
     if (!s) return 'gray';
+    if (s.isPaused) return 'paused';
     if (!s.workerAlive) return 'red';
     if (s.activeScans.length > 0) return 'green';
     // workerAlive=true with no active scans → check how recent
@@ -148,6 +156,7 @@ export class TopBarComponent {
       case 'green':  return 'Live';
       case 'yellow': return 'Idle';
       case 'red':    return 'Offline';
+      case 'paused': return 'Paused';
       default:       return '—';
     }
   });
@@ -155,6 +164,7 @@ export class TopBarComponent {
   tooltip = computed(() => {
     const s = this.status();
     if (!s) return 'Worker status: no data yet';
+    if (s.isPaused) return 'Monitoring is paused — resume via the Dashboard';
     if (s.activeScans.length > 0)
       return `Worker active — ${pluralize(s.activeScans.length, 'scan')} running`;
     if (!s.lastActivityAt) return 'Worker has not completed a scan yet';
