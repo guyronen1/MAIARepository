@@ -6,6 +6,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { RecommendationsService } from '../../core/services/recommendations.service';
 import { ScanService } from '../../core/services/scan.service';
 import { ConfigService, FixPolicyRule, UpsertFixPolicyRuleRequest } from '../../core/services/config.service';
+import { AuthService } from '../../core/services/auth.service';
 import { Recommendation, PagedResult } from '../../core/models';
 import { PluralizePipe, pluralize } from '../../core/pipes/pluralize.pipe';
 import { FailureDetailComponent } from '../failures/failure-detail.component';
@@ -36,7 +37,7 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
             }
           </p>
         </div>
-        @if (!isOperatorMode()) {
+        @if (!isOperatorMode() && canAct()) {
           <div class="page-actions">
             <button class="btn btn-ghost btn-sm" (click)="classifyPending()" [disabled]="running()">
               @if (running()) { <span class="spinner"></span> }
@@ -116,20 +117,29 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
                     </div>
                   </td>
                   <td>
-                    @if (policyMissing(r)) {
-                      <div class="policy-missing">
-                        <label class="toggle disabled" title="No enabled FixPolicyRule for this error">
-                          <input type="checkbox" disabled [checked]="false" />
+                    @if (canAdmin()) {
+                      @if (policyMissing(r)) {
+                        <div class="policy-missing">
+                          <label class="toggle disabled" title="No enabled FixPolicyRule for this error">
+                            <input type="checkbox" disabled [checked]="false" />
+                            <span class="slider"></span>
+                          </label>
+                          <button class="btn-link btn-sm" (click)="configurePolicy(r)">Configure policy</button>
+                        </div>
+                      } @else {
+                        <label class="toggle">
+                          <input type="checkbox"
+                                 [checked]="!!r.policyIsAutoHealEligible"
+                                 [disabled]="togglingRule() === r.fixPolicyRuleId"
+                                 (change)="toggleAutoHeal(r, $any($event.target).checked)" />
                           <span class="slider"></span>
                         </label>
-                        <button class="btn-link btn-sm" (click)="configurePolicy(r)">Configure policy</button>
-                      </div>
+                      }
                     } @else {
-                      <label class="toggle">
-                        <input type="checkbox"
-                               [checked]="!!r.policyIsAutoHealEligible"
-                               [disabled]="togglingRule() === r.fixPolicyRuleId"
-                               (change)="toggleAutoHeal(r, $any($event.target).checked)" />
+                      <!-- Read-only for non-admins (auto-heal is an Admin policy edit). -->
+                      <label class="toggle disabled"
+                             [title]="policyMissing(r) ? 'No enabled policy' : (r.policyIsAutoHealEligible ? 'Auto-heal on' : 'Auto-heal off')">
+                        <input type="checkbox" disabled [checked]="!policyMissing(r) && !!r.policyIsAutoHealEligible" />
                         <span class="slider"></span>
                       </label>
                     }
@@ -154,7 +164,7 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
                   </td>
                   <td class="text-muted text-sm">{{ r.recommendedAt | date:'MM/dd HH:mm' }}</td>
                   <td>
-                    @if (!r.isExecuted && r.operatorApproved === null) {
+                    @if (!r.isExecuted && r.operatorApproved === null && canAct()) {
                       <div style="display:flex;gap:4px">
                         <button class="btn btn-success btn-sm" (click)="approve(r)">✓</button>
                         <button class="btn btn-danger btn-sm"  (click)="reject(r)">✕</button>
@@ -230,7 +240,13 @@ export class RecommendationsComponent implements OnInit {
   private cfgSvc  = inject(ConfigService);
   private route   = inject(ActivatedRoute);
   private destroyRef = inject(DestroyRef);
+  private auth    = inject(AuthService);
   router          = inject(Router);
+
+  /** Approve/reject are Operator+; the auto-heal toggle + Configure-policy are Admin
+   *  (they mutate a FixPolicyRule). Cosmetic — the API enforces these tiers too. */
+  canAct   = computed(() => this.auth.hasAtLeast('Operator'));
+  canAdmin = computed(() => this.auth.hasAtLeast('Administrator'));
 
   loading        = signal(false);
   running        = signal(false);

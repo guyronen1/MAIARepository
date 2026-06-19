@@ -12,6 +12,7 @@ import { ResolutionMixChartComponent } from './resolution-mix-chart.component';
 import { FailureDetailComponent } from '../failures/failure-detail.component';
 import { DrawerComponent } from '../../shared/drawer/drawer.component';
 import { scanTypeLabelFromNames, scanTypeTitleFromSources } from '../../core/util/scan-type-label.util';
+import { AuthService } from '../../core/services/auth.service';
 
 type ChartRange = '24h' | '7d' | '30d';
 
@@ -36,18 +37,27 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
         <div class="page-title">
           <div class="title-row">
             <h1>Dashboard</h1>
-            <button class="worker-pill"
-                    [class.paused]="isSystemPaused()"
-                    [disabled]="pauseToggling()"
-                    (click)="togglePause()"
-                    [title]="isSystemPaused() ? 'Monitoring is paused — click to resume' : 'Monitoring is live — click to pause'">
-              @if (pauseToggling()) {
-                <span class="pill-spinner"></span>
-              } @else {
+            @if (canControlWorker()) {
+              <button class="worker-pill"
+                      [class.paused]="isSystemPaused()"
+                      [disabled]="pauseToggling()"
+                      (click)="togglePause()"
+                      [title]="isSystemPaused() ? 'Monitoring is paused — click to resume' : 'Monitoring is live — click to pause'">
+                @if (pauseToggling()) {
+                  <span class="pill-spinner"></span>
+                } @else {
+                  <span class="pill-dot"></span>
+                }
+                {{ isSystemPaused() ? 'Paused' : 'Live' }}
+              </button>
+            } @else {
+              <!-- Non-admins see the status, but pause/resume is Admin-only. -->
+              <span class="worker-pill worker-pill-static" [class.paused]="isSystemPaused()"
+                    [title]="isSystemPaused() ? 'Monitoring is paused' : 'Monitoring is live'">
                 <span class="pill-dot"></span>
-              }
-              {{ isSystemPaused() ? 'Paused' : 'Live' }}
-            </button>
+                {{ isSystemPaused() ? 'Paused' : 'Live' }}
+              </span>
+            }
           </div>
           <p class="text-muted text-sm">Real-time monitoring overview</p>
         </div>
@@ -322,6 +332,7 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
     .page-title { display: flex; flex-direction: column; }
     .title-row  { display: flex; align-items: center; gap: 10px; }
     /* Live / Paused worker-control pill */
+    .worker-pill-static { cursor: default; }
     .worker-pill {
       display: inline-flex; align-items: center; gap: 5px;
       padding: 3px 10px; border-radius: 12px; border: 1px solid;
@@ -838,6 +849,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   // ── Worker pause/resume toggle ────────────────────────────────────────
+  private auth = inject(AuthService);
+  /** Pausing/resuming the worker is an Admin operation (POST /api/admin/worker/*). */
+  canControlWorker = computed(() => this.auth.hasAtLeast('Administrator'));
   isSystemPaused = computed(() => this.workerStatus()?.isPaused ?? false);
   pauseToggling  = signal(false);
 

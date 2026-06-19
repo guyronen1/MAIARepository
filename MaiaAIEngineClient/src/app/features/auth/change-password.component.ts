@@ -41,7 +41,7 @@ import { AuthService } from '../../core/services/auth.service';
           {{ busy() ? 'Saving…' : 'Change password' }}
         </button>
 
-        @if (forced()) {
+        @if (canSkip()) {
           <button type="button" class="btn-skip" [disabled]="busy()" (click)="skip()">
             Skip for now
           </button>
@@ -81,6 +81,10 @@ export class ChangePasswordComponent {
 
   /** True when the server flagged a forced rotation (seeded admin / admin reset). */
   forced = computed(() => this.auth.currentUser()?.mustChangePassword ?? false);
+
+  /** Skip is offered only when the server permits it (Development only) AND a rotation
+   *  is actually pending. In prod this is always false → rotation is mandatory. */
+  canSkip = computed(() => this.forced() && (this.auth.currentUser()?.canSkipPasswordChange ?? false));
 
   canSubmit = computed(() => !this.busy());
 

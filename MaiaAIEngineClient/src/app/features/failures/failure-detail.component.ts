@@ -3,6 +3,7 @@ import { DatePipe, PercentPipe } from '@angular/common';
 import { FailuresService } from '../../core/services/failures.service';
 import { RecommendationsService } from '../../core/services/recommendations.service';
 import { ConfigService, FixPolicyRuleStep } from '../../core/services/config.service';
+import { AuthService } from '../../core/services/auth.service';
 import { FailureStatus, FixExecution, Recommendation } from '../../core/models';
 import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
 
@@ -56,7 +57,7 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
               <h3>Failure Details</h3>
               <div class="header-actions">
                 <span class="badge" [class]="'badge-' + failure()!.status.toLowerCase()">{{ statusLabel(failure()!.status) }}</span>
-                @if (failure()!.status === 'AwaitingManualAction' || failure()!.status === 'ManualRequired') {
+                @if (canAct() && (failure()!.status === 'AwaitingManualAction' || failure()!.status === 'ManualRequired')) {
                   <!-- Exit ramp for the off-system manual flow. Visible when:
                          • Status = AwaitingManualAction → operator approved a
                            Manual rec; clicking confirms the off-system work done
@@ -195,6 +196,7 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
                         }
                       </span>
 
+                      @if (canAct()) {
                       @if (!rec.isExecuted && rec.operatorApproved === null) {
                         <div class="rec-actions">
                           <!-- policyActionType=Manual or null → no automation runs.
@@ -244,6 +246,7 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
                             @else                                                  { Already rejected }
                           </span>
                         </div>
+                      }
                       }
                     </div>
                   </div>
@@ -422,6 +425,11 @@ export class FailureDetailComponent implements OnDestroy {
   private failureSvc = inject(FailuresService);
   private recSvc    = inject(RecommendationsService);
   private configSvc = inject(ConfigService);
+  private auth      = inject(AuthService);
+
+  /** Approve/reject/retry/mark-resolved are Operator+. A read-only User sees the
+   *  failure detail but no action controls (cosmetic; the API enforces too). */
+  canAct = computed(() => this.auth.hasAtLeast('Operator'));
 
   /** Cache of composite policy step lists, keyed by ruleId. Lazy-fetched on
    *  failure load and on every silent refresh — but cached per ruleId so a

@@ -10,6 +10,9 @@ export interface CurrentUser {
   username: string;
   role: MaiaRole;
   mustChangePassword: boolean;
+  /** Server says the forced change may be skipped — true ONLY in a Development
+   *  deployment. Drives whether the "Skip for now" button is offered. */
+  canSkipPasswordChange: boolean;
 }
 
 interface MeResponse {
@@ -17,6 +20,7 @@ interface MeResponse {
   username?: string;
   role?: MaiaRole;
   mustChangePassword?: boolean;
+  canSkipPasswordChange?: boolean;
 }
 
 /**
@@ -42,7 +46,11 @@ export class AuthService {
 
   login(username: string, password: string): Observable<CurrentUser> {
     return this.http.post<MeResponse>(`${this.base}/login`, { username, password }).pipe(
-      map(r => ({ username: r.username!, role: r.role!, mustChangePassword: !!r.mustChangePassword })),
+      map(r => ({
+        username: r.username!, role: r.role!,
+        mustChangePassword: !!r.mustChangePassword,
+        canSkipPasswordChange: !!r.canSkipPasswordChange,
+      })),
       tap(u => this.currentUser.set(u)),
     );
   }
@@ -76,7 +84,11 @@ export class AuthService {
   refresh(): Observable<CurrentUser | null> {
     return this.http.get<MeResponse>(`${this.base}/me`).pipe(
       map(r => r.authenticated
-        ? { username: r.username!, role: r.role!, mustChangePassword: !!r.mustChangePassword }
+        ? {
+            username: r.username!, role: r.role!,
+            mustChangePassword: !!r.mustChangePassword,
+            canSkipPasswordChange: !!r.canSkipPasswordChange,
+          }
         : null),
       tap(u => this.currentUser.set(u)),
       catchError(() => { this.currentUser.set(null); return of(null); }),

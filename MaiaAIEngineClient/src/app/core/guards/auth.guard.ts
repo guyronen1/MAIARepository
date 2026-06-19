@@ -5,17 +5,19 @@ import { AuthService, CurrentUser } from '../services/auth.service';
 
 /**
  * Gate for the authenticated shell. Cosmetic relative to the API (which enforces
- * independently): not authenticated → /login. The change-password prompt is a soft,
- * skippable one-time nudge handled at login (not forced here), so the guard does not
- * redirect on MustChangePassword. On first load the cached identity is empty, so it
- * asks the server (/me) once.
+ * independently): not authenticated → /login; must-change-password → /change-password
+ * (the API blocks every /api/* call until rotation, so route them there). On first load
+ * the cached identity is empty, so it asks the server (/me) once.
  */
-export const authGuard: CanActivateFn = () => {
+export const authGuard: CanActivateFn = (_route, state) => {
   const auth = inject(AuthService);
   const router = inject(Router);
 
-  const decide = (u: CurrentUser | null): boolean | UrlTree =>
-    u ? true : router.parseUrl('/login');
+  const decide = (u: CurrentUser | null): boolean | UrlTree => {
+    if (!u) return router.parseUrl('/login');
+    if (u.mustChangePassword && state.url !== '/change-password') return router.parseUrl('/change-password');
+    return true;
+  };
 
   const cached = auth.currentUser();
   return cached ? decide(cached) : auth.refresh().pipe(map(decide));

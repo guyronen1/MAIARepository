@@ -32,13 +32,17 @@ the window so it's short and announced, not discovered.
 | | |
 |---|---|
 | Username | `admin` |
-| Password | `ChangeMe!2026` |
+| Password | `admin` |
 | Role | Administrator |
-| Forced rotation | Yes (`MustChangePassword = true`) |
+| Forced rotation | Yes (`MustChangePassword = true`) — **non-skippable in prod** |
 
 Seeded by migration `AddAuthTables` (raw SQL insert with a pre-computed PBKDF2 hash). The
-default credential is only a bootstrap — the forced rotation at first login is what keeps it
-from persisting. **Rotate it immediately in step 2.**
+default credential is only a bootstrap — `MustChangePasswordMiddleware` 403s every `/api/*`
+call until it's changed, so the seed is unusable for anything but its own rotation. The seed
+value itself (`admin`/`admin`) is therefore not the control; the **forced rotation is**, and
+it cannot be skipped outside Development (the `dismiss-password-change` skip is gated to
+`IsDevelopment()` and fails closed → `403 SkipNotAllowed` in prod). **Rotate it immediately
+in step 2** to close the deploy→first-login window (whoever logs in first sets the password).
 
 > **Create a second administrator in step 3.** With a single admin, a lost admin password has
 > no in-app recovery (no email reset in v1). A second admin is your recovery path.

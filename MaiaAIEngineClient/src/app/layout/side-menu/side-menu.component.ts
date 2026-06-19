@@ -1,7 +1,9 @@
-import { Component } from '@angular/core';
+import { Component, computed, inject } from '@angular/core';
 import { RouterLink, RouterLinkActive } from '@angular/router';
+import { AuthService, MaiaRole } from '../../core/services/auth.service';
 
 interface NavItem { label: string; icon: string; route: string; }
+interface NavSection { title: string; minRole: MaiaRole; items: NavItem[]; }
 
 @Component({
   selector: 'app-side-menu',
@@ -9,7 +11,7 @@ interface NavItem { label: string; icon: string; route: string; }
   imports: [RouterLink, RouterLinkActive],
   template: `
     <nav class="sidenav">
-      @for (section of sections; track section.title) {
+      @for (section of visibleSections(); track section.title) {
         <div class="nav-section">
           <span class="section-title">{{ section.title }}</span>
           @for (item of section.items; track item.route) {
@@ -65,9 +67,18 @@ interface NavItem { label: string; icon: string; route: string; }
   `]
 })
 export class SideMenuComponent {
-  sections = [
+  private auth = inject(AuthService);
+
+  /** Cosmetic gating — the API enforces independently. Monitor = any authenticated
+   *  user; Actions + Configuration = Operator and up (config writes within are still
+   *  Admin-gated server-side, surfaced via the 403 toast). */
+  readonly visibleSections = computed<NavSection[]>(() =>
+    this.sections.filter(s => this.auth.hasAtLeast(s.minRole)));
+
+  sections: NavSection[] = [
     {
       title: 'Monitor',
+      minRole: 'User',
       items: [
         { label: 'Dashboard',       icon: svgIcon('M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6'), route: '/dashboard' },
         { label: 'Failures',        icon: svgIcon('M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z'), route: '/failures' },
@@ -77,6 +88,7 @@ export class SideMenuComponent {
     },
     {
       title: 'Actions',
+      minRole: 'Operator',
       items: [
         { label: 'Operator Actions', icon: svgIcon('M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4'), route: '/operator-actions' },
         { label: 'Scan Jobs',        icon: svgIcon('M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z'), route: '/scan-jobs' },
@@ -84,6 +96,7 @@ export class SideMenuComponent {
     },
     {
       title: 'Configuration',
+      minRole: 'Operator',
       items: [
         { label: 'Monitored Jobs',        icon: svgIcon('M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10'), route: '/config/monitored-jobs' },
         { label: 'Classification Rules',  icon: svgIcon('M4 6h16M4 10h16M4 14h16M4 18h16'), route: '/config/classification-rules' },
