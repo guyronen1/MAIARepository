@@ -1,6 +1,7 @@
 import { Routes } from '@angular/router';
 import { ShellComponent } from './layout/shell/shell.component';
 import { authGuard } from './core/guards/auth.guard';
+import { adminGuard } from './core/guards/admin.guard';
 
 export const routes: Routes = [
   // Public — no shell, no guard.
@@ -26,6 +27,7 @@ export const routes: Routes = [
       { path: 'config/monitored-jobs/:id', loadComponent: () => import('./features/config/monitored-jobs/job-config.component').then(m => m.JobConfigComponent) },
       { path: 'config/classification-rules', loadComponent: () => import('./features/config/classification-rules/classification-rules.component').then(m => m.ClassificationRulesComponent) },
       { path: 'config/error-types',          loadComponent: () => import('./features/config/error-types/error-types.component').then(m => m.ErrorTypesComponent) },
+      { path: 'config/users', canActivate: [adminGuard], loadComponent: () => import('./features/config/users/users.component').then(m => m.UsersComponent) },
     ]
   },
   { path: '**', redirectTo: '' }
