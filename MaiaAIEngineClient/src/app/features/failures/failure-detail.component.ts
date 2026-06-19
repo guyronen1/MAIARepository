@@ -544,8 +544,7 @@ export class FailureDetailComponent implements OnDestroy {
    *  doesn't error. Reload the detail to pull the new Status + Stage. */
   markResolved() {
     this.markingResolved.set(true);
-    // Operator id hardcoded for now — same convention as approve/reject.
-    this.failureSvc.markResolved(this.failureId(), 'operator').subscribe({
+    this.failureSvc.markResolved(this.failureId()).subscribe({
       next:  () => { this.markingResolved.set(false); this.reload(); },
       error: () => { this.markingResolved.set(false); },
     });
@@ -642,7 +641,7 @@ export class FailureDetailComponent implements OnDestroy {
   }
 
   approve(rec: Recommendation) {
-    this.recSvc.approveRecommendation(rec.recommendationId, 'operator').subscribe({
+    this.recSvc.approveRecommendation(rec.recommendationId).subscribe({
       next: () => this.reload(),
       error: () => rec.operatorApproved = true
     });
@@ -650,7 +649,7 @@ export class FailureDetailComponent implements OnDestroy {
   }
 
   reject(rec: Recommendation) {
-    this.recSvc.rejectRecommendation(rec.recommendationId, 'operator').subscribe({
+    this.recSvc.rejectRecommendation(rec.recommendationId).subscribe({
       next: () => this.reload(),
       error: () => rec.operatorApproved = false
     });
@@ -671,7 +670,7 @@ export class FailureDetailComponent implements OnDestroy {
    *  we reload to show the new outcome. */
   retry(rec: Recommendation) {
     this.retrying.set(rec.recommendationId);
-    this.recSvc.retryRecommendation(rec.recommendationId, 'operator').subscribe({
+    this.recSvc.retryRecommendation(rec.recommendationId).subscribe({
       next:  () => { this.retrying.set(null); this.reload(); },
       error: () => { this.retrying.set(null); },
     });

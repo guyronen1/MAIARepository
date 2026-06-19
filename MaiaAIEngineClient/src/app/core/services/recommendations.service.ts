@@ -15,19 +15,21 @@ export class RecommendationsService {
     );
   }
 
-  approveRecommendation(id: number, operatorId: string): Observable<unknown> {
-    return this.http.post(`${this.base}/recommendations/${id}/approve`, { operatorId });
+  // The acting operator is the authenticated session (server-side) — no operatorId
+  // travels from the client.
+  approveRecommendation(id: number): Observable<unknown> {
+    return this.http.post(`${this.base}/recommendations/${id}/approve`, {});
   }
 
-  rejectRecommendation(id: number, operatorId: string): Observable<unknown> {
-    return this.http.post(`${this.base}/recommendations/${id}/reject`, { operatorId });
+  rejectRecommendation(id: number): Observable<unknown> {
+    return this.http.post(`${this.base}/recommendations/${id}/reject`, {});
   }
 
   /** Re-run a fix that failed to execute (failure is in ManualRequired).
    *  Re-arms the failure + rec and drains synchronously with the current
    *  policy — use after fixing the root cause. */
-  retryRecommendation(id: number, operatorId: string): Observable<unknown> {
-    return this.http.post(`${this.base}/recommendations/${id}/retry`, { operatorId });
+  retryRecommendation(id: number): Observable<unknown> {
+    return this.http.post(`${this.base}/recommendations/${id}/retry`, {});
   }
 
   generateSuggestions(): Observable<{ generated: number }> {

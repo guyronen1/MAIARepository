@@ -53,10 +53,10 @@ export class FailuresService {
    * Lives under /api/failures (operator-action namespace), not /api/data
    * (read-only namespace).
    */
-  markResolved(failureId: number, operatorId: string): Observable<void> {
+  markResolved(failureId: number): Observable<void> {
     return this.http.post<void>(
       `${environment.apiUrl}/failures/${failureId}/mark-resolved`,
-      { operatorId });
+      {});
   }
 
   getDashboardStats(): Observable<DashboardStats> {

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<Mimshak xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <KoteretKovetz>
+    <SUG-MIMSHAK>20</SUG-MIMSHAK>
+    <MISPAR-GIRSAT-XML>009</MISPAR-GIRSAT-XML>
+    <TAARICH-BITZUA>20250703034602</TAARICH-BITZUA>
+    <KOD-SVIVAT-AVODA>2</KOD-SVIVAT-AVODA>
+    <MISPAR-HAKOVETZ>202507030346025148134507244</MISPAR-HAKOVETZ>
+    <MISPAR-SIDURI>7244</MISPAR-SIDURI>
+    <NetuneiGoremSholech>
+      <KOD-SHOLECH>2</KOD-SHOLECH>
+      <SUG-MEZAHE-SHOLECH>1</SUG-MEZAHE-SHOLECH>
+      <MISPAR-ZIHUI-SHOLECH>514813450</MISPAR-ZIHUI-SHOLECH>
+      <SHEM-GOREM-SHOLECH>המסלקה הפנסיונית</SHEM-GOREM-SHOLECH>
+      <SHEM-PRATI-ISH-KESHER-SHOLECH>helpdesk</SHEM-PRATI-ISH-KESHER-SHOLECH>
+      <SHEM-MISHPACHA-ISH-KESHER-SHOLECH>SwiftNess</SHEM-MISHPACHA-ISH-KESHER-SHOLECH>
+      <MISPAR-TELEPHONE-KAVI-ISH-KESHER-SHOLECH>037706000</MISPAR-TELEPHONE-KAVI-ISH-KESHER-SHOLECH>
+      <E-MAIL-ISH-KESHER-SHOLECH>helpdesk@swiftness.co.il</E-MAIL-ISH-KESHER-SHOLECH>
+      <MISPAR-CELLULARI-ISH-KESHER-SHOLECH>037706000</MISPAR-CELLULARI-ISH-KESHER-SHOLECH>
+      <MISPAR-ZIHUI-ETZEL-YATZRAN-NIMAAN/>
+    </NetuneiGoremSholech>
+    <NetuneiGoremNimaan xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <KOD-NIMAAN>1</KOD-NIMAAN>
+      <SUG-MEZAHE-NIMAAN>1</SUG-MEZAHE-NIMAAN>
+      <MISPAR-ZIHUI-NIMAAN>520030693</MISPAR-ZIHUI-NIMAAN>
+      <MISPAR-ZIHUI-ETZEL-YATZRAN-NIMAAN xsi:nil="true"/>
+    </NetuneiGoremNimaan>
+  </KoteretKovetz>
+  <GufHamimshak xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <YeshutGoremPoneLemislaka xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <SUG-PONE xsi:nil="true" />
+      <SUG-KOD-MEZAHE-PONE xsi:nil="true" />
+      <MISPAR-MEZAHE-PONE xsi:nil="true" />
+      <SHEM-GOREM-PONE xsi:nil="true" />
+      <MISPAR-MEZAHE-METAFEL xsi:nil="true" />
+      <SHEM-PRATI-PONE-LEMISLAKA xsi:nil="true" />
+      <SHEM-MISHPACHA-PONE-LEMISLAKA xsi:nil="true" />
+      <MISPAR-TELEPHONE-KAVI-PONE-LEMISLAKA xsi:nil="true" />
+      <E-MAIL-PONE-LEMISLAKA xsi:nil="true" />
+      <MISPAR-CELLULARI xsi:nil="true" />
+      <MISPAR-ZIHUI-ETZEL-YATZRAN-NIMAAN xsi:nil="true" />
+      <SugMashov xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+        <SUG-MIMSHAK-LEGABAV-MUAVAR-HIZUN-CHOZER>6</SUG-MIMSHAK-LEGABAV-MUAVAR-HIZUN-CHOZER>
+        <SHEM-HAKOVETZ>104000514813450EVENTS000007202507022345116133.DAT</SHEM-HAKOVETZ>
+        <MISPAR-HAKOVETZ>20250703034602000514813450</MISPAR-HAKOVETZ>
+        <RAMAT-MASHOV>2</RAMAT-MASHOV>
+        <SUG-MASHOV>3</SUG-MASHOV>
+        <SUG-DIVUACH xsi:nil="true" />
+        <KAMUT-RESHUMOT-TKINOT xsi:nil="true" />
+        <KAMUT-RESHUMOT-KOLEL xsi:nil="true" />
+        <MashovBeramatReshuma xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+          <MISPAR-MISLAKA>9FE9E53D-8970-4AC6-8E21-1A08531AC2E9</MISPAR-MISLAKA>
+          <MISPAR-MEZAHE-RESHUMA>0</MISPAR-MEZAHE-RESHUMA>
+          <STATUS-RESHUMA>4</STATUS-RESHUMA>
+          <KOD-SHGIHA-BERAMAT-RESHUMA>111</KOD-SHGIHA-BERAMAT-RESHUMA>
+        </MashovBeramatReshuma>
+      </SugMashov>
+    </YeshutGoremPoneLemislaka>
+  </GufHamimshak>
+</Mimshak>

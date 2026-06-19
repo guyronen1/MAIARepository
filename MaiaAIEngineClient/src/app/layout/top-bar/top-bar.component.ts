@@ -1,8 +1,10 @@
 import { Component, computed, inject } from '@angular/core';
+import { Router } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { PolledData, WorkerStatusService } from '../../core/services/worker-status.service';
 import { WorkerStatus } from '../../core/models';
 import { pluralize } from '../../core/pipes/pluralize.pipe';
+import { AuthService } from '../../core/services/auth.service';
 
 type DotState = 'green' | 'yellow' | 'red' | 'gray' | 'paused';
 
@@ -26,13 +28,16 @@ type DotState = 'green' | 'yellow' | 'red' | 'gray' | 'paused';
           <span class="dot"></span>
           <span class="live-label">{{ liveLabel() }}</span>
         </div>
-        <div class="user-chip">
-          <div class="user-avatar">OP</div>
-          <div class="user-info">
-            <span class="user-name">Operator</span>
-            <span class="user-role">Admin</span>
+        @if (user(); as u) {
+          <div class="user-chip">
+            <div class="user-avatar">{{ initials() }}</div>
+            <div class="user-info">
+              <span class="user-name">{{ u.username }}</span>
+              <span class="user-role">{{ u.role }}</span>
+            </div>
           </div>
-        </div>
+          <button class="logout-btn" type="button" (click)="logout()" title="Sign out">Sign out</button>
+        }
       </div>
     </header>
   `,
@@ -125,9 +130,31 @@ type DotState = 'green' | 'yellow' | 'red' | 'gray' | 'paused';
     .user-info    { display: flex; flex-direction: column; line-height: 1.2; }
     .user-name    { font-size: 12px; font-weight: 600; color: var(--text); }
     .user-role    { font-size: 10px; color: var(--text-muted); }
+    .logout-btn {
+      padding: 5px 12px; border: 1px solid var(--border); border-radius: 16px;
+      background: var(--surface-2); color: var(--text); font-size: 11px; font-weight: 600;
+      cursor: pointer; transition: background var(--transition);
+      &:hover { background: var(--surface-3); }
+    }
   `]
 })
 export class TopBarComponent {
+  private auth = inject(AuthService);
+  private router = inject(Router);
+
+  readonly user = this.auth.currentUser;
+  readonly initials = computed(() => {
+    const name = this.user()?.username ?? '';
+    return name.slice(0, 2).toUpperCase() || '—';
+  });
+
+  logout(): void {
+    this.auth.logout().subscribe({
+      next: () => this.router.navigate(['/login']),
+      error: () => this.router.navigate(['/login']),
+    });
+  }
+
   // Subscribe only — never start the polling timer here. The service emits
   // PolledData<WorkerStatus>; unwrap `.value` so existing computed logic
   // sees the raw WorkerStatus shape (or null before the first response).

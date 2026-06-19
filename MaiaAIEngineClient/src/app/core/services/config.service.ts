@@ -120,20 +120,12 @@ export class ConfigService {
   private http = inject(HttpClient);
   private base = `${environment.apiUrl}/config`;
 
-  /** Operator identity attached to every config write. Backend rejects writes
-   *  with no operatorId. Hardcoded for now — when authn lands, this becomes
-   *  the authenticated user (single point of change). */
-  private readonly actor = 'operator';
-
-  /** Spread the actor into a request body. Used by POST/PUT calls. */
-  private withActor<T extends object>(req: T): T & { operatorId: string } {
-    return { ...req, operatorId: this.actor };
-  }
-
-  /** Query-string variant for DELETE / link endpoints that have no body. */
-  private actorParams(): HttpParams {
-    return new HttpParams().set('operatorId', this.actor);
-  }
+  // Identity is now server-authoritative: the audit actor is derived from the
+  // authenticated session cookie on the backend, so writes carry no operatorId.
+  // These helpers are retained as pass-throughs to keep the call sites untouched
+  // (the body/query no longer gains an operatorId).
+  private withActor<T extends object>(req: T): T { return req; }
+  private actorParams(): HttpParams { return new HttpParams(); }
 
   // ── Lookups ────────────────────────────────────────────────────────────────
   getJobTypes():   Observable<JobType[]>   { return this.http.get<JobType[]>(`${this.base}/job-types`); }

@@ -306,12 +306,12 @@ export class RecommendationsComponent implements OnInit {
 
   approve(rec: Recommendation) {
     rec.operatorApproved = true;
-    this.svc.approveRecommendation(rec.recommendationId, 'operator').subscribe();
+    this.svc.approveRecommendation(rec.recommendationId).subscribe();
   }
 
   reject(rec: Recommendation) {
     rec.operatorApproved = false;
-    this.svc.rejectRecommendation(rec.recommendationId, 'operator').subscribe();
+    this.svc.rejectRecommendation(rec.recommendationId).subscribe();
   }
 
   /**
