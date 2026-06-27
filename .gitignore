@@ -19,5 +19,8 @@ Maia.Client/.angular/
 Thumbs.db
 .DS_Store
 
+# ── MS Office temp/lock files (e.g. ~$ToDo.docx) ─────────────────────────
+~$*
+
 # ── Logs ─────────────────────────────────────────────────────────────────
 *.log
