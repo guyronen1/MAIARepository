@@ -27,7 +27,8 @@ export const routes: Routes = [
       { path: 'config/monitored-jobs/:id', loadComponent: () => import('./features/config/monitored-jobs/job-config.component').then(m => m.JobConfigComponent) },
       { path: 'config/classification-rules', loadComponent: () => import('./features/config/classification-rules/classification-rules.component').then(m => m.ClassificationRulesComponent) },
       { path: 'config/error-types',          loadComponent: () => import('./features/config/error-types/error-types.component').then(m => m.ErrorTypesComponent) },
-      { path: 'config/users', canActivate: [adminGuard], loadComponent: () => import('./features/config/users/users.component').then(m => m.UsersComponent) },
+      { path: 'config/users',  canActivate: [adminGuard], loadComponent: () => import('./features/config/users/users.component').then(m => m.UsersComponent) },
+      { path: 'config/audit', canActivate: [adminGuard], loadComponent: () => import('./features/config/audit/audit.component').then(m => m.AuditComponent) },
     ]
   },
   { path: '**', redirectTo: '' }

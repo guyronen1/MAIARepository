@@ -189,20 +189,37 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                 </table>
               }
               @if (jobTypeGlobalRules().length > 0) {
-                <div class="subsection-label">{{ j.jobTypeName }} defaults <span class="text-muted">(apply to all {{ j.jobTypeName }} jobs)</span></div>
-                <table class="data-table compact">
-                  <thead><tr><th style="width:48%">Pattern</th><th style="width:26%">Error Type</th><th style="width:13%">Conf.</th><th style="width:13%">Pri.</th></tr></thead>
-                  <tbody>
-                    @for (r of jobTypeGlobalRules(); track r.ruleId) {
-                      <tr class="global-row">
-                        <td class="font-mono">{{ r.pattern }}</td>
-                        <td><span class="badge badge-classified">{{ r.errorTypeCode }}</span></td>
-                        <td class="text-sm">{{ (r.confidence * 100).toFixed(0) }}%</td>
-                        <td class="text-sm text-muted">#{{ r.priority }}</td>
-                      </tr>
-                    }
-                  </tbody>
-                </table>
+                <div class="subsection-label">
+                  {{ j.jobTypeName }} defaults
+                  <span class="text-muted">(apply to all {{ j.jobTypeName }} jobs)</span>
+                  @if (relevantDefaultClassRules().length < jobTypeGlobalRules().length) {
+                    <span class="defaults-filter-note">
+                      — showing {{ relevantDefaultClassRules().length }} of {{ jobTypeGlobalRules().length }} relevant to your scan rules
+                    </span>
+                  }
+                </div>
+                @if (displayedDefaultClassRules().length > 0) {
+                  <table class="data-table compact">
+                    <thead><tr><th style="width:48%">Pattern</th><th style="width:26%">Error Type</th><th style="width:13%">Conf.</th><th style="width:13%">Pri.</th></tr></thead>
+                    <tbody>
+                      @for (r of displayedDefaultClassRules(); track r.ruleId) {
+                        <tr class="global-row">
+                          <td class="font-mono">{{ r.pattern }}</td>
+                          <td><span class="badge badge-classified">{{ r.errorTypeCode }}</span></td>
+                          <td class="text-sm">{{ (r.confidence * 100).toFixed(0) }}%</td>
+                          <td class="text-sm text-muted">#{{ r.priority }}</td>
+                        </tr>
+                      }
+                    </tbody>
+                  </table>
+                } @else {
+                  <div class="defaults-empty">No {{ j.jobTypeName }} defaults match your current scan rules.</div>
+                }
+                @if (relevantDefaultClassRules().length < jobTypeGlobalRules().length) {
+                  <button class="link-btn defaults-toggle" (click)="showAllDefaults.set(!showAllDefaults())">
+                    {{ showAllDefaults() ? 'Show relevant only' : 'Show all ' + jobTypeGlobalRules().length + ' defaults' }}
+                  </button>
+                }
               }
             }
           </div>
@@ -459,6 +476,15 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                     (per-row dedup, case-insensitive).
                   </span>
                 </div>
+                <div class="form-group">
+                  <label>Reference ID Column <span class="text-muted">(parent / FK key — optional)</span></label>
+                  <input [(ngModel)]="ruleForm.referenceIdColumn" placeholder="OrderId" />
+                  <span class="field-hint">
+                    A related row's identity — e.g. the parent order id when fixing all line items.
+                    Stored as the failure's <code>{{'{'}}referenceId{{'}'}}</code> placeholder.
+                    Must be in your <code>SELECT</code>. Blank → <code>{{'{'}}referenceId{{'}'}}</code> resolves to empty (safe no-op, not a bulk write).
+                  </span>
+                </div>
                 <div class="form-group span2">
                   <label>Watermark Column <span class="text-muted">(scan cursor — optional)</span></label>
                   <input [(ngModel)]="ruleForm.watermarkColumn" placeholder="UpdateDate" />
@@ -502,6 +528,10 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                 <div class="form-group">
                   <label>Source ID Column <span class="text-muted">(row identity)</span></label>
                   <input [(ngModel)]="ruleForm.sourceIdColumn" placeholder="Id" />
+                </div>
+                <div class="form-group">
+                  <label>Reference ID Column <span class="text-muted">(parent / FK key)</span></label>
+                  <input [(ngModel)]="ruleForm.referenceIdColumn" placeholder="OrderId" />
                 </div>
                 <div class="form-group span2">
                   <label>File Path Column</label>
@@ -773,6 +803,7 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
                   <dl>
                     <dt><code>{{'{'}}failureId{{'}'}}</code></dt><dd>This failure's numeric id.</dd>
                     <dt><code>{{'{'}}sourceId{{'}'}}</code></dt><dd>Source row's natural key (DB scan) or matched id.</dd>
+                    <dt><code>{{'{'}}referenceId{{'}'}}</code></dt><dd>Related row's identity (parent/FK key) — needs Reference ID Column on the scan rule.</dd>
                     <dt><code>{{'{'}}sourceLogPath{{'}'}}</code></dt><dd>Log file/source where the error was detected.</dd>
                     <dt><code>{{'{'}}sourceFilePath{{'}'}}</code></dt><dd>Input file path — needs Input File Extraction (FS) or File Path Column (DB).</dd>
                     <dt><code>{{'{'}}sourceFileName{{'}'}}</code></dt><dd>Filename only, sliced from {{'{'}}sourceFilePath{{'}'}}.</dd>
@@ -878,6 +909,9 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
     .section-body { padding: 12px 16px; }
     .subsection-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin: 14px 0 6px; }
     .subsection-label:first-child { margin-top: 0; }
+    .defaults-filter-note { font-weight: 400; text-transform: none; letter-spacing: 0; }
+    .defaults-empty { font-size: 12px; color: var(--text-dim); padding: 6px 0; }
+    .defaults-toggle { font-size: 11px; margin-top: 6px; display: block; }
     .global-row td { opacity: 0.82; }
     .data-table.compact tr.shadowed td { opacity: 0.6; }
     .badge-muted { background: #e2e8f0; color: #475569; border: 1px solid #cbd5e1; }
@@ -1114,6 +1148,37 @@ export class JobConfigComponent implements OnInit {
       .sort((a, b) => a.priority - b.priority);
   });
 
+  /** Subset of jobTypeGlobalRules whose pattern overlaps with at least one
+   *  scan rule on this job — irrelevant defaults are hidden by default.
+   *
+   *  Match logic: for each default class rule (pattern P), it is relevant if any
+   *  scan rule's representative keyword overlaps P bidirectionally after stripping
+   *  wildcards.  SqlQuery rules use their TargetField as the keyword (same as
+   *  ColumnRange) — the error message format is "[TargetField] = value", so only
+   *  class rules whose literal overlaps the TargetField survive. */
+  relevantDefaultClassRules = computed<ClassificationRule[]>(() => {
+    const allScanRules = (this.job()?.sources ?? []).flatMap(s => s.scanCheckRules);
+    return this.jobTypeGlobalRules().filter(cr => {
+      const crLiteral = cr.pattern.replace(/\*/g, '').trim().toLowerCase();
+      if (!crLiteral) return true; // wildcard-only pattern matches anything
+      return allScanRules.some(rule => {
+        const keyword = this.classPatternForScanRule(rule).toLowerCase();
+        if (!keyword) return false;
+        // Both sides are Field=Value patterns (ValueEquals-style): require exact
+        // match to avoid "FileStatusCode=2" showing as relevant for "FileStatusCode=22".
+        if (keyword.includes('=') && crLiteral.includes('=')) return keyword === crLiteral;
+        // Otherwise (broad keyword vs pattern): bidirectional substring.
+        return keyword.includes(crLiteral) || crLiteral.includes(keyword);
+      });
+    });
+  });
+
+  showAllDefaults = signal(false);
+
+  displayedDefaultClassRules = computed<ClassificationRule[]>(() =>
+    this.showAllDefaults() ? this.jobTypeGlobalRules() : this.relevantDefaultClassRules()
+  );
+
   private jobId = 0;
 
   ngOnInit() {
@@ -1250,6 +1315,7 @@ export class JobConfigComponent implements OnInit {
       checkType: rule.checkType, sourceTable: rule.sourceTable, targetField: rule.targetField,
       minValue: rule.minValue, maxValue: rule.maxValue, expectedValue: rule.expectedValue,
       watermarkColumn: rule.watermarkColumn, sourceIdColumn: rule.sourceIdColumn,
+      referenceIdColumn: rule.referenceIdColumn,
       filePathColumn: rule.filePathColumn, inputPathPattern: rule.inputPathPattern,
       extractorType: rule.extractorType, extractorLocator: rule.extractorLocator,
       identifierLocator: rule.identifierLocator, extractorPredicateType: rule.extractorPredicateType,
@@ -1287,6 +1353,7 @@ export class JobConfigComponent implements OnInit {
                     : 'ValueEquals';
     return { checkType, sourceTable: null, targetField: '', minValue: null,
              maxValue: null, expectedValue: null, watermarkColumn: null, sourceIdColumn: null,
+             referenceIdColumn: null,
              filePathColumn: null, inputPathPattern: null,
              extractorType: scanTypeId === 4 ? 'Xml' : null,
              extractorLocator: null, identifierLocator: null,
@@ -1504,16 +1571,23 @@ export class JobConfigComponent implements OnInit {
     if (rule.checkType === 'SqlQuery') return false;
     const effective = this.effectiveClassRules();
     if (effective.length === 0) return true;
-    // Use the same composite pattern classPatternForScanRule produces so the
-    // comparison is apples-to-apples. For ValueEquals this is "Field=Value"
-    // (e.g. "FileStatusCode=5") — comparing only targetField against a pattern
-    // like "FileStatusCode=5" would always fail because "FileStatusCode" doesn't
-    // contain "FileStatusCode=5", producing a false ⚠ even when the rule IS linked.
+    // ErrorKeyword and FileContent use broad keywords (e.g. "*Error*") whose
+    // scope can't be known statically — any matched line could be anything.
+    // The meaningful check is simply: are there ANY class rules? If yes, the
+    // operator has wired up classification; partial coverage is expected and
+    // handled by the /unconfigured screen. The substring overlap check below
+    // produces false ⚠ for intentionally broad keywords and would mislead.
+    if (rule.checkType === 'ErrorKeyword' || rule.checkType === 'FileContent') return false;
+    // For ValueEquals / ColumnRange the pattern is "Field=Value" or just
+    // "Field" — a precise, predictable string the overlap check handles well.
     const keyword = this.classPatternForScanRule(rule).toLowerCase();
     if (!keyword) return false;
     return !effective.some(cr => {
       const literal = cr.pattern.replace(/\*/g, '').trim().toLowerCase();
-      return literal && keyword.includes(literal);
+      if (!literal) return false;
+      // Both sides are Field=Value: require exact match to avoid "=2" covering "=22"
+      if (keyword.includes('=') && literal.includes('=')) return keyword === literal;
+      return keyword.includes(literal);
     });
   }
 

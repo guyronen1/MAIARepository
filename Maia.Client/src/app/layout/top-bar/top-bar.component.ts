@@ -19,7 +19,7 @@ type DotState = 'green' | 'yellow' | 'red' | 'gray' | 'paused';
         <div class="brand-divider"></div>
         <div class="brand-text">
           <span class="brand-name">MAIA</span>
-          <span class="brand-subtitle">Intelligent Monitoring & Auto-Healing Platform</span>
+          <span class="brand-subtitle">Monitoring Assistant & Intelligent Automation</span>
         </div>
       </div>
 

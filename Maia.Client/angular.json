@@ -3,7 +3,7 @@
   "version": 1,
   "newProjectRoot": "projects",
   "projects": {
-    "MaiaAIEngineClient": {
+    "Maia.Client": {
       "projectType": "application",
       "schematics": {
         "@schematics/angular:component": {
@@ -83,10 +83,10 @@
           "builder": "@angular/build:dev-server",
           "configurations": {
             "production": {
-              "buildTarget": "MaiaAIEngineClient:build:production"
+              "buildTarget": "Maia.Client:build:production"
             },
             "development": {
-              "buildTarget": "MaiaAIEngineClient:build:development"
+              "buildTarget": "Maia.Client:build:development"
             }
           },
           "defaultConfiguration": "development"

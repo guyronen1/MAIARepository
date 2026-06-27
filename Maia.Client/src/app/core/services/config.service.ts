@@ -67,6 +67,9 @@ export interface UpsertScanRuleRequest {
   checkType: string; sourceTable: string | null; targetField: string;
   minValue: number | null; maxValue: number | null; expectedValue: string | null;
   watermarkColumn: string | null; sourceIdColumn: string | null;
+  /** DB scans only — column holding a related row's identity (parent/FK key).
+   *  Stored as JobFailure.ReferenceId; exposed via {referenceId} placeholder. */
+  referenceIdColumn: string | null;
   severity: string; description: string | null; isActive: boolean;
   /** DB scans only — column on the source row holding the input file path. */
   filePathColumn:   string | null;

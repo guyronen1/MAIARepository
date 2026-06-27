@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": "Maia.Services"
+		},
+		{
+			"path": "Maia.Client"
+		}
+	],
+	"settings": {
+		"powershell.cwd": "Maia.Services"
+	}
+}

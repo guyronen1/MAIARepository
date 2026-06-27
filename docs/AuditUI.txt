@@ -1,0 +1,77 @@
+New task: Audit-viewing UI. Now that auth stamps real authenticated 
+identities on every config/user write, the AuditLog has meaningful 
+"who did what" data — but no screen surfaces it. Build a read-only 
+admin screen over the audit data.
+
+INVESTIGATE FIRST
+1. What's IN the AuditLog table today? Schema (EntityType, EntityId, 
+   EventType, Actor, Detail/diff, timestamp — confirm the actual 
+   columns). What EventTypes exist (ScanSourceCreated/Updated/Deleted, 
+   the ConfigController coverage of ErrorType/MonitoredJob/ScanCheckRule/
+   ClassificationRule/FixPolicyRule, the Users writes). Confirm Actor 
+   is now the authenticated principal (post-auth), not the old 
+   'operator' constant.
+
+2. Is there a SEPARATE OperatorAction log (approve/acknowledge/auto-heal 
+   decisions)? AuditLog covers config/user writes; operator ACTIONS 
+   (rec decisions) may live in a different table (OperatorAction.OperatorId 
+   was mentioned). Report whether audit-viewing should cover one log or 
+   two — and if two, whether this screen does both or just AuditLog for 
+   v1. [MY LEAN: v1 covers AuditLog only — config/user changes. If 
+   OperatorAction is separate, note it as a possible second tab/view 
+   later, but don't scope-creep v1 into merging two logs with different 
+   shapes.]
+
+3. Is there an existing read endpoint for AuditLog, or does the API 
+   need one? If none, a new GET (Admin-tier, paged, filterable) is part 
+   of this task.
+
+DESIGN — MY RECOMMENDED DEFAULTS (adjust if investigation suggests 
+otherwise)
+
+PRIMARY VIEW: chronological feed (most recent first), because the 
+common investigation is "something looks wrong with X — who touched it 
+and when." [MY LEAN: chronological default. If you think admins more 
+often ask "what did person Y do," an actor-first view changes the 
+default — but chronological-with-filters serves both.]
+
+FILTERS (the real value — an audit log you can't filter is a wall of 
+text):
+- By entity: EntityType + optionally EntityId ("show me changes to this 
+  fix policy / this job / this user")
+- By actor: which authenticated user did it
+- By date range: last 24h / 7d / 30d / custom
+- By event type: created / updated / deleted (optional, lower priority)
+
+ROW DISPLAY: timestamp, actor, event type, entity (type + identifier), 
+and the diff/detail. For UPDATE events the AuditLog stores a 
+before→after diff (the existing BuildDiff) — render it readably 
+(field: old → new), not as a raw JSON blob. For create/delete, show 
+the snapshot.
+
+SCOPE GATE: Admin-only (RequireAdmin) — audit data is admin-tier. 
+Confirm the menu item + route are role-gated so Operator/User don't see 
+it (consistent with the Phase 4 frontend role-gating already shipped).
+
+PAGING: server-side paged (the AuditLog grows unbounded — don't load 
+all rows). Mirror the existing paged-endpoint pattern (scan-runs / 
+recommendations use GetPagedAsync).
+
+OUT OF SCOPE FOR V1
+- Merging OperatorAction decisions into the same view (note as possible 
+  later, keep v1 to AuditLog)
+- Export of audit log (could come with the export/import work later)
+- Real-time/live-tailing the audit feed (paged-refresh is fine)
+- Editing/deleting audit entries (it's an audit log — read-only, always)
+
+VERIFICATION
+Show the screen against real audit data: a config change (e.g. a 
+FixPolicyRule update showing the field diff), a user write (e.g. a 
+user created showing actor + snapshot), filtered by entity and by 
+actor and by date range. Confirm Operator/User roles can't reach the 
+route (403 / hidden menu).
+
+PROCEED — investigate the AuditLog shape + whether OperatorAction is 
+separate, confirm or adjust the recommended design, then build. Pause 
+after investigation if the OperatorAction question changes the v1 
+scope.

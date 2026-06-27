@@ -6,11 +6,15 @@ export interface ScanCheckRule {
   minValue:         number | null;
   maxValue:         number | null;
   expectedValue:    string | null;
-  watermarkColumn:  string | null;
-  sourceIdColumn:   string | null;
+  watermarkColumn:    string | null;
+  sourceIdColumn:     string | null;
+  /** DB scans: column holding a related row's identity (parent/FK key) for
+   *  multi-row child updates. Stored as JobFailure.ReferenceId, exposed via
+   *  {referenceId} placeholder. Null = not configured. */
+  referenceIdColumn:  string | null;
   /** DB scans: column on the source row that holds the input file path.
    *  Captured into JobFailure.SourceFilePath when this rule matches. */
-  filePathColumn:   string | null;
+  filePathColumn:     string | null;
   /** FS scans: regex with capture group #1 = input file path extracted
    *  from the matching error line. Differs from classification patterns:
    *  full regex applies here (capture groups required). */

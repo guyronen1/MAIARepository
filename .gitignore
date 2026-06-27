@@ -4,8 +4,8 @@
 
 # ── Frontend ─────────────────────────────────────────────────────────────
 **/node_modules/
-MaiaAIEngineClient/dist/
-MaiaAIEngineClient/.angular/
+Maia.Client/dist/
+Maia.Client/.angular/
 
 # ── IDE / tooling ────────────────────────────────────────────────────────
 .vs/
