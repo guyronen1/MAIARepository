@@ -71,9 +71,9 @@ type DrawerMode = 'create' | 'edit' | 'reset';
                     @if (u.mustChangePassword) { <span class="badge badge-medium">Pending</span> }
                     @else { <span class="text-muted">–</span> }
                   </td>
-                  <td class="text-sm text-muted">{{ u.createdAt | date:'MM/dd/yy HH:mm' }}</td>
+                  <td class="text-sm text-muted">{{ u.createdAt | date:'dd/MM/yy HH:mm' }}</td>
                   <td class="text-sm text-muted">
-                    {{ u.lastLoginAt ? (u.lastLoginAt | date:'MM/dd/yy HH:mm') : 'Never' }}
+                    {{ u.lastLoginAt ? (u.lastLoginAt | date:'dd/MM/yy HH:mm') : 'Never' }}
                   </td>
                   <td>
                     <div style="display:flex;gap:4px">

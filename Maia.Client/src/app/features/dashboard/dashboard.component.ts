@@ -177,7 +177,7 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
                     <td dir="auto">{{ f.monitoredJobName ?? '—' }}</td>
                     <td class="truncate" style="max-width:120px" dir="auto">{{ f.stepName ?? '—' }}</td>
                     <td><span class="badge badge-medium">{{ f.errorTypeCode ?? 'Unknown' }}</span></td>
-                    <td class="text-muted">{{ f.detectedAt | date:'MM/dd HH:mm' }}</td>
+                    <td class="text-muted">{{ f.detectedAt | date:'dd/MM HH:mm' }}</td>
                     <td><span class="badge" [class]="'badge-' + f.status.toLowerCase()">{{ f.status }}</span></td>
                   </tr>
                 }
@@ -271,7 +271,7 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
                           <dt>Last outcome</dt>
                           <dd><span class="badge" [class]="lastScanBadgeClass(j.monitoredJobId)">{{ ls.lastScan.outcome }}</span></dd>
                           <dt>Completed</dt>
-                          <dd>{{ ls.lastScan.completedAt | date:'MM/dd HH:mm:ss' }} ({{ relativeAge(ls.lastScan.completedAt) }})</dd>
+                          <dd>{{ ls.lastScan.completedAt | date:'dd/MM HH:mm:ss' }} ({{ relativeAge(ls.lastScan.completedAt) }})</dd>
                           <dt>Duration</dt>
                           <dd>{{ ls.lastScan.durationMs }} ms</dd>
                         </dl>
@@ -795,7 +795,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
     if (this.jobIconState(monitoredJobId) === 'spinner') return 'Scanning now…';
     const ls = this.jobLastScans().get(monitoredJobId);
     if (!ls) return 'No run recorded yet';
-    return `Last run: ${ls.outcome} at ${new Date(ls.completedAt).toLocaleString()}, duration ${ls.durationMs}ms`;
+    return `Last run: ${ls.outcome} at ${new Date(ls.completedAt).toLocaleString('en-GB')}, duration ${ls.durationMs}ms`;
   }
 
   anyCount(monitoredJobId: number): boolean {

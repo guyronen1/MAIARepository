@@ -162,7 +162,7 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
                       <span class="badge badge-classified">Pending</span>
                     }
                   </td>
-                  <td class="text-muted text-sm">{{ r.recommendedAt | date:'MM/dd HH:mm' }}</td>
+                  <td class="text-muted text-sm">{{ r.recommendedAt | date:'dd/MM HH:mm' }}</td>
                   <td>
                     @if (!r.isExecuted && r.operatorApproved === null && canAct()) {
                       <div style="display:flex;gap:4px">

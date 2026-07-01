@@ -87,7 +87,7 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
                   <span class="badge badge-medium">{{ failure()!.errorTypeCode }}</span>
                 } @else { <span class="text-muted">Not yet classified</span> }
               </dd>
-              <dt>Detected</dt>   <dd>{{ failure()!.detectedAt | date:'medium' }}</dd>
+              <dt>Detected</dt>   <dd>{{ failure()!.detectedAt | date:'dd/MM/yy HH:mm:ss' }}</dd>
               <dt>Stage</dt>      <dd><span class="badge badge-info">{{ failure()!.stage }}</span></dd>
             </dl>
             @if (failure()!.errorMessage) {
@@ -277,7 +277,7 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
                 <div class="exec-cycle">
                   <div class="exec-cycle-head">
                     <span class="exec-attempt">Attempt {{ cycle.attempt }}</span>
-                    <span class="exec-cycle-time">{{ cycle.at | date:'short' }} · {{ cycle.trigger }}</span>
+                    <span class="exec-cycle-time">{{ cycle.at | date:'dd/MM/yy HH:mm' }} · {{ cycle.trigger }}</span>
                   </div>
                   <ul class="exec-list">
                     @for (e of cycle.rows; track e.fixId) {
@@ -285,7 +285,7 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
                           [attr.title]="(e.resultDetail || '') + (e.resultDetail ? '  —  ' : '') + e.triggerType">
                         <span class="exec-status" [class.ok]="e.success" [class.bad]="!e.success">{{ e.success ? '✓' : '✗' }}</span>
                         <span class="exec-action" dir="auto">{{ e.executedAction }}</span>
-                        <span class="exec-time">{{ e.executedAt | date:'short' }}</span>
+                        <span class="exec-time">{{ e.executedAt | date:'dd/MM/yy HH:mm' }}</span>
                       </li>
                     }
                   </ul>

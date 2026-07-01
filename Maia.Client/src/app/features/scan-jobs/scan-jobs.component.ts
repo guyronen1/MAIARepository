@@ -202,7 +202,7 @@ export class ScanJobsComponent implements OnInit, OnDestroy {
     if (this.iconState(job) === 'spinner') return 'Scanning now…';
     const l = job.lease;
     if (!l?.lastRunOutcome || !l.lastRunCompletedAt) return 'No run recorded yet';
-    const when    = new Date(l.lastRunCompletedAt).toLocaleString();
+    const when    = new Date(l.lastRunCompletedAt).toLocaleString('en-GB');
     const durSec  = l.lastRunDurationMs != null ? (l.lastRunDurationMs / 1000).toFixed(1) + 's' : '—';
     const err     = l.lastRunError ? ` — ${l.lastRunError}` : '';
     return `Last run: ${l.lastRunOutcome} at ${when}, duration ${durSec}${err}`;

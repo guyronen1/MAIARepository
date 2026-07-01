@@ -239,12 +239,12 @@ export class ErrorsOverTimeChartComponent implements AfterViewInit, OnDestroy {
         };
       });
 
-    // Format X labels for display: hourly → HH:mm, daily → MM-DD.
+    // Format X labels for display: hourly → HH:mm, daily → DD/MM.
     const displayLabels = labels.map(iso => {
       const d = new Date(iso);
       return res.bucketSize === 'hour'
         ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        : `${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')}`;
+        : `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}`;
     });
 
     this.chart = new Chart(canvas, {

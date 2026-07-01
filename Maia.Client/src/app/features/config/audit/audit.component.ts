@@ -77,7 +77,7 @@ const ENTITY_TYPES = [
                 @for (row of rows(); track row.auditId) {
                   <tr>
                     <td class="text-sm text-muted text-nowrap">
-                      {{ row.timestamp | date:'MM/dd/yy HH:mm:ss' }}
+                      {{ row.timestamp | date:'dd/MM/yy HH:mm:ss' }}
                     </td>
                     <td class="text-sm font-mono" dir="auto" [title]="row.actor">{{ row.actor }}</td>
                     <td>

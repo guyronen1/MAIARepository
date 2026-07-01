@@ -124,7 +124,7 @@ const PAGE_SIZE = 50;
                   <td class="truncate text-muted" style="max-width:260px; font-size:12px" dir="auto">
                     {{ f.errorMessage ?? '—' }}
                   </td>
-                  <td class="text-muted text-sm">{{ f.detectedAt | date:'MM/dd/yy HH:mm' }}</td>
+                  <td class="text-muted text-sm">{{ f.detectedAt | date:'dd/MM/yy HH:mm' }}</td>
                   <td>
                     <span class="badge" [class]="'badge-' + f.status.toLowerCase()">{{ f.status }}</span>
                     @if (f.hasRecentFixFailure) {

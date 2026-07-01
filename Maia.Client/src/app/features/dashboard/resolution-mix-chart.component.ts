@@ -135,11 +135,11 @@ export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {
   }
 
   private buildChart(canvas: HTMLCanvasElement, rows: ResolutionMixItem[]): void {
-    // Display labels: MM-DD form. Bucket order is already oldest-first from
+    // Display labels: DD/MM form. Bucket order is already oldest-first from
     // the backend gap-fill; today sits on the right of the chart.
     const labels = rows.map(r => {
       const [_, m, d] = r.bucketDay.split('-');
-      return `${m}-${d}`;
+      return `${d}/${m}`;
     });
 
     this.chart = new Chart(canvas, {
