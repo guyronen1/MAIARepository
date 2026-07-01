@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { ConfigService, JobType, UpsertJobRequest } from '../../../core/services/config.service';
@@ -7,6 +7,8 @@ import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
 import { DrawerComponent } from '../../../shared/drawer/drawer.component';
 import { scanTypeLabelFromNames, scanTypeTitleFromSources, scanIconForSources }
   from '../../../core/util/scan-type-label.util';
+import { AuthService } from '../../../core/services/auth.service';
+import { JobFlowComponent } from './job-flow.component';
 
 /**
  * Tier 2.5 (d2d): the Monitored Jobs LIST. Add / edit / delete a job's identity
@@ -19,7 +21,7 @@ import { scanTypeLabelFromNames, scanTypeTitleFromSources, scanIconForSources }
 @Component({
   selector: 'app-monitored-jobs',
   standalone: true,
-  imports: [FormsModule, RouterLink, PluralizePipe, DrawerComponent],
+  imports: [FormsModule, RouterLink, PluralizePipe, DrawerComponent, JobFlowComponent],
   template: `
     <div class="page">
       <div class="page-header">
@@ -61,11 +63,21 @@ import { scanTypeLabelFromNames, scanTypeTitleFromSources, scanIconForSources }
                   <span class="badge" [class]="j.isActive ? 'badge-resolved' : 'badge-failed'">
                     {{ j.isActive ? 'Active' : 'Inactive' }}
                   </span>
+                  @if (canViewFlow()) {
+                    <button class="btn btn-ghost btn-sm flow-toggle"
+                            [class.active]="isFlowOpen(j.monitoredJobId)"
+                            [attr.aria-expanded]="isFlowOpen(j.monitoredJobId)"
+                            [title]="isFlowOpen(j.monitoredJobId) ? 'Hide process flow' : 'View process flow (read-only)'"
+                            (click)="toggleFlow(j.monitoredJobId)">👁 Flow</button>
+                  }
                   <a class="btn btn-primary btn-sm" [routerLink]="['/config/monitored-jobs', j.monitoredJobId]">Configure →</a>
                   <button class="btn btn-ghost btn-sm" (click)="openJobDrawer(j)">Edit</button>
                   <button class="btn btn-danger btn-sm" (click)="deleteJob(j)">Delete</button>
                 </div>
               </div>
+              @if (canViewFlow() && isFlowOpen(j.monitoredJobId)) {
+                <app-job-flow [jobId]="j.monitoredJobId" />
+              }
             </div>
           }
         </div>
@@ -153,6 +165,7 @@ import { scanTypeLabelFromNames, scanTypeTitleFromSources, scanIconForSources }
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .job-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .flow-toggle.active { background: var(--surface-2); color: var(--text); border-color: var(--border); }
 
     /* Drawer form (shell chrome comes from the shared DrawerComponent; the
        form here mirrors the config screen's drawers — same 560px form column,
@@ -171,6 +184,7 @@ import { scanTypeLabelFromNames, scanTypeTitleFromSources, scanIconForSources }
 export class MonitoredJobsComponent implements OnInit {
   private svc    = inject(ConfigService);
   private router = inject(Router);
+  private auth   = inject(AuthService);
 
   loading  = signal(false);
   saving   = signal(false);
@@ -180,6 +194,16 @@ export class MonitoredJobsComponent implements OnInit {
   drawerOpen  = signal(false);
   editingJob  = signal<MonitoredJob | null>(null);
   jobForm: UpsertJobRequest = this.blankJob();
+
+  // ── Read-only flow view (Operator+); Users never see the icon ──────────────
+  canViewFlow = computed(() => this.auth.hasAtLeast('Operator'));
+  private _flowOpen = signal<Set<number>>(new Set<number>());
+  isFlowOpen(jobId: number): boolean { return this._flowOpen().has(jobId); }
+  toggleFlow(jobId: number): void {
+    const next = new Set(this._flowOpen());
+    next.has(jobId) ? next.delete(jobId) : next.add(jobId);
+    this._flowOpen.set(next);
+  }
 
   ngOnInit() {
     this.loading.set(true);

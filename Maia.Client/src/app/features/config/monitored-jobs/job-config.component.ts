@@ -9,6 +9,8 @@ import {
 } from '../../../core/services/config.service';
 import { MonitoredJob, ScanSource, ScanCheckRule, RuleOverride } from '../../../core/models';
 import { DrawerComponent } from '../../../shared/drawer/drawer.component';
+import { computeEffectiveClassRules, scanRulePredictedPattern,
+  scanRuleNeedsClassification as coverageNeedsClassification } from '../../../core/util/coverage-match.util';
 
 const SCAN_TYPES = [
   { id: 1, name: 'FileSystem' }, { id: 2, name: 'Database' },
@@ -1111,16 +1113,8 @@ export class JobConfigComponent implements OnInit {
   effectiveClassRules = computed<{ ruleId: number; pattern: string; errorTypeCode: string }[]>(() => {
     const job = this.job();
     if (!job) return [];
-    const jt = this.getJobTypeId(job);
-    const linked = job.rules ?? [];
-    const linkedToThisJob = new Set(linked.map(r => r.ruleId));
-    const linkedAnywhere = new Set(this.allJobs().flatMap(j => j.rules.map(r => r.ruleId)));
-    const defaults = this.allClassRules().filter(r =>
-      r.jobTypeId === jt && r.isActive && !linkedToThisJob.has(r.ruleId) && !linkedAnywhere.has(r.ruleId));
-    return [
-      ...linked.map(r => ({ ruleId: r.ruleId, pattern: r.pattern, errorTypeCode: r.errorTypeCode })),
-      ...defaults.map(r => ({ ruleId: r.ruleId, pattern: r.pattern, errorTypeCode: r.errorTypeCode })),
-    ];
+    // Shared with the read-only flow view via coverage-match.util — single source.
+    return computeEffectiveClassRules(job, this.allJobs(), this.allClassRules(), this.getJobTypeId(job));
   });
 
   selectedErrorTypeCode = computed<string | null>(() => {
@@ -1568,27 +1562,9 @@ export class JobConfigComponent implements OnInit {
   }
 
   scanRuleNeedsClassification(rule: ScanCheckRule): boolean {
-    if (rule.checkType === 'SqlQuery') return false;
-    const effective = this.effectiveClassRules();
-    if (effective.length === 0) return true;
-    // ErrorKeyword and FileContent use broad keywords (e.g. "*Error*") whose
-    // scope can't be known statically — any matched line could be anything.
-    // The meaningful check is simply: are there ANY class rules? If yes, the
-    // operator has wired up classification; partial coverage is expected and
-    // handled by the /unconfigured screen. The substring overlap check below
-    // produces false ⚠ for intentionally broad keywords and would mislead.
-    if (rule.checkType === 'ErrorKeyword' || rule.checkType === 'FileContent') return false;
-    // For ValueEquals / ColumnRange the pattern is "Field=Value" or just
-    // "Field" — a precise, predictable string the overlap check handles well.
-    const keyword = this.classPatternForScanRule(rule).toLowerCase();
-    if (!keyword) return false;
-    return !effective.some(cr => {
-      const literal = cr.pattern.replace(/\*/g, '').trim().toLowerCase();
-      if (!literal) return false;
-      // Both sides are Field=Value: require exact match to avoid "=2" covering "=22"
-      if (keyword.includes('=') && literal.includes('=')) return keyword === literal;
-      return keyword.includes(literal);
-    });
+    // Delegates to the shared coverage matcher so this marker and the flow view
+    // can never disagree (gap === matcher state 'gap').
+    return coverageNeedsClassification(rule, this.effectiveClassRules());
   }
 
   /** Count of scan rules in a source that would show the ⚠ classification gap.
@@ -1625,15 +1601,7 @@ export class JobConfigComponent implements OnInit {
   }
 
   private classPatternForScanRule(rule: ScanCheckRule): string {
-    const target = (rule.targetField ?? '').replace(/\*/g, '').trim();
-    switch (rule.checkType) {
-      case 'ErrorKeyword':  return target;                                    // the keyword itself
-      case 'FileContent':   return target;                                    // filename keyword
-      case 'ValueEquals':   return target && rule.expectedValue
-                              ? `${target}=${rule.expectedValue}` : target;   // e.g. "FileStatusCode=5"
-      case 'ColumnRange':   return target;                                    // just the column name
-      default:              return target;
-    }
+    return scanRulePredictedPattern(rule);   // shared with the flow view
   }
 
   /** Classification-rule ⚠ click: open the fix drawer pre-filled with the
