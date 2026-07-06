@@ -151,7 +151,7 @@ file when working in that area:
 - **`MD-Files/FILE_STRUCTURE.md`** — Backend (`Maia.Services`) and frontend (`Maia.Client`) file maps.
 - **`MD-Files/PROCESS_FLOW.md`** — End-to-end process flow, DB schema diagram, DI wiring, appsettings knobs.
 - **`MD-Files/FOLLOWUPS.md`** — Known follow-ups (not blocking).
-
+- **`MD-Files/AI_INTEGRATION.md`** — AI workstream: Track 1 (LLM config assistant) decisions + IConfigAssistant design; Track 2 (ML) deferred, blocked on data.
 ## Load-bearing invariants (do not regress)
 
 These have caused or nearly caused regressions; full rationale in `MD-Files/DECISIONS.md`:
