@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<file>
+  <header>
+    <invoiceId>INV-2026-001</invoiceId>
+    <customer>Acme GmbH</customer>
+    <received>2026-06-07T09:14:22</received>
+  </header>
+  <status>
+    <code>ERROR</code>
+    <message>Tax total does not reconcile with line items</message>
+  </status>
+  <lines>
+    <line sku="A-100" qty="3" amount="149.97" />
+    <line sku="B-220" qty="1" amount="12.00" />
+  </lines>
+</file>

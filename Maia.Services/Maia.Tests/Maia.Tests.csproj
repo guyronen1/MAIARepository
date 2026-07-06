@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>12.0</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk"                    Version="17.6.0" />
+    <!-- WebApplicationFactory<Program> — boots the real pipeline (auth handler,
+         policies, middleware) for the end-to-end authorization matrix. -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing"          Version="8.0.0" />
+    <PackageReference Include="xunit"                                     Version="2.4.2" />
+    <PackageReference Include="xunit.runner.visualstudio"                 Version="2.4.5" />
+    <PackageReference Include="Moq"                                       Version="4.20.70" />
+    <!-- SQLite in-process: enforces FK constraints, closer to SQL Server than InMemory -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite"      Version="8.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory"    Version="8.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Maia.Core\Maia.Core.csproj" />
+    <ProjectReference Include="..\Maia.Application\Maia.Application.csproj" />
+    <ProjectReference Include="..\Maia.Infrastructure\Maia.Infrastructure.csproj" />
+    <!-- API ref + ASP.NET framework: lets integration tests exercise controllers
+         (e.g. UnconfiguredController policy-gap status filtering) directly. -->
+    <ProjectReference Include="..\Maia.API\Maia.API.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+</Project>

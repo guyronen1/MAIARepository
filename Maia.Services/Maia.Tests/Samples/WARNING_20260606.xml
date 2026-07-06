@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<order id="ORD-88134">
+  <warning>Quarantined by upstream validator — do not process</warning>
+  <header>
+    <orderRef>PO-77421</orderRef>
+    <source>EDI-GATEWAY</source>
+  </header>
+  <amount currency="EUR">2240.50</amount>
+</order>

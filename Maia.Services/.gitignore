@@ -1,0 +1,28 @@
+# Build output
+**/bin/
+**/obj/
+
+# IDE / tooling
+.vs/
+.vscode/
+.idea/
+.claude/
+*.user
+*.suo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
+
+# Test results
+TestResults/
+[Cc]overage*/
+
+# NuGet
+*.nupkg
+.nuget/
+packages/
+project.lock.json

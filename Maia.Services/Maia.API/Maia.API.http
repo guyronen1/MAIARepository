@@ -1,0 +1,6 @@
+@Maia_API_HostAddress = http://localhost:5095
+
+GET {{Maia_API_HostAddress}}/api/data/worker-status
+Accept: application/json
+
+###
