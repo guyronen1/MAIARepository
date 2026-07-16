@@ -1,12 +1,14 @@
 import {
   AfterViewInit, Component, ElementRef, OnDestroy, ViewChild,
-  computed, effect, inject, input, output, signal,
+  computed, effect, inject, input, output, signal, untracked,
 } from '@angular/core';
 import {
   Chart, Filler, Legend, LineController, LineElement, LinearScale,
   PointElement, CategoryScale, Tooltip,
 } from 'chart.js';
 import { FailuresService, FailuresOverTimeResponse } from '../../core/services/failures.service';
+import { ThemeService } from '../../core/services/theme.service';
+import { readChartTheme } from '../../core/util/chart-theme.util';
 
 // Register exactly the components we use — keeps the bundle lean.
 Chart.register(
@@ -117,6 +119,7 @@ function withAlpha(hex: string, alpha: number): string {
 })
 export class ErrorsOverTimeChartComponent implements AfterViewInit, OnDestroy {
   private svc = inject(FailuresService);
+  private theme = inject(ThemeService);
 
   @ViewChild('canvas') canvasRef?: ElementRef<HTMLCanvasElement>;
 
@@ -148,6 +151,16 @@ export class ErrorsOverTimeChartComponent implements AfterViewInit, OnDestroy {
     effect(() => {
       const r = this.range();
       this.fetch(r);
+    });
+
+    // Rebuild with theme-matched grid/tick/legend colours when the theme flips.
+    // Reads payload untracked so this only fires on theme change, not on data.
+    effect(() => {
+      this.theme.resolved();
+      if (!this.chart) return;
+      const canvas = this.canvasRef?.nativeElement;
+      const p = untracked(() => this.payload());
+      if (canvas && p && p.buckets.length) { this.chart.destroy(); this.buildChart(canvas, p); }
     });
   }
 
@@ -247,6 +260,7 @@ export class ErrorsOverTimeChartComponent implements AfterViewInit, OnDestroy {
         : `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}`;
     });
 
+    const t = readChartTheme();
     this.chart = new Chart(canvas, {
       type: 'line',
       data: { labels: displayLabels, datasets },
@@ -257,12 +271,12 @@ export class ErrorsOverTimeChartComponent implements AfterViewInit, OnDestroy {
         animation: { duration: 250, easing: 'easeOutQuad' },
         layout: { padding: { top: 4, right: 4, bottom: 0, left: 0 } },
         scales: {
-          x: { grid: { display: false }, ticks: { color: '#6b7280', font: { size: 10 }, maxRotation: 0, autoSkipPadding: 12 } },
+          x: { grid: { display: false }, ticks: { color: t.tick, font: { size: 10 }, maxRotation: 0, autoSkipPadding: 12 } },
           y: {
             stacked: true,
             beginAtZero: true,
-            ticks: { precision: 0, maxTicksLimit: 4, color: '#6b7280', font: { size: 10 } },
-            grid:  { color: '#e8ebf0' },
+            ticks: { precision: 0, maxTicksLimit: 4, color: t.tick, font: { size: 10 } },
+            grid:  { color: t.grid },
           },
         },
         plugins: {
@@ -278,7 +292,7 @@ export class ErrorsOverTimeChartComponent implements AfterViewInit, OnDestroy {
               boxHeight: 10,
               padding: 10,
               font: { size: 11 },
-              color: '#6b7280',
+              color: t.tick,
               usePointStyle: false,
             },
           },

@@ -2,7 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { environment } from '../../../environments/environment';
-import { Recommendation, PagedResult } from '../models';
+import { OperatorActionEntry, Recommendation, PagedResult } from '../models';
 
 @Injectable({ providedIn: 'root' })
 export class RecommendationsService {
@@ -30,6 +30,22 @@ export class RecommendationsService {
    *  policy — use after fixing the root cause. */
   retryRecommendation(id: number): Observable<unknown> {
     return this.http.post(`${this.base}/recommendations/${id}/retry`, {});
+  }
+
+  /** Paged operator decision history (Approve / Reject / Retry), newest first.
+   *  Backs the Operator Actions screen. */
+  getOperatorActions(opts: {
+    page?: number; pageSize?: number;
+    actionTaken?: string; q?: string;
+  } = {}): Observable<PagedResult<OperatorActionEntry>> {
+    const params = new URLSearchParams();
+    params.set('page',     String(opts.page ?? 1));
+    params.set('pageSize', String(opts.pageSize ?? 50));
+    if (opts.actionTaken) params.set('actionTaken', opts.actionTaken);
+    if (opts.q)           params.set('q', opts.q);
+    return this.http.get<PagedResult<OperatorActionEntry>>(
+      `${this.base}/data/operator-actions?${params.toString()}`
+    );
   }
 
   generateSuggestions(): Observable<{ generated: number }> {

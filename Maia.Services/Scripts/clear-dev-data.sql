@@ -54,11 +54,11 @@ DELETE FROM [dbo].[ErrorTypes];
 COMMIT;
 
 -- Optionally reset identity sequences so IDs start from 1 again:
--- DBCC CHECKIDENT ('[dbo].[MonitoredJobs]',    RESEED, 0);
--- DBCC CHECKIDENT ('[dbo].[ScanSources]',       RESEED, 0);
--- DBCC CHECKIDENT ('[dbo].[ScanCheckRules]',    RESEED, 0);
--- DBCC CHECKIDENT ('[dbo].[ClassificationRules]',RESEED, 0);
--- DBCC CHECKIDENT ('[dbo].[FixPolicyRules]',    RESEED, 0);
--- DBCC CHECKIDENT ('[dbo].[JobFailures]',        RESEED, 0);
--- DBCC CHECKIDENT ('[dbo].[AIRecommendations]',  RESEED, 0);
--- DBCC CHECKIDENT ('[dbo].[AuditLog]',           RESEED, 0);
+ DBCC CHECKIDENT ('[dbo].[MonitoredJobs]',    RESEED, 0);
+ DBCC CHECKIDENT ('[dbo].[ScanSources]',       RESEED, 0);
+ DBCC CHECKIDENT ('[dbo].[ScanCheckRules]',    RESEED, 0);
+ DBCC CHECKIDENT ('[dbo].[ClassificationRules]',RESEED, 0);
+ DBCC CHECKIDENT ('[dbo].[FixPolicyRules]',    RESEED, 0);
+ DBCC CHECKIDENT ('[dbo].[JobFailures]',        RESEED, 0);
+ DBCC CHECKIDENT ('[dbo].[AIRecommendations]',  RESEED, 0);
+ DBCC CHECKIDENT ('[dbo].[AuditLog]',           RESEED, 0);

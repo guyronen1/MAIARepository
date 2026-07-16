@@ -143,7 +143,7 @@ interface FlowRow {
     .flow-table th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .03em;
                      color: var(--text-muted); font-weight: 600; padding: 4px 10px; border-bottom: 1px solid var(--border); }
     .flow-table td.cell { padding: 8px 10px; border-bottom: 1px solid var(--border-light); vertical-align: top; min-width: 130px; }
-    .flow-table tr.row-gap td { background: #fef3c7; }
+    .flow-table tr.row-gap td { background: var(--warn-bg-2); }
 
     .arrow-col { width: 22px; text-align: center; padding: 0; border-bottom: 1px solid var(--border-light); }
     .arrow { color: var(--text-muted); }
@@ -154,13 +154,13 @@ interface FlowRow {
     .mono     { font-family: 'Consolas', monospace; }
     .detail   { font-size: 11px; margin-top: 3px; max-width: 240px; word-break: break-word; }
 
-    .gap-chip { display: inline-block; background: #fef3c7; border: 1px solid #f59e0b; color: #92400e;
+    .gap-chip { display: inline-block; background: var(--warn-bg-2); border: 1px solid var(--warn-strong); color: var(--warn-text);
                 border-radius: 4px; padding: 1px 7px; font-size: 11px; font-weight: 600; }
     .undet-chip { display: inline-block; color: var(--text-muted); border: 1px dashed var(--border);
                   border-radius: 4px; padding: 1px 7px; font-size: 11px; }
 
     .fix-mode { display: inline-block; font-weight: 600; font-size: 12px; }
-    .fix-mode.auto { color: #15803d; }
+    .fix-mode.auto { color: var(--success); }
   `]
 })
 export class JobFlowComponent implements OnInit {

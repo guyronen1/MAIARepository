@@ -1,11 +1,13 @@
 import {
   AfterViewInit, Component, ElementRef, OnDestroy, ViewChild,
-  computed, effect, inject, input, signal,
+  computed, effect, inject, input, signal, untracked,
 } from '@angular/core';
 import {
   BarController, BarElement, CategoryScale, Chart, LinearScale, Legend, Tooltip,
 } from 'chart.js';
 import { FailuresByJobItem, FailuresService } from '../../core/services/failures.service';
+import { ThemeService } from '../../core/services/theme.service';
+import { readChartTheme } from '../../core/util/chart-theme.util';
 
 // Register only the components this chart needs. Idempotent — Errors Over
 // Time and Resolution Mix can register overlapping components without harm.
@@ -102,6 +104,7 @@ function truncate(s: string): string {
 })
 export class FailuresByJobChartComponent implements AfterViewInit, OnDestroy {
   private svc = inject(FailuresService);
+  private theme = inject(ThemeService);
 
   /** Time range driven by the dashboard parent — same toggle as Errors Over Time. */
   range = input.required<Range>();
@@ -150,6 +153,15 @@ export class FailuresByJobChartComponent implements AfterViewInit, OnDestroy {
     effect(() => {
       const r = this.range();
       this.fetch(r);
+    });
+
+    // Rebuild with theme-matched colours on theme flip (data read untracked).
+    effect(() => {
+      this.theme.resolved();
+      if (!this.chart) return;
+      const canvas = this.canvasRef?.nativeElement;
+      const rows = untracked(() => this.data());
+      if (canvas && rows.length) { this.chart.destroy(); this.buildChart(canvas, rows); }
     });
   }
 
@@ -209,6 +221,7 @@ export class FailuresByJobChartComponent implements AfterViewInit, OnDestroy {
     const fullNames = rows.map(r => r.jobName);
     const counts   = rows.map(r => r.failureCount);
 
+    const t = readChartTheme();
     this.chart = new Chart(canvas, {
       type: 'bar',
       data: {
@@ -235,11 +248,11 @@ export class FailuresByJobChartComponent implements AfterViewInit, OnDestroy {
         scales: {
           x: {
             beginAtZero: true,
-            ticks: { precision: 0, color: '#6b7280', font: { size: 10 }, maxTicksLimit: 5 },
-            grid:  { color: '#e8ebf0' },
+            ticks: { precision: 0, color: t.tick, font: { size: 10 }, maxTicksLimit: 5 },
+            grid:  { color: t.grid },
           },
           y: {
-            ticks: { color: '#374151', font: { size: 11 } },
+            ticks: { color: t.tickStrong, font: { size: 11 } },
             grid:  { display: false },
           },
         },

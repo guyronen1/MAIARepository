@@ -1,11 +1,13 @@
 import {
   AfterViewInit, Component, ElementRef, OnDestroy, ViewChild,
-  inject, signal,
+  effect, inject, signal, untracked,
 } from '@angular/core';
 import {
   BarController, BarElement, CategoryScale, Chart, LinearScale, Legend, Tooltip,
 } from 'chart.js';
 import { FailuresService, ResolutionMixItem } from '../../core/services/failures.service';
+import { ThemeService } from '../../core/services/theme.service';
+import { readChartTheme } from '../../core/util/chart-theme.util';
 
 Chart.register(BarController, BarElement, CategoryScale, LinearScale, Legend, Tooltip);
 
@@ -73,8 +75,21 @@ const COLORS = {
 })
 export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {
   private svc = inject(FailuresService);
+  private theme = inject(ThemeService);
 
   @ViewChild('canvas') canvasRef?: ElementRef<HTMLCanvasElement>;
+
+  constructor() {
+    // Rebuild with theme-matched colours on theme flip (data read untracked).
+    effect(() => {
+      this.theme.resolved();
+      if (!this.chart) return;
+      const canvas = this.canvasRef?.nativeElement;
+      const rows = untracked(() => this.data());
+      const empty = rows.every(r => r.autoHealed + r.operatorApproved + r.manualRequired + r.stillActive === 0);
+      if (canvas && rows.length && !empty) { this.chart.destroy(); this.buildChart(canvas, rows); }
+    });
+  }
 
   loading = signal(true);
   data    = signal<ResolutionMixItem[]>([]);
@@ -142,6 +157,7 @@ export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {
       return `${d}/${m}`;
     });
 
+    const t = readChartTheme();
     this.chart = new Chart(canvas, {
       type: 'bar',
       data: {
@@ -190,8 +206,8 @@ export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {
             // (some days at zero), the grid frames each bucket so the chart
             // reads as "well-formed" instead of "missing chunks". Lighter
             // than the y-axis grid color so it visually recedes.
-            grid:  { display: true, color: '#f3f4f6', drawTicks: false },
-            ticks: { color: '#6b7280', font: { size: 10 } },
+            grid:  { display: true, color: t.gridSubtle, drawTicks: false },
+            ticks: { color: t.tick, font: { size: 10 } },
           },
           y: {
             stacked: true,
@@ -199,15 +215,15 @@ export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {
             // precision: 0 already forces integers; maxTicksLimit caps density
             // (Chart.js will auto-pick round multiples — typical output:
             // 0, 10, 20, 30, 40 for max ~33). No fractional values ever.
-            ticks: { precision: 0, maxTicksLimit: 5, color: '#6b7280', font: { size: 10 } },
-            grid:  { color: '#e8ebf0' },
+            ticks: { precision: 0, maxTicksLimit: 5, color: t.tick, font: { size: 10 } },
+            grid:  { color: t.grid },
           },
         },
         plugins: {
           legend: {
             position: 'bottom',
             align: 'center',
-            labels: { boxWidth: 10, boxHeight: 10, padding: 10, font: { size: 11 }, color: '#6b7280' },
+            labels: { boxWidth: 10, boxHeight: 10, padding: 10, font: { size: 11 }, color: t.tick },
           },
           tooltip: {
             callbacks: {

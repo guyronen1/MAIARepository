@@ -21,7 +21,6 @@ const FILE_FORMATS    = ['Xml'];
 const PREDICATE_TYPES = ['Equals', 'NotEquals', 'Contains', 'NotContains'];
 const SEVERITIES      = ['Low', 'Medium', 'High', 'Critical'];
 const FIX_CATEGORIES  = ['Retry', 'FileRepair', 'DbFix', 'Manual'];
-const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlScript', 'CopyFile', 'Composite'];
 
 /**
  * Tier 2.5 (d2): dedicated per-job configuration screen at
@@ -886,7 +885,7 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
     .row-actions { display: inline-flex; gap: 4px; opacity: 0; transition: opacity 150ms ease; }
     .source-head:hover .row-actions, .source-head:focus-within .row-actions,
     tr:hover .row-actions, tr:focus-within .row-actions { opacity: 1; }
-    .soft-warn { padding: 7px 10px; border-radius: var(--radius-sm); background: #fffbeb; border: 1px solid #fde68a; color: #92400e; font-size: 12px; }
+    .soft-warn { padding: 7px 10px; border-radius: var(--radius-sm); background: var(--warn-bg); border: 1px solid var(--warn-border); color: var(--warn-text); font-size: 12px; }
     .empty-state { padding: 24px; text-align: center; color: var(--text-muted); }
     .empty-icon { font-size: 28px; display: block; margin-bottom: 6px; }
     .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; max-width: 560px; }
@@ -916,12 +915,12 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
     .defaults-toggle { font-size: 11px; margin-top: 6px; display: block; }
     .global-row td { opacity: 0.82; }
     .data-table.compact tr.shadowed td { opacity: 0.6; }
-    .badge-muted { background: #e2e8f0; color: #475569; border: 1px solid #cbd5e1; }
+    .badge-muted { background: var(--surface-3); color: var(--text-muted); border: 1px solid var(--border); }
 
     /* Fix Option drawer */
     .drawer-context-banner { display: flex; align-items: center; gap: 8px; background: var(--primary-light); border: 1px solid var(--primary); border-radius: var(--radius-sm); padding: 8px 12px; font-size: 12px; color: var(--primary-dark); margin-bottom: 14px; }
     .banner-icon { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex-shrink: 0; border-radius: 50%; background: var(--primary); color: #fff; font-style: italic; font-weight: 700; font-size: 12px; font-family: Georgia, serif; }
-    .auto-heal-banner { display: flex; align-items: flex-start; gap: 8px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: var(--radius-sm); padding: 10px 12px; font-size: 12px; color: #92400e; line-height: 1.5; margin-top: 12px; }
+    .auto-heal-banner { display: flex; align-items: flex-start; gap: 8px; background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 12px; color: var(--warn-text); line-height: 1.5; margin-top: 12px; }
     .auto-heal-banner span:first-child { font-size: 16px; }
     .scope-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--text-muted); }
     .scope-current strong { color: var(--text); }
@@ -931,10 +930,10 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
     .toggle-pair { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
     .toggle-pair .toggle-text { font-size: 13px; color: var(--text); }
     .covers-hint { display: block; }
-    .dup-warn { display: block; margin-top: 6px; padding: 8px 10px; border-radius: var(--radius-sm); background: #fef3c7; border: 1px solid #fde68a; font-size: 12px; color: #78350f; line-height: 1.4; }
-    .dup-warn .link-btn { color: #b45309; margin-left: 4px; }
-    .dup-warn .link-btn:hover { color: #92400e; }
-    .dup-warn.save-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; margin-top: 12px; }
+    .dup-warn { display: block; margin-top: 6px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--warn-bg-2); border: 1px solid var(--warn-border); font-size: 12px; color: var(--warn-text); line-height: 1.4; }
+    .dup-warn .link-btn { color: var(--warn-text); font-weight: 600; text-decoration: underline; margin-left: 4px; }
+    .dup-warn .link-btn:hover { color: var(--warn-strong); }
+    .dup-warn.save-error { background: var(--danger-bg); border-color: var(--danger); color: var(--danger); margin-top: 12px; }
     .dup-warn.reachability-warn { margin-top: 6px; }
 
     /* Composite step editor */
@@ -972,16 +971,16 @@ const ACTION_TYPES    = ['Manual', 'ApiCall', 'StoredProcedure', 'Script', 'SqlS
        button (browser resets need to be undone: background/border/cursor). */
     .gap-warn, .gap-warn-btn {
       display: inline-flex; align-items: center; gap: 3px;
-      color: #92400e; background: #fef3c7; border: 1px solid #f59e0b;
+      color: var(--warn-text); background: var(--warn-bg-2); border: 1px solid var(--warn-strong);
       border-radius: 4px; padding: 2px 7px;
       font-size: 12px; font-weight: 600; margin-left: 6px;
       line-height: 1.4; white-space: nowrap;
     }
     .gap-warn-btn { cursor: pointer; font-family: inherit; }
-    .gap-warn-btn:hover { background: #fde68a; border-color: #d97706; }
+    .gap-warn-btn:hover { background: var(--warn-border); border-color: var(--warn-strong); }
     /* Rollup chip on a collapsed source header — matches the inline pill. */
     .collapsed-gap { display: inline-flex; align-items: center; gap: 3px;
-                     color: #92400e; background: #fef3c7; border: 1px solid #f59e0b;
+                     color: var(--warn-text); background: var(--warn-bg-2); border: 1px solid var(--warn-strong);
                      border-radius: 4px; padding: 2px 8px; font-size: 12px; font-weight: 600;
                      white-space: nowrap; margin-left: 6px; }
 
@@ -1701,15 +1700,6 @@ export class JobConfigComponent implements OnInit {
       'ApiCall': 'Retry', 'Script': 'Retry', 'Composite': 'Retry',
     };
     return map[actionType] ?? 'Retry';
-  }
-
-  /** @deprecated — kept for the orderedActionTypes category-hint; category
-   *  no longer drives actionType default for new rules. */
-  private defaultActionTypeFor(category: string): string {
-    const defaults: Record<string, string> = {
-      'DbFix': 'SqlScript', 'FileRepair': 'CopyFile', 'Retry': 'ApiCall',
-    };
-    return defaults[category] ?? 'ApiCall';
   }
 
   syncFixRuleSignal() { this.fixRuleFormSignal.set({ ...this.fixRuleForm }); }

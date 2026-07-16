@@ -96,7 +96,10 @@ builder.Services.AddGlobalExceptionHandling();
 
 var app = builder.Build();
 
-if (app.Environment.IsDevelopment())
+// EnableSwagger lets ops expose Swagger in a non-Development environment for
+// deployment troubleshooting (e.g. IIS) without switching ASPNETCORE_ENVIRONMENT,
+// which would also swap in appsettings.Development.json's connection string.
+if (app.Environment.IsDevelopment() || app.Configuration.GetValue<bool>("EnableSwagger"))
 {
     app.UseSwagger();
     app.UseSwaggerUI();

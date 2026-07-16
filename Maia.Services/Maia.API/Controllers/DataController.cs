@@ -214,9 +214,11 @@ public class DataController(
         [FromQuery] int     page     = 1,
         [FromQuery] int     pageSize = 50,
         [FromQuery] string? view     = null,
+        [FromQuery] string? sort     = null,
+        [FromQuery] string? dir      = null,
         CancellationToken   ct       = default)
     {
-        var paged = await jobs.GetPagedAsync(page, pageSize, view, ct);
+        var paged = await jobs.GetPagedAsync(page, pageSize, view, sort, dir, ct);
 
         // Batch lookup: of the paged FailureIds, which ones have a Success=false
         // FixExecutionLog row since today-midnight? Drives the "Failed to
@@ -756,5 +758,63 @@ public class DataController(
             monitoredJobId, scanSourceId, outcomeFilter, fromDate, toDate, page, pageSize, ct);
         var dtos  = paged.Items.Select(ScanRunDto.From).ToList();
         return Ok(new { paged.TotalCount, paged.TotalPages, paged.Page, paged.PageSize, Items = dtos });
+    }
+
+    /// <summary>
+    /// Operator decision history — one row per Approve / Reject / Retry taken on a
+    /// recommendation, newest first. Backs the Operator Actions screen (the
+    /// "what did we decide and how did it end" audit view, distinct from the
+    /// pending queue on /recommendations). Read-only join over
+    /// OperatorActions → AIRecommendations → JobFailures.
+    /// </summary>
+    [HttpGet("operator-actions")]
+    public async Task<IActionResult> GetOperatorActions(
+        [FromQuery] string?   operatorId,
+        [FromQuery] string?   actionTaken,
+        [FromQuery] DateTime? fromDate,
+        [FromQuery] DateTime? toDate,
+        [FromQuery] string?   q,
+        [FromQuery] int       page     = 1,
+        [FromQuery] int       pageSize = 50,
+        CancellationToken     ct       = default)
+    {
+        if (page < 1)     page     = 1;
+        if (pageSize < 1) pageSize = 1;
+        if (pageSize > MaxPageSize) pageSize = MaxPageSize;
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        var query = db.OperatorActions
+            .AsNoTracking()
+            .Include(a => a.Recommendation!).ThenInclude(r => r.ErrorType)
+            .Include(a => a.Recommendation!).ThenInclude(r => r.Failure!).ThenInclude(f => f.MonitoredJob)
+            .AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(operatorId))
+            query = query.Where(a => a.OperatorId == operatorId);
+        if (!string.IsNullOrWhiteSpace(actionTaken))
+            query = query.Where(a => a.ActionTaken == actionTaken);
+        if (fromDate.HasValue)
+            query = query.Where(a => a.ActionTimestamp >= fromDate.Value);
+        if (toDate.HasValue)
+            query = query.Where(a => a.ActionTimestamp <= toDate.Value);
+        if (!string.IsNullOrWhiteSpace(q))
+            query = query.Where(a =>
+                a.Recommendation!.SuggestedAction.Contains(q)
+                || (a.Recommendation.ErrorType != null && a.Recommendation.ErrorType.Code.Contains(q))
+                || (a.Recommendation.Failure != null && a.Recommendation.Failure.MonitoredJob != null
+                    && a.Recommendation.Failure.MonitoredJob.Name.Contains(q)));
+
+        var totalCount = await query.CountAsync(ct);
+        var items = await query
+            .OrderByDescending(a => a.ActionTimestamp)
+            .ThenByDescending(a => a.ActionId)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(ct);
+
+        var totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
+        var dtos = items.Select(OperatorActionDto.From).ToList();
+        return Ok(new { TotalCount = totalCount, TotalPages = totalPages, Page = page, PageSize = pageSize, Items = dtos });
     }
 }

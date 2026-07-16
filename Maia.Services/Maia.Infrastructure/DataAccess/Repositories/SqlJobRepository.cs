@@ -93,7 +93,7 @@ public sealed class SqlJobRepository(IDbContextFactory<MaiaDbContext> factory) :
     }
 
     public async Task<PagedResult<JobFailure>> GetPagedAsync(
-        int page, int pageSize, string? view = null, CancellationToken ct = default)
+        int page, int pageSize, string? view = null, string? sort = null, string? dir = null, CancellationToken ct = default)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
         IQueryable<JobFailure> query = db.JobFailures
@@ -143,7 +143,21 @@ public sealed class SqlJobRepository(IDbContextFactory<MaiaDbContext> factory) :
             _ => query, // null / "" / "all" / unknown → no filter
         };
 
-        var ordered = query.OrderByDescending(j => j.DetectedAt);
+        // Whitelisted sort — explicit column→expression map (no dynamic property
+        // strings, so nothing operator-supplied reaches the SQL identifier).
+        // Unknown/null key falls back to newest-first. A FailureId tiebreaker
+        // makes paging deterministic when the primary key ties.
+        var asc = string.Equals(dir, "asc", StringComparison.OrdinalIgnoreCase);
+        IOrderedQueryable<JobFailure> ordered = (sort ?? string.Empty).ToLowerInvariant() switch
+        {
+            "id"        => asc ? query.OrderBy(j => j.FailureId)           : query.OrderByDescending(j => j.FailureId),
+            "job"       => asc ? query.OrderBy(j => j.MonitoredJob!.Name)  : query.OrderByDescending(j => j.MonitoredJob!.Name),
+            "errortype" => asc ? query.OrderBy(j => j.ErrorType!.Code)     : query.OrderByDescending(j => j.ErrorType!.Code),
+            "status"    => asc ? query.OrderBy(j => j.Status)              : query.OrderByDescending(j => j.Status),
+            "detected"  => asc ? query.OrderBy(j => j.DetectedAt)          : query.OrderByDescending(j => j.DetectedAt),
+            _           => query.OrderByDescending(j => j.DetectedAt),
+        };
+        ordered = asc ? ordered.ThenBy(j => j.FailureId) : ordered.ThenByDescending(j => j.FailureId);
 
         var total = await ordered.CountAsync(ct);
         var items = await ordered.Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(ct);

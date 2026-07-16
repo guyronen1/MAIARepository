@@ -12,7 +12,6 @@ import { ResolutionMixChartComponent } from './resolution-mix-chart.component';
 import { FailureDetailComponent } from '../failures/failure-detail.component';
 import { DrawerComponent } from '../../shared/drawer/drawer.component';
 import { scanTypeLabelFromNames, scanTypeTitleFromSources } from '../../core/util/scan-type-label.util';
-import { AuthService } from '../../core/services/auth.service';
 
 type ChartRange = '24h' | '7d' | '30d';
 
@@ -35,61 +34,36 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
     <div class="page">
       <div class="page-header">
         <div class="page-title">
-          <div class="title-row">
-            <h1>Dashboard</h1>
-            @if (canControlWorker()) {
-              <button class="worker-pill"
-                      [class.paused]="isSystemPaused()"
-                      [disabled]="pauseToggling()"
-                      (click)="togglePause()"
-                      [title]="isSystemPaused() ? 'Monitoring is paused — click to resume' : 'Monitoring is live — click to pause'">
-                @if (pauseToggling()) {
-                  <span class="pill-spinner"></span>
-                } @else {
-                  <span class="pill-dot"></span>
-                }
-                {{ isSystemPaused() ? 'Paused' : 'Live' }}
-              </button>
-            } @else {
-              <!-- Non-admins see the status, but pause/resume is Admin-only. -->
-              <span class="worker-pill worker-pill-static" [class.paused]="isSystemPaused()"
-                    [title]="isSystemPaused() ? 'Monitoring is paused' : 'Monitoring is live'">
-                <span class="pill-dot"></span>
-                {{ isSystemPaused() ? 'Paused' : 'Live' }}
-              </span>
-            }
-          </div>
+          <h1>Dashboard</h1>
+          <!-- Worker Live/Paused status + pause control now live in the top-bar
+               pill (single global status signal) — no duplicate here. -->
           <p class="text-muted text-sm">Real-time monitoring overview</p>
         </div>
 
-        <!-- Inline activity strip — slot sits between title and actions, vertically
-             centered with the H1. Empty when nothing to show (no reserved space).
-             Completed variant auto-dismisses after 30s; hover pauses, mouseleave
-             restarts the FULL 30s (deliberate UX). -->
+        <!-- Inline activity strip. In-flight scans show a live spinner strip
+             (bound directly to worker state — appears/disappears on its own).
+             A completed scan shows a plain self-dismissing "✓ …" beat for a few
+             seconds. No hover-pause / manual dismiss (simplified, item 10). -->
         <div class="activity-slot">
-          @if (!bannerCollapsed()) {
-            <div class="activity-inline"
-                 [class.completed]="!activityInFlight() && showActivity()"
-                 [class.in-flight]="activityInFlight()"
-                 (mouseenter)="onBannerMouseEnter()"
-                 (mouseleave)="onBannerMouseLeave()">
-              @if (activityInFlight()) {
-                <span class="spinner-mini"></span>
-              } @else {
-                <span class="check-mark">✓</span>
-              }
+          @if (activityInFlight()) {
+            <div class="activity-inline in-flight">
+              <span class="spinner-mini"></span>
               <span class="activity-text" [title]="activityLabel()">{{ activityLabel() }}</span>
-              @if (!activityInFlight() && showActivity()) {
-                <button class="banner-dismiss" type="button"
-                        (click)="dismissBanner()" title="Dismiss">✕</button>
-              }
+            </div>
+          } @else if (completedBeat(); as beat) {
+            <div class="activity-inline completed">
+              <span class="check-mark">✓</span>
+              <span class="activity-text" [title]="beat">{{ beat }}</span>
             </div>
           }
         </div>
 
       </div>
 
-      <!-- KPI Cards — 4 focused tiles, click drills into /failures with the matching view -->
+      <!-- KPI Cards — the five action/problem tiles, click drills into /failures
+           with the matching view. "Resolved Today" is pure reassurance (no action)
+           so it's demoted to the slim strip below, not competing for attention with
+           the alarm tiles (item 4 — visual hierarchy). -->
       <div class="kpi-grid">
         <button class="kpi-card danger" (click)="drill('active')" title="Show all active failures">
           <div class="kpi-icon">⚠</div>
@@ -103,14 +77,6 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
           <div class="kpi-body">
             <div class="kpi-value">{{ stats().awaitingAction }}</div>
             <div class="kpi-label">Awaiting Action</div>
-          </div>
-        </button>
-        <button class="kpi-card success" (click)="drill('resolved')" title="Failures resolved today (auto-heal + operator approval)">
-          <div class="kpi-icon">✓</div>
-          <div class="kpi-body">
-            <div class="kpi-value">{{ stats().resolvedToday }}</div>
-            <div class="kpi-label">Resolved Today</div>
-            <div class="kpi-breakdown">Auto: {{ stats().autoFixedToday }} · Manual: {{ stats().manuallyFixedToday }}</div>
           </div>
         </button>
         <button class="kpi-card warning" (click)="drill('manual-required')" title="Failures that need operator intervention">
@@ -135,6 +101,18 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
             <div class="kpi-value">{{ stats().unconfigured }}</div>
             <div class="kpi-label">Unconfigured</div>
             <div class="kpi-breakdown">No class: {{ stats().unclassified }} · No policy: {{ stats().unconfiguredNoPolicy }}</div>
+          </div>
+        </button>
+        <!-- Resolved Today — reassurance metric (no action). Kept as a tile but
+             de-emphasized: last position, narrower column + smaller value/icon
+             (item 4) so it doesn't compete with the action tiles. -->
+        <button class="kpi-card success compact" (click)="drill('resolved')"
+                title="Failures resolved today (auto-heal + operator approval)">
+          <div class="kpi-icon">✓</div>
+          <div class="kpi-body">
+            <div class="kpi-value">{{ stats().resolvedToday }}</div>
+            <div class="kpi-label">Resolved Today</div>
+            <div class="kpi-breakdown">Auto {{ stats().autoFixedToday }} · Manual {{ stats().manuallyFixedToday }}</div>
           </div>
         </button>
       </div>
@@ -330,33 +308,6 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
       gap: 16px;
     }
     .page-title { display: flex; flex-direction: column; }
-    .title-row  { display: flex; align-items: center; gap: 10px; }
-    /* Live / Paused worker-control pill */
-    .worker-pill-static { cursor: default; }
-    .worker-pill {
-      display: inline-flex; align-items: center; gap: 5px;
-      padding: 3px 10px; border-radius: 12px; border: 1px solid;
-      font-size: 11px; font-weight: 600; letter-spacing: 0.03em;
-      cursor: pointer; transition: opacity 0.15s, background 0.15s;
-      background: #dcfce7; color: #15803d; border-color: #86efac;
-      &.paused { background: #fef3c7; color: #b45309; border-color: #fcd34d; }
-      &:hover:not(:disabled) { opacity: 0.8; }
-      &:disabled { opacity: 0.55; cursor: default; }
-    }
-    .pill-dot {
-      width: 7px; height: 7px; border-radius: 50%;
-      background: currentColor;
-      .worker-pill:not(.paused) & { animation: pulse-dot 2s ease-in-out infinite; }
-    }
-    .pill-spinner {
-      width: 10px; height: 10px; border-radius: 50%;
-      border: 2px solid currentColor; border-top-color: transparent;
-      animation: spin 0.7s linear infinite;
-    }
-    @keyframes pulse-dot {
-      0%, 100% { opacity: 1; }
-      50%       { opacity: 0.4; }
-    }
     .activity-slot {
       align-self: start;
       min-width: 0;
@@ -365,7 +316,19 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
       max-width: 100%;
     }
 
-    .kpi-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+    /* Five equal action tiles + a narrower 6th (Resolved Today) so the
+       reassurance metric reads as secondary without leaving the row. */
+    .kpi-grid { display: grid; grid-template-columns: repeat(5, 1fr) 0.7fr; gap: 10px; }
+
+    /* Resolved Today, de-emphasized: smaller value/icon + muted fill. The
+       narrower grid column (above) does the width shrink; this softens the
+       content so it clearly reads as secondary reassurance, not an alarm. */
+    .kpi-card.compact {
+      padding: 8px 10px;
+      background: var(--surface-2);
+    }
+    .kpi-card.compact .kpi-value { font-size: 16px; }
+    .kpi-card.compact .kpi-icon  { font-size: 16px; }
     .kpi-card {
       /* button reset — these are <button> elements so they're keyboard-accessible */
       font: inherit; color: inherit; text-align: left;
@@ -528,13 +491,6 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       max-width: 480px;
     }
-    .banner-dismiss {
-      background: transparent; border: none; cursor: pointer;
-      color: inherit; opacity: 0.55;
-      font-size: 12px; padding: 2px 6px; border-radius: 3px;
-      transition: opacity var(--transition), background var(--transition);
-      &:hover { opacity: 1; background: rgba(0,0,0,0.05); }
-    }
     .spinner-mini {
       width: 12px; height: 12px;
       border: 2px solid rgba(99, 102, 241, 0.3);
@@ -578,8 +534,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   // Raw PolledData<T> from the service — each slice is independent and tracks
   // its own isStale / lastUpdatedAt. The component-facing getters below unwrap
-  // `.value` so templates stay simple; isStale is available for a future
-  // per-panel "couldn't refresh" indicator (not rendered yet).
+  // `.value` so templates stay simple. Global data-staleness is surfaced in the
+  // top bar (the worker-status heartbeat drives a "Reconnecting…" chip); a
+  // finer per-panel indicator off these flags remains a possible future polish.
   private static readonly EMPTY_POLLED: PolledData<unknown> = {
     value: null, isStale: false, lastUpdatedAt: null,
   };
@@ -623,15 +580,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
   // dashboard or the scan-jobs screen is mounted.
   private workerStatus = computed(() => this.statusPolled().value);
 
-  // Activity-strip visibility: either a scan is in-flight, OR a scan completed
-  // recently enough that the operator should still see the "found N errors" beat.
-  // Quick file scans finish in <1s and the 5s poll usually misses them in-flight;
-  // the recent-completion window catches that.
-  showActivity = computed(() => {
-    const s = this.workerStatus();
-    return !!s && (s.activeScans.length > 0 || s.recentScansLast30s.length > 0);
-  });
-
   activityLabel = computed(() => {
     const s = this.workerStatus();
     if (!s) return '';
@@ -658,72 +606,39 @@ export class DashboardComponent implements OnInit, OnDestroy {
   /** True when there's an in-flight scan (use spinner); false when only recent-completed (use ✓) */
   activityInFlight = computed(() => (this.workerStatus()?.activeScans.length ?? 0) > 0);
 
-  // ── Banner auto-dismiss (completed variant only — in-flight stays sticky) ─────
-  /** Has the operator (or the timer) dismissed the current completed banner? */
-  private bannerDismissed     = signal(false);
-  private lastSeenScanRunId   = signal<number | null>(null);
-  private dismissTimerId?:    ReturnType<typeof setTimeout>;
-  private readonly DISMISS_MS = 30_000;
+  // ── Completed-scan beat (plain self-dismissing toast) ────────────────────
+  // The "✓ N scans completed — M new failures" beat. Set when a new completed
+  // scan lands (while not in-flight), snapshotting the label, and cleared by a
+  // single timer after BEAT_MS. No hover-pause / restart / manual dismiss.
+  completedBeat = signal<string | null>(null);
+  private lastSeenScanRunId = signal<number | null>(null);
+  private beatTimerId?: ReturnType<typeof setTimeout>;
+  private readonly BEAT_MS = 8_000;
 
-  /** The strip is collapsed when (a) there's nothing to show, OR (b) the completed
-   *  variant has been dismissed and no new in-flight scan has arrived since. */
-  bannerCollapsed = computed(() => {
-    if (!this.showActivity()) return true;
-    if (this.activityInFlight()) return false;          // never auto-dismiss in-flight
-    return this.bannerDismissed();
-  });
-
-  // Watch the most-recent recent-scan id; when it changes, treat that as a new
-  // "completed" event → reset dismissed flag and (re)start the auto-dismiss timer.
-  // When the strip flips to in-flight, the timer is irrelevant (cleared).
-  // Effect must run in the injection context — declared as a class field initialiser
-  // so it picks up the component's injector.
   private bannerLifecycleEffect = effect(() => {
     const s = this.workerStatus();
     const latestId = s?.recentScansLast30s?.[0]?.scanRunId ?? null;
 
+    // In-flight strip takes over — no completed beat while scanning.
     if (this.activityInFlight()) {
-      // In-flight overrides — kill any pending dismissal timer
-      this.clearDismissTimer();
+      this.clearBeatTimer();
+      this.completedBeat.set(null);
       return;
     }
-
+    // A newly-completed scan → show its beat for BEAT_MS, then it's gone.
     if (latestId !== null && latestId !== this.lastSeenScanRunId()) {
-      // New completed scan — un-dismiss, mark as seen, restart the 30s clock
       this.lastSeenScanRunId.set(latestId);
-      this.bannerDismissed.set(false);
-      this.scheduleDismiss();
+      this.completedBeat.set(this.activityLabel());
+      this.clearBeatTimer();
+      this.beatTimerId = setTimeout(() => this.completedBeat.set(null), this.BEAT_MS);
     }
   });
 
-  private scheduleDismiss(): void {
-    this.clearDismissTimer();
-    this.dismissTimerId = setTimeout(() => this.bannerDismissed.set(true), this.DISMISS_MS);
-  }
-
-  private clearDismissTimer(): void {
-    if (this.dismissTimerId !== undefined) {
-      clearTimeout(this.dismissTimerId);
-      this.dismissTimerId = undefined;
+  private clearBeatTimer(): void {
+    if (this.beatTimerId !== undefined) {
+      clearTimeout(this.beatTimerId);
+      this.beatTimerId = undefined;
     }
-  }
-
-  onBannerMouseEnter(): void {
-    // Pause auto-dismiss while operator is reading
-    this.clearDismissTimer();
-  }
-
-  onBannerMouseLeave(): void {
-    // Deliberate UX: restart the FULL 30s (not resume) — operator who hovered at
-    // second 28 gets a fresh re-read window. Skip if the banner is already dismissed
-    // or in-flight (in-flight ignores the timer anyway).
-    if (this.bannerDismissed() || this.activityInFlight()) return;
-    this.scheduleDismiss();
-  }
-
-  dismissBanner(): void {
-    this.clearDismissTimer();
-    this.bannerDismissed.set(true);
   }
 
   /** monitoredJobId → latest-scan summary, refreshed every poll. */
@@ -766,12 +681,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
     if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
     if (sec < 86400)return `${Math.floor(sec / 3600)}h ago`;
     return `${Math.floor(sec / 86400)}d ago`;
-  }
-
-  lastScanLabel(monitoredJobId: number): string {
-    const ls = this.jobLastScans().get(monitoredJobId);
-    if (!ls) return 'No scans yet';
-    return `${ls.outcome} · ${ls.durationMs}ms · ${this.relativeAge(ls.completedAt)}`;
   }
 
   lastScanBadgeClass(monitoredJobId: number): string {
@@ -828,7 +737,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   ngOnDestroy() {
     this.statusSvc.stop();
-    this.clearDismissTimer();
+    this.clearBeatTimer();
   }
 
   /** Navigate to the failures list with the matching server-side filter. */
@@ -845,25 +754,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
     // 5s snapshot poll will pick up any new failures / lease state on its own.
     this.scanSvc.scanById(job.monitoredJobId).subscribe({
       next: r => this.lastScan.set(r)
-    });
-  }
-
-  // ── Worker pause/resume toggle ────────────────────────────────────────
-  private auth = inject(AuthService);
-  /** Pausing/resuming the worker is an Admin operation (POST /api/admin/worker/*). */
-  canControlWorker = computed(() => this.auth.hasAtLeast('Administrator'));
-  isSystemPaused = computed(() => this.workerStatus()?.isPaused ?? false);
-  pauseToggling  = signal(false);
-
-  togglePause(): void {
-    if (this.pauseToggling()) return;
-    this.pauseToggling.set(true);
-    const call = this.isSystemPaused()
-      ? this.scanSvc.resumeWorker()
-      : this.scanSvc.pauseWorker();
-    call.subscribe({
-      next:  () => this.pauseToggling.set(false),
-      error: () => this.pauseToggling.set(false),
     });
   }
 }

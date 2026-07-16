@@ -6,6 +6,18 @@
   <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <!-- Apply the stored theme before Angular boots so there's no light-mode
+       flash on load. 'system' (or unset) leaves it to prefers-color-scheme. -->
+  <script>
+    (function () {
+      try {
+        var m = localStorage.getItem('maia-theme');
+        if (m === 'light' || m === 'dark') {
+          document.documentElement.setAttribute('data-theme', m);
+        }
+      } catch (e) { /* localStorage blocked — fall back to OS preference */ }
+    })();
+  </script>
 </head>
 <body>
   <app-root></app-root>

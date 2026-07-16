@@ -23,6 +23,17 @@
   --purple:        #7c3aed;
   --purple-bg:     #ede9fe;
 
+  // Warning PANELS/PILLS (soft-warn, auto-heal banner, coverage-gap pills, the
+  // Flow view's no-classification row). Distinct from --warning/-bg (badge/text
+  // accents) — these carry their own high-contrast text so they read on both
+  // themes: dark-brown text on light amber (light), bright amber on dark amber
+  // tint (dark). Light values match the previous hardcodes.
+  --warn-bg:       #fffbeb;
+  --warn-bg-2:     #fef3c7;
+  --warn-border:   #fde68a;
+  --warn-strong:   #f59e0b;
+  --warn-text:     #92400e;
+
   --text:          #1e2533;
   --text-muted:    #6b7280;
   --text-dim:      #9ca3af;
@@ -36,7 +47,60 @@
   --topbar-h:      56px;
   --sidebar-w:     220px;
   --transition:    150ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  color-scheme: light;   // native controls / scrollbars follow the theme
 }
+
+// ── Dark theme ───────────────────────────────────────────────────────────────
+// Only the token VALUES change; every component reads these tokens, so the whole
+// app re-themes from here. Shared between the OS-preference path and the explicit
+// [data-theme="dark"] override so the two can never drift.
+@mixin maia-dark {
+  color-scheme: dark;
+
+  --bg:            #0e1117;
+  --surface:       #161b22;
+  --surface-2:     #1c2230;
+  --surface-3:     #262d3d;
+  --border:        #2b3242;
+  --border-light:  #222836;
+
+  // NESS orange kept as the brand accent; nudged brighter for contrast on dark.
+  --primary:       #f2932e;
+  --primary-dark:  #e8820c;
+  --primary-light: rgba(242, 147, 46, 0.15);   // active nav-item tint on dark
+  --primary-glow:  rgba(242, 147, 46, 0.30);
+
+  // Foreground colours brightened; -bg tints darkened (they sit on dark cards).
+  --success:       #3ecf8e;  --success-bg: rgba(34, 197, 94, 0.16);
+  --warning:       #f5b544;  --warning-bg: rgba(217, 119, 6, 0.18);
+  --danger:        #f47272;  --danger-bg:  rgba(220, 38, 38, 0.20);
+  --info:          #5aa2f5;  --info-bg:    rgba(37, 99, 235, 0.20);
+  --purple:        #a98bfa;  --purple-bg:  rgba(124, 58, 237, 0.20);
+
+  // Warning panels/pills on dark — amber tint over the dark card + bright amber
+  // text (readable), instead of opaque light amber blocks.
+  --warn-bg:       rgba(217, 119, 6, 0.12);
+  --warn-bg-2:     rgba(217, 119, 6, 0.20);
+  --warn-border:   rgba(245, 181, 68, 0.35);
+  --warn-strong:   rgba(245, 181, 68, 0.55);
+  --warn-text:     #f5b544;
+
+  --text:          #e6e9ef;
+  --text-muted:    #97a1b2;
+  --text-dim:      #6a7488;
+
+  --shadow-sm:     0 1px 3px rgba(0, 0, 0, 0.5);
+  --shadow:        0 3px 10px rgba(0, 0, 0, 0.6);
+}
+
+// Follow the OS when the operator hasn't picked a theme (no data-theme attr).
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) { @include maia-dark; }
+}
+// Explicit override written by ThemeService. data-theme="light" intentionally
+// matches nothing here → falls through to the light :root above.
+:root[data-theme="dark"] { @include maia-dark; }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -177,7 +241,7 @@ select option { background: #fff; }
   tr:last-child td { border-bottom: none; }
   tbody tr {
     transition: background var(--transition);
-    &:hover { background: #fafbfc; }
+    &:hover { background: var(--surface-2); }   // token → correct in both themes
     &.clickable { cursor: pointer; }
   }
 }

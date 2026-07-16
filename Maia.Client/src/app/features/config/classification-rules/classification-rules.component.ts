@@ -309,14 +309,14 @@ import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
 
     .dup-warn {
       display: block; margin-top: 6px; padding: 8px 10px; border-radius: var(--radius-sm);
-      background: #fef3c7; border: 1px solid #fde68a; font-size: 12px; color: #78350f; line-height: 1.4;
+      background: var(--warn-bg-2); border: 1px solid var(--warn-border); font-size: 12px; color: var(--warn-text); line-height: 1.4;
     }
-    .dup-warn.save-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; margin: 0 20px 8px; }
+    .dup-warn.save-error { background: var(--danger-bg); border-color: var(--danger); color: var(--danger); margin: 0 20px 8px; }
     .dup-warn .link-btn {
       background: transparent; border: none; padding: 0; margin-left: 4px;
-      color: #b45309; font-weight: 600; cursor: pointer; text-decoration: underline; font-size: inherit;
+      color: var(--warn-text); font-weight: 600; cursor: pointer; text-decoration: underline; font-size: inherit;
     }
-    .dup-warn .link-btn:hover { color: #92400e; }
+    .dup-warn .link-btn:hover { color: var(--warn-strong); }
 
     .badge-muted { background: #e0e7ff; color: #3730a3; border: 1px solid #c7d2fe; }
   `]

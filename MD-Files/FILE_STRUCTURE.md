@@ -129,7 +129,8 @@ Scripts/
 
 Maia.API/
 ├── Controllers/
-│   ├── DataController             GET failures, recommendations, monitored-jobs, scan-runs (read-only)
+│   ├── DataController             GET failures, recommendations, monitored-jobs, scan-runs,
+│   │                              operator-actions (read-only)
 │   ├── ConfigController           CRUD for monitored jobs, rules, fix policies; GET fix-policy-rules/{id}
 │   ├── ClassificationController   POST /classify
 │   ├── FixController              POST /execute-fixes  (manual global drain)
@@ -183,9 +184,22 @@ src/app/
 │       ├── worker-status.service.ts  4-endpoint polling coordinator;
 │       │                             emits PolledData<T> on status$ / stats$ /
 │       │                             recentFailures$ / monitoredJobs$.
-│       └── navigation-history.service.ts  tracks previous distinct path for
-│                                          the drawer's smart back button.
-│                                          Eagerly instantiated in ShellComponent.
+│       ├── navigation-history.service.ts  tracks previous distinct path for
+│       │                                  the drawer's smart back button.
+│       │                                  Eagerly instantiated in ShellComponent.
+│       ├── theme.service.ts             light/dark theme: mode signal
+│       │                                (system|light|dark, localStorage-persisted),
+│       │                                stamps data-theme on <html>. Toggled from the
+│       │                                top-bar account menu; dark tokens in styles.scss.
+│       ├── search.service.ts            command-palette: open-state signal +
+│       │                                query(text) → role-filtered results
+│       │                                (nav destinations + failure-by-id + jobs).
+│       │                                query() is reusable as a future LLM
+│       │                                "navigate" tool.
+│       └── language.service.ts          UI language scaffold: current signal
+│                                        (en enabled; he "soon"), localStorage,
+│                                        stamps lang/dir on <html>. Picker in the top-bar
+│                                        account menu. Translations = deferred item 11.
 ├── layout/
 │   ├── shell/         ShellComponent — root layout; eagerly injects NavigationHistoryService
 │   ├── top-bar/       TopBarComponent
@@ -205,8 +219,11 @@ src/app/
 │   │                                 rendered inside the drawer. Polls /failures/{id}/status
 │   │                                 every 5s while mounted; "Already executed/approved/
 │   │                                 rejected" graceful disable when state changes mid-review.
-│   ├── recommendations/              RecommendationsComponent (also handles operator-actions route);
-│   │                                 openFailure(id) → /failures?selected=:id (drawer)
+│   ├── recommendations/              RecommendationsComponent — pending-action queue;
+│   │                                 in-place failure drawer via ?selected
+│   ├── operator-actions/             OperatorActionsComponent — decision HISTORY
+│   │                                 (Approve/Reject/Retry log via GET /api/data/operator-actions);
+│   │                                 in-place failure drawer via ?selected
 │   ├── scan-jobs/                    ScanJobsComponent
 │   └── config/
 │       ├── monitored-jobs/           MonitoredJobsComponent — job CRUD + 3-tab panel (Scan Rules / Classification Rules / Fix Options)

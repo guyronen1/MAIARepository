@@ -222,7 +222,7 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
     .form-group { display:flex; flex-direction:column; gap:4px; }
     .field-hint { font-size:11px; color:var(--text-dim); }
     .cfg-footer { display:flex; justify-content:flex-end; gap:8px; margin-top:6px; }
-    .dup-warn { background:#fef3c7; border:1px solid #fde68a; color:#78350f; font-size:12px; padding:8px 10px; border-radius:var(--radius-sm); }
+    .dup-warn { background:var(--warn-bg-2); border:1px solid var(--warn-border); color:var(--warn-text); font-size:12px; padding:8px 10px; border-radius:var(--radius-sm); }
   `]
 })
 export class UnconfiguredComponent implements OnInit {

@@ -3,3 +3,4 @@ export * from './recommendation.model';
 export * from './monitored-job.model';
 export * from './scan-result.model';
 export * from './worker-status.model';
+export * from './operator-action.model';

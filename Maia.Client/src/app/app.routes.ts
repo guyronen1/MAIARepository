@@ -21,7 +21,9 @@ export const routes: Routes = [
       { path: 'failures/:id', redirectTo: ({ params }) => `/failures?selected=${params['id']}` },
       { path: 'unconfigured',  loadComponent: () => import('./features/unconfigured/unconfigured.component').then(m => m.UnconfiguredComponent) },
       { path: 'recommendations', loadComponent: () => import('./features/recommendations/recommendations.component').then(m => m.RecommendationsComponent) },
-      { path: 'operator-actions', loadComponent: () => import('./features/recommendations/recommendations.component').then(m => m.RecommendationsComponent) },
+      // Decision HISTORY (approve/reject/retry log) — distinct from the
+      // pending queue on /recommendations.
+      { path: 'operator-actions', loadComponent: () => import('./features/operator-actions/operator-actions.component').then(m => m.OperatorActionsComponent) },
       { path: 'scan-jobs',    loadComponent: () => import('./features/scan-jobs/scan-jobs.component').then(m => m.ScanJobsComponent) },
       { path: 'config/monitored-jobs', loadComponent: () => import('./features/config/monitored-jobs/monitored-jobs.component').then(m => m.MonitoredJobsComponent) },
       { path: 'config/monitored-jobs/:id', loadComponent: () => import('./features/config/monitored-jobs/job-config.component').then(m => m.JobConfigComponent) },

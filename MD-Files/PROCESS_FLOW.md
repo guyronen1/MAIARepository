@@ -67,10 +67,15 @@ Lease semantics:
 ```
 GET  /api/data/jobs?page=1&pageSize=50                         → JobFailureDto[]
 GET  /api/data/failures?page=1&pageSize=50&view=               → JobFailureDto[] (paged)
-                                                                 view ∈ active | unclassified |
+                        &sort=&dir=                              view ∈ active | unclassified |
                                                                        awaiting-action | auto-fixed |
                                                                        operator-fixed | resolved |
                                                                        manual-required
+                                                                 sort ∈ id | job | errortype |
+                                                                       detected(default) | status;
+                                                                 dir ∈ asc | desc(default).
+                                                                 Whitelisted server-side sort +
+                                                                 FailureId tiebreaker.
 GET  /api/data/failures/{id}/status                            → failure detail + recommendations
                                                                  (polled by the drawer every 5s)
 GET  /api/data/recommendations?page=1&pageSize=50              → RecommendationDto[] (+ policy snapshot)
@@ -91,6 +96,10 @@ GET  /api/data/analytics/failures-over-time?range=24h|7d|30d   → time-bucketed
                                                                   errorTypeId=0 / "(unclassified)".
 GET  /api/data/scan-runs?monitoredJobId=&outcome=              → ScanRunDto[]  (paged, max 200)
                           &fromDate=&toDate=&page=1&pageSize=50
+GET  /api/data/operator-actions?operatorId=&actionTaken=       → OperatorActionDto[] (paged, max 200)
+                          &fromDate=&toDate=&q=&page=&pageSize=   Decision history (Approve/Reject/Retry,
+                                                                  newest first) with joined rec + failure
+                                                                  + job context. Backs /operator-actions.
 GET  /api/unconfigured/clusters?window=30d|all                → Case A: unclassified-failure clusters
                                                                  (IUnconfiguredClusterAnalyzer / ngram-v1):
                                                                  { totalUnclassified, clusteredCount,

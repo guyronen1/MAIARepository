@@ -96,14 +96,14 @@ IF NOT EXISTS (SELECT 1 FROM [dbo].[ScanCheckRules]
          NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 
 IF NOT EXISTS (SELECT 1 FROM [dbo].[ScanCheckRules]
-               WHERE ScanSourceId = @sourceId AND TargetField = N'FileStatusCode' AND ExpectedValue = N'22')
+               WHERE ScanSourceId = @sourceId AND TargetField = N'EventStatusCode' AND ExpectedValue = N'22')
     INSERT INTO [dbo].[ScanCheckRules]
         (MonitoredJobId, ScanSourceId, CheckType, TargetField, MinValue, MaxValue, ExpectedValue,
          Severity, Description, IsActive, SourceTable, WatermarkColumn, SourceIdColumn,
          FilePathColumn, InputPathPattern, ExtractorType, ExtractorLocator, IdentifierLocator,
          ExtractorPredicateType, ExtractorPredicateValue)
     VALUES
-        (@jobId, @sourceId, N'ValueEquals', N'FileStatusCode', NULL, NULL, N'22',
+        (@jobId, @sourceId, N'ValueEquals', N'EventStatusCode', NULL, NULL, N'22',
          N'Low', N'התקבל מהמסלקה משוב תקול ברמת רשומה על המענה', 1,
          N'dbo.Event', N'UpdateDate', N'id',
          NULL, NULL, NULL, NULL, NULL, NULL, NULL);
@@ -128,12 +128,12 @@ SELECT @rule64Id = RuleId FROM [dbo].[ClassificationRules]
 WHERE JobTypeId = @jobTypeId AND Pattern = N'EventStatusCode=9' AND IsActive = 1;
 
 IF NOT EXISTS (SELECT 1 FROM [dbo].[ClassificationRules]
-               WHERE JobTypeId = @jobTypeId AND Pattern = N'FileStatusCode=22' AND IsActive = 1)
+               WHERE JobTypeId = @jobTypeId AND Pattern = N'EventStatusCode=22' AND IsActive = 1)
     INSERT INTO [dbo].[ClassificationRules]
         (JobTypeId, ErrorTypeId, Pattern, Confidence, Priority, IsActive)
-    VALUES (@jobTypeId, @errorType18Id, N'FileStatusCode=22', 0.90, 1, 1);
+    VALUES (@jobTypeId, @errorType18Id, N'EventStatusCode=22', 0.90, 1, 1);
 SELECT @rule65Id = RuleId FROM [dbo].[ClassificationRules]
-WHERE JobTypeId = @jobTypeId AND Pattern = N'FileStatusCode=22' AND IsActive = 1;
+WHERE JobTypeId = @jobTypeId AND Pattern = N'EventStatusCode=22' AND IsActive = 1;
 
 -- ── Link classification rules to this job ─────────────────
 IF NOT EXISTS (SELECT 1 FROM [dbo].[MonitoredJobRules] WHERE MonitoredJobId = @jobId AND RuleId = @rule63Id)
@@ -160,7 +160,7 @@ IF NOT EXISTS (SELECT 1 FROM [dbo].[FixPolicyRules]
          N'set EventStatusCode=5', N'DbFix', 1, 1,
          N'admin', GETDATE(),
          N'SqlScript',
-         N'update dbo.Event set EventStatusCode=5,updateDate=getdate(),updateUser=''MAIA'' WHERE [id] = ''{sourceId}''',
+         N'update dbo.Event set EventStatusCode=5,updateDate=getdate(),Details=''MAIA updated event- to status=5'' WHERE [id] = ''{sourceId}''',
          NULL, NULL, NULL);
 
 -- FailedFeedback (FileStatusCode=22): classified only, no automated fix.

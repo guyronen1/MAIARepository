@@ -2,7 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { environment } from '../../../environments/environment';
-import { MonitoredJob, ScanCheckRule } from '../models';
+import { MonitoredJob } from '../models';
 
 export interface JobType    { jobTypeId: number; name: string; description: string; }
 export interface ErrorType  {
@@ -123,12 +123,8 @@ export class ConfigService {
   private http = inject(HttpClient);
   private base = `${environment.apiUrl}/config`;
 
-  // Identity is now server-authoritative: the audit actor is derived from the
-  // authenticated session cookie on the backend, so writes carry no operatorId.
-  // These helpers are retained as pass-throughs to keep the call sites untouched
-  // (the body/query no longer gains an operatorId).
-  private withActor<T extends object>(req: T): T { return req; }
-  private actorParams(): HttpParams { return new HttpParams(); }
+  // Identity is server-authoritative: the audit actor comes from the session
+  // cookie on the backend, so config writes carry no operatorId.
 
   // ── Lookups ────────────────────────────────────────────────────────────────
   getJobTypes():   Observable<JobType[]>   { return this.http.get<JobType[]>(`${this.base}/job-types`); }
@@ -137,13 +133,13 @@ export class ConfigService {
     return this.http.get<ErrorType[]>(`${this.base}/error-types`, { params });
   }
   createErrorType(req: UpsertErrorTypeRequest): Observable<{ errorTypeId: number }> {
-    return this.http.post<{ errorTypeId: number }>(`${this.base}/error-types`, this.withActor(req));
+    return this.http.post<{ errorTypeId: number }>(`${this.base}/error-types`, req);
   }
   updateErrorType(id: number, req: UpsertErrorTypeRequest): Observable<void> {
-    return this.http.put<void>(`${this.base}/error-types/${id}`, this.withActor(req));
+    return this.http.put<void>(`${this.base}/error-types/${id}`, req);
   }
   deleteErrorType(id: number): Observable<void> {
-    return this.http.delete<void>(`${this.base}/error-types/${id}`, { params: this.actorParams() });
+    return this.http.delete<void>(`${this.base}/error-types/${id}`);
   }
 
   // ── Monitored Jobs ─────────────────────────────────────────────────────────
@@ -156,56 +152,54 @@ export class ConfigService {
     return this.http.get<MonitoredJob>(`${this.base}/monitored-jobs/${id}`);
   }
   createJob(req: UpsertJobRequest): Observable<{ monitoredJobId: number }> {
-    return this.http.post<{ monitoredJobId: number }>(`${this.base}/monitored-jobs`, this.withActor(req));
+    return this.http.post<{ monitoredJobId: number }>(`${this.base}/monitored-jobs`, req);
   }
   updateJob(id: number, req: UpsertJobRequest): Observable<void> {
-    return this.http.put<void>(`${this.base}/monitored-jobs/${id}`, this.withActor(req));
+    return this.http.put<void>(`${this.base}/monitored-jobs/${id}`, req);
   }
   deleteJob(id: number): Observable<void> {
-    return this.http.delete<void>(`${this.base}/monitored-jobs/${id}`, { params: this.actorParams() });
+    return this.http.delete<void>(`${this.base}/monitored-jobs/${id}`);
   }
 
   // ── Scan Sources (Tier 2.5) ────────────────────────────────────────────────
   createScanSource(jobId: number, req: UpsertScanSourceRequest): Observable<{ scanSourceId: number }> {
-    return this.http.post<{ scanSourceId: number }>(`${this.base}/monitored-jobs/${jobId}/scan-sources`, this.withActor(req));
+    return this.http.post<{ scanSourceId: number }>(`${this.base}/monitored-jobs/${jobId}/scan-sources`, req);
   }
   updateScanSource(id: number, req: UpsertScanSourceRequest): Observable<void> {
-    return this.http.put<void>(`${this.base}/scan-sources/${id}`, this.withActor(req));
+    return this.http.put<void>(`${this.base}/scan-sources/${id}`, req);
   }
   deleteScanSource(id: number): Observable<void> {
-    return this.http.delete<void>(`${this.base}/scan-sources/${id}`, { params: this.actorParams() });
+    return this.http.delete<void>(`${this.base}/scan-sources/${id}`);
   }
   /** Source-scoped rule create — the canonical add-rule path now that the worker
    *  scans per source. */
   createScanRuleForSource(sourceId: number, req: UpsertScanRuleRequest): Observable<{ checkRuleId: number }> {
-    return this.http.post<{ checkRuleId: number }>(`${this.base}/scan-sources/${sourceId}/scan-rules`, this.withActor(req));
+    return this.http.post<{ checkRuleId: number }>(`${this.base}/scan-sources/${sourceId}/scan-rules`, req);
   }
 
   // ── Scan Check Rules ───────────────────────────────────────────────────────
   createScanRule(jobId: number, req: UpsertScanRuleRequest): Observable<{ checkRuleId: number }> {
-    return this.http.post<{ checkRuleId: number }>(`${this.base}/monitored-jobs/${jobId}/scan-rules`, this.withActor(req));
+    return this.http.post<{ checkRuleId: number }>(`${this.base}/monitored-jobs/${jobId}/scan-rules`, req);
   }
   updateScanRule(id: number, req: UpsertScanRuleRequest): Observable<void> {
-    return this.http.put<void>(`${this.base}/scan-rules/${id}`, this.withActor(req));
+    return this.http.put<void>(`${this.base}/scan-rules/${id}`, req);
   }
   deleteScanRule(id: number): Observable<void> {
-    return this.http.delete<void>(`${this.base}/scan-rules/${id}`, { params: this.actorParams() });
+    return this.http.delete<void>(`${this.base}/scan-rules/${id}`);
   }
 
   // ── Per-job Classification Rules ───────────────────────────────────────────
   createJobClassificationRule(jobId: number, req: UpsertJobClassificationRuleRequest): Observable<{ ruleId: number }> {
-    return this.http.post<{ ruleId: number }>(`${this.base}/monitored-jobs/${jobId}/classification-rules`, this.withActor(req));
+    return this.http.post<{ ruleId: number }>(`${this.base}/monitored-jobs/${jobId}/classification-rules`, req);
   }
   linkJobClassificationRule(jobId: number, ruleId: number): Observable<{ ruleId: number }> {
     return this.http.post<{ ruleId: number }>(
       `${this.base}/monitored-jobs/${jobId}/classification-rules/${ruleId}/link`,
-      null,
-      { params: this.actorParams() });
+      null);
   }
   deleteJobClassificationRule(jobId: number, ruleId: number): Observable<void> {
     return this.http.delete<void>(
-      `${this.base}/monitored-jobs/${jobId}/classification-rules/${ruleId}`,
-      { params: this.actorParams() });
+      `${this.base}/monitored-jobs/${jobId}/classification-rules/${ruleId}`);
   }
 
   // ── Global Classification Rules ────────────────────────────────────────────
@@ -213,13 +207,13 @@ export class ConfigService {
     return this.http.get<ClassificationRule[]>(`${this.base}/classification-rules`);
   }
   createClassificationRule(req: UpsertClassificationRuleRequest): Observable<{ ruleId: number }> {
-    return this.http.post<{ ruleId: number }>(`${this.base}/classification-rules`, this.withActor(req));
+    return this.http.post<{ ruleId: number }>(`${this.base}/classification-rules`, req);
   }
   updateClassificationRule(id: number, req: UpsertClassificationRuleRequest): Observable<void> {
-    return this.http.put<void>(`${this.base}/classification-rules/${id}`, this.withActor(req));
+    return this.http.put<void>(`${this.base}/classification-rules/${id}`, req);
   }
   deleteClassificationRule(id: number): Observable<void> {
-    return this.http.delete<void>(`${this.base}/classification-rules/${id}`, { params: this.actorParams() });
+    return this.http.delete<void>(`${this.base}/classification-rules/${id}`);
   }
 
   // ── Fix Policy Rules ───────────────────────────────────────────────────────
@@ -241,12 +235,12 @@ export class ConfigService {
     return this.http.get<FixPolicyRule>(`${this.base}/fix-policy-rules/${id}`);
   }
   createFixPolicyRule(req: UpsertFixPolicyRuleRequest): Observable<{ ruleId: number }> {
-    return this.http.post<{ ruleId: number }>(`${this.base}/fix-policy-rules`, this.withActor(req));
+    return this.http.post<{ ruleId: number }>(`${this.base}/fix-policy-rules`, req);
   }
   updateFixPolicyRule(id: number, req: UpsertFixPolicyRuleRequest): Observable<void> {
-    return this.http.put<void>(`${this.base}/fix-policy-rules/${id}`, this.withActor(req));
+    return this.http.put<void>(`${this.base}/fix-policy-rules/${id}`, req);
   }
   deleteFixPolicyRule(id: number): Observable<void> {
-    return this.http.delete<void>(`${this.base}/fix-policy-rules/${id}`, { params: this.actorParams() });
+    return this.http.delete<void>(`${this.base}/fix-policy-rules/${id}`);
   }
 }

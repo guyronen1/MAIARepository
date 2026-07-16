@@ -24,3 +24,7 @@ Thumbs.db
 
 # ── Logs ─────────────────────────────────────────────────────────────────
 *.log
+
+# ── .NET publish output (build artifacts — regenerable, never commit) ──────
+Maia.Services/Maia.API/publish/
+Maia.Services/Maia.API/publish-fx/

@@ -5,39 +5,25 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { RecommendationsService } from '../../core/services/recommendations.service';
 import { ScanService } from '../../core/services/scan.service';
-import { ConfigService, FixPolicyRule, UpsertFixPolicyRuleRequest } from '../../core/services/config.service';
+import { ConfigService, UpsertFixPolicyRuleRequest } from '../../core/services/config.service';
 import { AuthService } from '../../core/services/auth.service';
 import { Recommendation, PagedResult } from '../../core/models';
-import { PluralizePipe, pluralize } from '../../core/pipes/pluralize.pipe';
+import { pluralize } from '../../core/pipes/pluralize.pipe';
 import { FailureDetailComponent } from '../failures/failure-detail.component';
 import { DrawerComponent } from '../../shared/drawer/drawer.component';
 
 @Component({
   selector: 'app-recommendations',
   standalone: true,
-  imports: [DatePipe, PercentPipe, FormsModule, PluralizePipe, FailureDetailComponent, DrawerComponent],
+  imports: [DatePipe, PercentPipe, FormsModule, FailureDetailComponent, DrawerComponent],
   template: `
     <div class="page">
       <div class="page-header">
         <div>
-          <h1>
-            @if (isOperatorMode()) {
-              <span class="op-chip">OA</span>
-              Operator Actions
-            } @else {
-              <span class="ai-chip">AI</span>
-              Recommendations
-            }
-          </h1>
-          <p class="text-muted text-sm">
-            @if (isOperatorMode()) {
-              {{ filtered().length | pluralize:'pending item' }} awaiting your review
-            } @else {
-              {{ paged()?.totalCount ?? 0 }} total recommendations
-            }
-          </p>
+          <h1><span class="ai-chip">AI</span> Recommendations</h1>
+          <p class="text-muted text-sm">{{ paged()?.totalCount ?? 0 }} total recommendations</p>
         </div>
-        @if (!isOperatorMode() && canAct()) {
+        @if (canAct()) {
           <div class="page-actions">
             <button class="btn btn-ghost btn-sm" (click)="classifyPending()" [disabled]="running()">
               @if (running()) { <span class="spinner"></span> }
@@ -55,22 +41,20 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
 
       <div class="page-filters">
         <input [(ngModel)]="filterText" placeholder="Filter by action, error type…" (input)="applyFilter()" style="min-width:220px" />
-        @if (!isOperatorMode()) {
-          <select [(ngModel)]="filterCategory" (change)="applyFilter()">
-            <option value="">All categories</option>
-            <option value="Retry">Retry</option>
-            <option value="FileRepair">FileRepair</option>
-            <option value="DbFix">DbFix</option>
-            <option value="Manual">Manual</option>
-          </select>
-          <select [(ngModel)]="filterApproved" (change)="applyFilter()">
-            <option value="">All states</option>
-            <option value="pending">Pending Review</option>
-            <option value="approved">Approved</option>
-            <option value="rejected">Rejected</option>
-            <option value="executed">Executed</option>
-          </select>
-        }
+        <select [(ngModel)]="filterCategory" (change)="applyFilter()">
+          <option value="">All categories</option>
+          <option value="Retry">Retry</option>
+          <option value="FileRepair">FileRepair</option>
+          <option value="DbFix">DbFix</option>
+          <option value="Manual">Manual</option>
+        </select>
+        <select [(ngModel)]="filterApproved" (change)="applyFilter()">
+          <option value="">All states</option>
+          <option value="pending">Pending Review</option>
+          <option value="approved">Approved</option>
+          <option value="rejected">Rejected</option>
+          <option value="executed">Executed</option>
+        </select>
       </div>
 
       <div class="card" style="padding:0;overflow:hidden">
@@ -216,7 +200,6 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
     .page-header { display: flex; justify-content: space-between; align-items: flex-start; }
     .page-actions { display: flex; gap: 8px; }
     .ai-chip { background: linear-gradient(135deg, var(--primary), var(--accent)); color: #fff; font-size: 10px; font-weight: 800; padding: 3px 8px; border-radius: 6px; letter-spacing: 0.06em; flex-shrink: 0; }
-    .op-chip { background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff; font-size: 10px; font-weight: 800; padding: 3px 8px; border-radius: 6px; letter-spacing: 0.06em; flex-shrink: 0; }
     .info-banner { display:flex; align-items:center; gap:12px; background:var(--info-bg); border:1px solid rgba(56,189,248,0.3); border-radius:var(--radius); padding:10px 16px; font-size:13px; color:var(--info); button { margin-left:auto; } }
     .failure-ref { display:flex; flex-direction:column; gap:1px; cursor:pointer; &:hover .failure-id { color:var(--primary); } }
     .failure-id { font-size:13px; font-weight:600; }
@@ -228,7 +211,7 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
     .toggle.disabled { opacity: 0.4; cursor: not-allowed; }
     .btn-link { background:none; border:none; color:var(--primary); cursor:pointer; padding:0; font-size:11px; text-decoration:underline; }
     .btn-link:hover { color:var(--accent); }
-    .badge-muted { background: #e2e8f0; color: #475569; border: 1px solid #cbd5e1; }
+    .badge-muted { background: var(--surface-3); color: var(--text-muted); border: 1px solid var(--border); }
     /* ↑/↓ buttons projected into the shared drawer's controls slot. */
     .nav-arrow:disabled { opacity: 0.35; cursor: not-allowed; }
     .drawer-title strong { font-weight: 700; color: var(--text); }
@@ -259,8 +242,6 @@ export class RecommendationsComponent implements OnInit {
   filterCategory = '';
   filterApproved = '';
 
-  isOperatorMode = signal(false);
-
   /** Drawer state — failureId of the rec currently open in the detail drawer.
    *  Driven by the ?selected query param so it's refresh-safe + shareable,
    *  same contract as the failures list. */
@@ -280,11 +261,6 @@ export class RecommendationsComponent implements OnInit {
   });
 
   ngOnInit() {
-    const url = this.router.url;
-    const opMode = url.includes('operator-actions');
-    this.isOperatorMode.set(opMode);
-    if (opMode) this.filterApproved = 'pending';
-
     // ?selected drives the drawer. Separate from the (locally-paged) list
     // query, so changing it never re-fetches — it just opens/closes the drawer.
     this.route.queryParamMap
@@ -416,8 +392,7 @@ export class RecommendationsComponent implements OnInit {
   }
 
   // ── Drawer open/close + keyboard navigation ────────────────────────────
-  /** Opens the failure detail in-place via ?selected on the CURRENT route
-   *  (/recommendations or /operator-actions) — no longer bounces to /failures. */
+  /** Opens the failure detail in-place via ?selected — no bounce to /failures. */
   openFailure(id: number) { this.patchSelected(id); }
   closeDrawer()           { this.patchSelected(null); }
 

@@ -23,6 +23,20 @@ composite scan rules are deferred (see Known follow-ups).
   CHECK constraints for composite invariants, `FixExecutionLog` retention
   worker
 
+**Last completed (2026-07-16) — UI/UX improvement batch:**
+
+A round of frontend polish (details + rationale in FOLLOWUPS items 1–10 and the dated DECISIONS entries). Highlights:
+- **Recommendations vs Operator Actions split (item 1):** `/operator-actions` is now a dedicated `OperatorActionsComponent` (decision HISTORY — Approve/Reject/Retry log) backed by new `GET /api/data/operator-actions` + `OperatorActionDto`; `/recommendations` stays the pending queue.
+- **Data-staleness surfaced (item 2):** top-bar "⚠ Reconnecting… · Xs ago" chip off the `worker-status` heartbeat; the pill dims/stops pulsing while stale. (Also fixed: the always-visible badge showed gray on non-dashboard pages because only the dashboard/scan-jobs started polling — the top bar now owns the poll.)
+- **Status consolidation (item 3):** the top-bar pill is the single worker status + pause/resume control (Admin), optimistic instant flip; the duplicate dashboard pill was removed.
+- **Dashboard KPI hierarchy (item 4):** Resolved Today de-emphasized (narrower, muted) so the five action tiles dominate.
+- **Dark theme (item 5):** OS default + manual toggle; `maia-dark` token mixin in `styles.scss`; `ThemeService`; anti-FOUC inline script. Follow-on dark-mode fixes: table-row hover (`#fafbfc`→token), the amber warning-panel family (new `--warn-*` tokens), and the Chart.js grid/tick/legend colours (`chart-theme.util` + rebuild-on-theme-change).
+- **Command palette (item 6):** `Ctrl/Cmd+K` + top-bar Search; `SearchService.query()` (nav + failure-by-id + jobs, role-filtered), built to host a future LLM "Ask" mode.
+- **Server-side sortable failures list (item 7):** whitelisted `sort`/`dir` on `GetPagedAsync` + clickable headers.
+- **Dead-code cleanup (item 9)** and **simplified activity banner (item 10).**
+- **Language-switcher scaffold** (`LanguageService`, English active / Hebrew "soon") + **top-bar declutter** (avatar-only account dropdown holding Theme/Language/Sign out; subtitle + Search collapse on narrow widths).
+- **Deferred by operator:** item 8 (guided scan-config wizard) and item 11 (full RTL/Hebrew translations).
+
 **Last completed (2026-06-20):**
 
 - **Audit-viewing UI — global `/config/audit` screen, Admin-only.** Paged, filtered read of the `AuditLog` table. Backend: `IAuditRepository.QueryAsync(AuditLogFilter, ct)` + `SqlAuditRepository` EF implementation (`ORDER BY AuditId DESC`, conditional WHERE on EntityType/EntityId/Actor/EventType/date range, `CountAsync` + `Skip/Take` paging); `AuditLogDto.From(AuditLog)` contract record; `GET /api/admin/audit-log` endpoint on `AdminController` (RequireAdmin, pageSize clamped 1–200). Frontend: `AuditLogEntry`/`AuditLogPage` models; `AuditService.query()` with `HttpParams`; `AuditComponent` — filter bar (EntityType select, Actor/EventType text inputs, from/to date pickers, Search + Clear + record count), fixed-column table (Timestamp · Actor · Event badge · Entity · Detail), server-side pagination, monospace Detail with `→` wrapped in a primary-color `<span>` via HTML-escaped `renderDetail()`; event-badge colour classes (red=Deleted/FixFailed, green=operator decisions, amber=system, purple=User*, indigo=Created/Updated/Linked, slate=default); lazy route `/config/audit` with `adminGuard`; "Audit Log" nav item in the Administration sidebar section. **Per-entity contextual tab deferred** (no concrete operator ask; global screen covers the compliance-audit use case).

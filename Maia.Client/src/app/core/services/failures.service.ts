@@ -36,9 +36,11 @@ export class FailuresService {
   private http = inject(HttpClient);
   private base = `${environment.apiUrl}/data`;
 
-  getFailures(page = 1, pageSize = 50, view?: string): Observable<PagedResult<JobFailure>> {
+  getFailures(page = 1, pageSize = 50, view?: string, sort?: string, dir?: string): Observable<PagedResult<JobFailure>> {
     let params = new HttpParams().set('page', page).set('pageSize', pageSize);
     if (view) params = params.set('view', view);
+    if (sort) params = params.set('sort', sort);
+    if (dir)  params = params.set('dir', dir);
     return this.http.get<PagedResult<JobFailure>>(`${this.base}/failures`, { params });
   }
 

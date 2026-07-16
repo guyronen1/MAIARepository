@@ -1,6 +1,6 @@
 import {
   AfterViewChecked, Component, ElementRef, HostListener, OnDestroy, OnInit,
-  QueryList, ViewChild, ViewChildren, computed, inject, signal,
+  QueryList, ViewChildren, computed, inject, signal,
 } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
@@ -25,6 +25,15 @@ const VIEW_LABELS: Record<string, string> = {
 };
 
 const PAGE_SIZE = 50;
+
+type SortDir = 'asc' | 'desc';
+const SORT_DEFAULT = 'detected';
+const DIR_DEFAULT: SortDir = 'desc';
+/** Initial direction when a column is first selected (dates/ids newest-first;
+ *  text A→Z; status grouped ascending). Also the whitelist of sortable keys. */
+const COL_DEFAULT_DIR: Record<string, SortDir> = {
+  id: 'desc', job: 'asc', errortype: 'asc', detected: 'desc', status: 'asc',
+};
 
 /**
  * Failures list + drawer host.
@@ -94,13 +103,23 @@ const PAGE_SIZE = 50;
           <table class="data-table">
             <thead>
               <tr>
-                <th>#</th>
-                <th>Job</th>
+                <th class="sortable" (click)="onSort('id')" [attr.aria-sort]="ariaSort('id')">
+                  # <span class="sort-ind">{{ sortInd('id') }}</span>
+                </th>
+                <th class="sortable" (click)="onSort('job')" [attr.aria-sort]="ariaSort('job')">
+                  Job <span class="sort-ind">{{ sortInd('job') }}</span>
+                </th>
                 <th>Step / File</th>
-                <th>Error Type</th>
+                <th class="sortable" (click)="onSort('errortype')" [attr.aria-sort]="ariaSort('errortype')">
+                  Error Type <span class="sort-ind">{{ sortInd('errortype') }}</span>
+                </th>
                 <th>Message</th>
-                <th>Detected</th>
-                <th>Status</th>
+                <th class="sortable" (click)="onSort('detected')" [attr.aria-sort]="ariaSort('detected')">
+                  Detected <span class="sort-ind">{{ sortInd('detected') }}</span>
+                </th>
+                <th class="sortable" (click)="onSort('status')" [attr.aria-sort]="ariaSort('status')">
+                  Status <span class="sort-ind">{{ sortInd('status') }}</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -191,6 +210,11 @@ const PAGE_SIZE = 50;
   styles: [`
     h1 { font-size: 22px; font-weight: 700; }
     .page-header { display: flex; justify-content: space-between; align-items: flex-start; }
+
+    /* Sortable column headers — click to sort, click again to flip direction. */
+    th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+    th.sortable:hover { color: var(--text); }
+    .sort-ind { display: inline-block; width: 8px; font-size: 10px; color: var(--primary); }
 
     /* Secondary marker shown alongside the status badge when a fix attempt
        failed today. Tighter and slightly smaller than the status badge so
@@ -299,6 +323,8 @@ export class FailuresListComponent implements OnInit, OnDestroy, AfterViewChecke
   filterText   = signal('');
   filterStatus = signal('');
   selectedId   = signal<number | null>(null);
+  sort         = signal<string>(SORT_DEFAULT);
+  dir          = signal<SortDir>(DIR_DEFAULT);
 
   /** Transient spatial-awareness toast: "Page 3 of 5" on cross-boundary
    *  arrow nav, "End of list" when ↓ hits the last failure of the last page.
@@ -338,23 +364,31 @@ export class FailuresListComponent implements OnInit, OnDestroy, AfterViewChecke
       const selStr   = params.get('selected');
       const pageNum  = pageStr ? Math.max(1, parseInt(pageStr, 10) || 1) : 1;
       const selId    = selStr  ? parseInt(selStr, 10) || null         : null;
+      // Sort is server-side: whitelist the key (unknown → default) and coerce
+      // dir (anything but "asc" → "desc"). Defaults are stripped from the URL.
+      const sortRaw  = params.get('sort') ?? '';
+      const sort     = COL_DEFAULT_DIR[sortRaw] ? sortRaw : SORT_DEFAULT;
+      const dir: SortDir = params.get('dir') === 'asc' ? 'asc' : 'desc';
 
       const viewChanged   = (this.view() ?? '') !== (view && view !== 'all' ? view : '');
       const statusChanged = this.filterStatus() !== status;
       const qChanged      = this.filterText()   !== q;
       const pageChanged   = this.page()         !== pageNum;
+      const sortChanged   = this.sort()         !== sort || this.dir() !== dir;
 
       this.view.set(view && view !== 'all' ? view : null);
       this.filterStatus.set(status);
       this.filterText.set(q);
       this.page.set(pageNum);
       this.selectedId.set(selId);
+      this.sort.set(sort);
+      this.dir.set(dir);
 
       // Re-fetch when something that affects the server query changed, OR
       // on the very first emission (component just mounted and has no data
       // yet — handles the dashboard → /failures?selected=N case where the
       // URL carries only `selected` and nothing else triggers a change flag).
-      if (!this.hasFetched || viewChanged || pageChanged) {
+      if (!this.hasFetched || viewChanged || pageChanged || sortChanged) {
         this.hasFetched = true;
         this.fetchPage();
       } else if (statusChanged || qChanged) {
@@ -393,7 +427,7 @@ export class FailuresListComponent implements OnInit, OnDestroy, AfterViewChecke
   // ── Data fetch ─────────────────────────────────────────────────────────
   private fetchPage() {
     this.loading.set(true);
-    this.svc.getFailures(this.page(), PAGE_SIZE, this.view() ?? undefined).subscribe({
+    this.svc.getFailures(this.page(), PAGE_SIZE, this.view() ?? undefined, this.sort(), this.dir()).subscribe({
       next: r => { this.paged.set(r); this.applyFilter(); this.loading.set(false); },
       error: () => this.loading.set(false)
     });
@@ -421,6 +455,7 @@ export class FailuresListComponent implements OnInit, OnDestroy, AfterViewChecke
   // clean (e.g. /failures?status=Failed, not /failures?q=&status=Failed&page=1).
   private static readonly URL_DEFAULTS: Record<string, string | number | null> = {
     page: 1, q: '', status: '', view: '', selected: null,
+    sort: SORT_DEFAULT, dir: DIR_DEFAULT,
   };
 
   private patchUrl(patch: Record<string, string | number | null>) {
@@ -468,6 +503,22 @@ export class FailuresListComponent implements OnInit, OnDestroy, AfterViewChecke
 
   clearView() {
     this.patchUrl({ view: null, page: 1, selected: null });
+  }
+
+  // ── Server-side sort ─────────────────────────────────────────────────────
+  /** Click a column: sort by it (its default direction), or flip direction if
+   *  it's already the active sort. Resets to page 1 + closes the drawer. */
+  onSort(col: string) {
+    const dir: SortDir = this.sort() === col
+      ? (this.dir() === 'asc' ? 'desc' : 'asc')
+      : COL_DEFAULT_DIR[col];
+    this.patchUrl({ sort: col, dir, page: 1, selected: null });
+  }
+  sortInd(col: string): string {
+    return this.sort() === col ? (this.dir() === 'asc' ? '▲' : '▼') : '';
+  }
+  ariaSort(col: string): 'ascending' | 'descending' | 'none' {
+    return this.sort() === col ? (this.dir() === 'asc' ? 'ascending' : 'descending') : 'none';
   }
 
   prevPage() { if (this.page() > 1) this.patchUrl({ page: this.page() - 1, selected: null }); }
@@ -520,7 +571,7 @@ export class FailuresListComponent implements OnInit, OnDestroy, AfterViewChecke
    *  URL-effect picks up the page change for normal display. */
   private loadAdjacentPage(targetPage: number, edge: 'first' | 'last') {
     this.loading.set(true);
-    this.svc.getFailures(targetPage, PAGE_SIZE, this.view() ?? undefined).subscribe({
+    this.svc.getFailures(targetPage, PAGE_SIZE, this.view() ?? undefined, this.sort(), this.dir()).subscribe({
       next: r => {
         if (r.items.length === 0) { this.loading.set(false); return; }
         const target = edge === 'first' ? r.items[0] : r.items[r.items.length - 1];

@@ -4,11 +4,12 @@ import { TopBarComponent } from '../top-bar/top-bar.component';
 import { SideMenuComponent } from '../side-menu/side-menu.component';
 import { NavigationHistoryService } from '../../core/services/navigation-history.service';
 import { NotificationService } from '../../core/services/notification.service';
+import { CommandPaletteComponent } from '../../shared/command-palette/command-palette.component';
 
 @Component({
   selector: 'app-shell',
   standalone: true,
-  imports: [RouterOutlet, TopBarComponent, SideMenuComponent],
+  imports: [RouterOutlet, TopBarComponent, SideMenuComponent, CommandPaletteComponent],
   template: `
     <div class="shell">
       <app-top-bar />
@@ -18,6 +19,10 @@ import { NotificationService } from '../../core/services/notification.service';
           <router-outlet />
         </main>
       </div>
+
+      <!-- Global Ctrl/Cmd+K command palette (always mounted; overlay is
+           self-gated on its open signal). -->
+      <app-command-palette />
 
       @if (notices().length) {
         <div class="toast-stack">

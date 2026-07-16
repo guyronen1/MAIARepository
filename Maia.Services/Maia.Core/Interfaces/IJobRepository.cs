@@ -19,7 +19,9 @@ public interface IJobRepository
     /// (Status=ManualRequired AND has a Success=false FixExecutionLog since
     /// today-midnight). Null/empty/unknown → unfiltered.
     /// </summary>
-    Task<PagedResult<JobFailure>> GetPagedAsync(int page, int pageSize, string? view = null, CancellationToken ct = default);
+    /// <param name="sort">Sort key (whitelisted): id | job | errortype | detected | status.
+    ///   Null/unknown → detected. <paramref name="dir"/> = "asc" | "desc" (default desc).</param>
+    Task<PagedResult<JobFailure>> GetPagedAsync(int page, int pageSize, string? view = null, string? sort = null, string? dir = null, CancellationToken ct = default);
 
     /// <summary>
     /// Given a set of <c>FailureId</c>s, return the subset that has at least
