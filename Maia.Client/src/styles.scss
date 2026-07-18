@@ -42,7 +42,7 @@
 
   --text:          #1e2533;
   --text-muted:    #6b7280;
-  --text-dim:      #9ca3af;
+  --text-dim:      #767c8a;   // WCAG AA on --surface (was #9ca3af, failed)
 
   --radius-sm:     4px;
   --radius:        8px;
@@ -98,7 +98,7 @@
 
   --text:          #e6e9ef;
   --text-muted:    #97a1b2;
-  --text-dim:      #6a7488;
+  --text-dim:      #8590a4;   // WCAG AA on dark --surface (was #6a7488, failed)
 
   --shadow-sm:     0 1px 3px rgba(0, 0, 0, 0.5);
   --shadow:        0 3px 10px rgba(0, 0, 0, 0.6);
@@ -171,6 +171,10 @@ a:hover { text-decoration: underline; }
   font-family: inherit;
 
   &:disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+  // Visible keyboard focus ring — replaces the removed native outline so
+  // keyboard users (and RTL) never lose track of focus. Mouse clicks don't
+  // trigger :focus-visible, so it stays out of the way for pointer users.
+  &:focus-visible { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--primary-glow); }
 
   &.btn-primary {
     background: var(--primary);
@@ -205,7 +209,9 @@ a:hover { text-decoration: underline; }
   display: flex;
   flex-direction: column;
   gap: 4px;
-  label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  // Sentence case (no text-transform) — hierarchy comes from weight/colour,
+  // not shouting. Also required for RTL: Hebrew has no uppercase.
+  label { font-size: 11px; font-weight: 600; color: var(--text-muted); }
 }
 
 input, select, textarea {
@@ -234,8 +240,8 @@ select option { background: #fff; }
     padding: 9px 12px;
     font-size: 11px;
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    // Sentence/Title case as authored — no forced uppercase (RTL-safe;
+    // weight + colour carry the header hierarchy).
     color: var(--text-muted);
     background: var(--surface-2);
     border-bottom: 2px solid var(--border);
