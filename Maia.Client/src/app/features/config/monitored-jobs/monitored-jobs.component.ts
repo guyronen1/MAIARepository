@@ -71,7 +71,7 @@ import { JobFlowComponent } from './job-flow.component';
                             [title]="isFlowOpen(j.monitoredJobId) ? 'Hide process flow' : 'View process flow (read-only)'"
                             (click)="toggleFlow(j.monitoredJobId)">👁 Flow</button>
                   }
-                  <a class="btn btn-primary btn-sm" [routerLink]="['/config/monitored-jobs', j.monitoredJobId]">Configure →</a>
+                  <a class="btn btn-ghost btn-sm" [routerLink]="['/config/monitored-jobs', j.monitoredJobId]">Configure →</a>
                   <button class="btn btn-ghost btn-sm" (click)="openJobDrawer(j)">Edit</button>
                   <button class="btn btn-danger btn-sm" (click)="deleteJob(j)">Delete</button>
                 </div>

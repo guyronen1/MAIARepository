@@ -52,7 +52,7 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
                   <strong>{{ run.job.displayName ?? run.job.name }}</strong>
                   <span class="text-muted text-sm">{{ run.job.jobTypeName }}</span>
                 </div>
-                <button class="btn btn-primary btn-sm" (click)="scan(run)" [disabled]="run.running">
+                <button class="btn btn-ghost btn-sm" (click)="scan(run)" [disabled]="run.running">
                   @if (run.running) { <span class="spinner"></span> }
                   @else { ▶ }
                   Scan
