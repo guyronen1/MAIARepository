@@ -128,7 +128,6 @@ public class PipelineIntegrationTests : IAsyncLifetime
         var monJobRepo = new SqlMonitoredJobRepository(_factory);
         var recRepo    = new SqlRecommendationRepository(_factory);
         var parser     = new SimpleLogParser();
-        var logReader  = new FileLogReader(NullLogger<FileLogReader>.Instance);
         var strategy   = new RuleBasedClassifier(ruleRepo, monJobRepo, parser);
         var catalogue  = new FixCatalogue();
 

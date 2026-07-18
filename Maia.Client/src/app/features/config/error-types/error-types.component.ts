@@ -2,6 +2,7 @@ import { Component, OnInit, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Observable } from 'rxjs';
 import { ConfigService, ErrorType, UpsertErrorTypeRequest } from '../../../core/services/config.service';
+import { NotificationService } from '../../../core/services/notification.service';
 
 const SEVERITIES = ['Low', 'Medium', 'High', 'Critical'];
 
@@ -167,6 +168,7 @@ const SEVERITIES = ['Low', 'Medium', 'High', 'Critical'];
 })
 export class ErrorTypesComponent implements OnInit {
   private svc = inject(ConfigService);
+  private notify = inject(NotificationService);
 
   loading        = signal(false);
   saving         = signal(false);
@@ -187,7 +189,7 @@ export class ErrorTypesComponent implements OnInit {
     this.loading.set(true);
     this.svc.getErrorTypes(this.includeInactive).subscribe({
       next: list => { this.all.set(list); this.applyFilter(); this.loading.set(false); },
-      error: () => this.loading.set(false)
+      error: () => { this.loading.set(false); this.notify.error('Could not load error types.'); }
     });
   }
 

@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { RecommendationsService } from '../../core/services/recommendations.service';
+import { NotificationService } from '../../core/services/notification.service';
 import { OperatorActionEntry, PagedResult } from '../../core/models';
 import { FailureDetailComponent } from '../failures/failure-detail.component';
 import { DrawerComponent } from '../../shared/drawer/drawer.component';
@@ -138,6 +139,7 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
 })
 export class OperatorActionsComponent implements OnInit {
   private svc        = inject(RecommendationsService);
+  private notify     = inject(NotificationService);
   private route      = inject(ActivatedRoute);
   private router     = inject(Router);
   private destroyRef = inject(DestroyRef);
@@ -179,7 +181,7 @@ export class OperatorActionsComponent implements OnInit {
       q: this.filterText.trim() || undefined,
     }).subscribe({
       next: r => { this.paged.set(r); this.loading.set(false); },
-      error: () => this.loading.set(false)
+      error: () => { this.loading.set(false); this.notify.error('Could not load operator actions.'); }
     });
   }
 

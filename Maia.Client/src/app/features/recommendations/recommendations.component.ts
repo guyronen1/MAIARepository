@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { RecommendationsService } from '../../core/services/recommendations.service';
+import { NotificationService } from '../../core/services/notification.service';
 import { ScanService } from '../../core/services/scan.service';
 import { ConfigService, UpsertFixPolicyRuleRequest } from '../../core/services/config.service';
 import { AuthService } from '../../core/services/auth.service';
@@ -219,6 +220,7 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
 })
 export class RecommendationsComponent implements OnInit {
   private svc     = inject(RecommendationsService);
+  private notify  = inject(NotificationService);
   private scanSvc = inject(ScanService);
   private cfgSvc  = inject(ConfigService);
   private route   = inject(ActivatedRoute);
@@ -277,7 +279,7 @@ export class RecommendationsComponent implements OnInit {
     this.loading.set(true);
     this.svc.getRecommendations(this.page(), 50).subscribe({
       next: r => { this.paged.set(r); this.applyFilter(); this.loading.set(false); },
-      error: () => this.loading.set(false)
+      error: () => { this.loading.set(false); this.notify.error('Could not load recommendations.'); }
     });
   }
 

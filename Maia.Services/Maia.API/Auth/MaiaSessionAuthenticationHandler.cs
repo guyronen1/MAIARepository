@@ -14,10 +14,13 @@ namespace Maia.API.Auth;
 /// so demotion/disable take effect on the next request — the API, not the login, is
 /// the boundary.
 ///
-/// Phase 1 (authn open): a missing or invalid/expired token yields
-/// <see cref="AuthenticateResult.NoResult"/>, NOT a failure — anonymous requests still
-/// flow through. Enforcement (policies + fallback) arrives in Phase 3 without touching
-/// this handler.
+/// A missing or invalid/expired token yields <see cref="AuthenticateResult.NoResult"/>,
+/// NOT a failure — this handler does AUTHENTICATION only, never rejection. Enforcement
+/// is LIVE at the AUTHORIZATION layer: the default fallback policy
+/// (RequireAuthenticatedUser) rejects anonymous requests, and per-endpoint role policies
+/// (RequireOperator / RequireAdmin) gate the rest; anonymous endpoints opt out via
+/// [AllowAnonymous]. Keeping the handler non-rejecting lets authorization own the 401
+/// (unauthenticated) vs 403 (wrong role) distinction cleanly.
 ///
 /// On a successful authentication the cookie is re-issued with a fresh sliding expiry
 /// (header-only; the DB activity slide is throttled inside <see cref="IAuthService"/>).
@@ -39,7 +42,8 @@ public sealed class MaiaSessionAuthenticationHandler(
 
         var session = await auth.ValidateSessionAsync(token, Context.RequestAborted);
         if (session?.User is null)
-            // Invalid/expired/disabled → treat as anonymous (Phase 1: don't reject).
+            // Invalid/expired/disabled → treat as anonymous; the authorization fallback
+            // policy rejects it downstream (this handler never rejects).
             return AuthenticateResult.NoResult();
 
         var user = session.User;

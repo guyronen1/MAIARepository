@@ -65,6 +65,17 @@ public sealed class SqlJobRepository(IDbContextFactory<MaiaDbContext> factory) :
             .ToListAsync(ct);
     }
 
+    public async Task<List<JobFailure>> GetUnclassifiedOlderThanAsync(
+        DateTime detectedBefore, CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        return await db.JobFailures
+            .Where(j => j.Status == JobStatus.Failed
+                     && j.ErrorTypeId == null
+                     && j.DetectedAt < detectedBefore)
+            .ToListAsync(ct);
+    }
+
     public async Task<bool> HasOpenFailureAsync(
         int monitoredJobId, string sourceTable, string targetField, CancellationToken ct = default)
     {

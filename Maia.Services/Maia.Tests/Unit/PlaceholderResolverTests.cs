@@ -221,6 +221,122 @@ public class PlaceholderResolverTests : IAsyncLifetime
         Assert.Equal("[]", result);
     }
 
+    // ── ResolveSqlAsync (SQL-injection-safe parameterization) ────────────────
+
+    [Fact]
+    public async Task ResolveSql_QuotedPlaceholder_BecomesBareParameter()
+    {
+        // The dominant operator pattern (and what the UI helper appends):
+        // WHERE Id = '{sourceId}'. The surrounding quotes must be consumed so
+        // the result is a bare @p0 parameter, not the literal '@p0'.
+        var rec    = MakeRec(FailureId);
+        var result = await _resolver.ResolveSqlAsync(
+            "UPDATE dbo.Files SET Status = 1 WHERE Id = '{sourceId}'", rec);
+
+        Assert.Equal("UPDATE dbo.Files SET Status = 1 WHERE Id = @p0", result.Sql);
+        var p = Assert.Single(result.Parameters);
+        Assert.Equal("@p0", p.Name);
+        Assert.Equal("deposit-abc-123", p.Value);
+    }
+
+    [Fact]
+    public async Task ResolveSql_BarePlaceholder_BecomesParameter()
+    {
+        // Numeric/unquoted context: WHERE Id = {failureId}.
+        var rec    = MakeRec(FailureId);
+        var result = await _resolver.ResolveSqlAsync(
+            "DELETE FROM dbo.Files WHERE Id = {failureId}", rec);
+
+        Assert.Equal("DELETE FROM dbo.Files WHERE Id = @p0", result.Sql);
+        Assert.Equal(FailureId.ToString(), Assert.Single(result.Parameters).Value);
+    }
+
+    [Fact]
+    public async Task ResolveSql_MultiplePlaceholders_NumberedInOrder()
+    {
+        var rec    = MakeRec(FailureId);
+        var result = await _resolver.ResolveSqlAsync(
+            "UPDATE t SET Path = '{sourceFilePath}' WHERE Id = '{sourceId}' AND Ref = '{referenceId}'",
+            rec);
+
+        Assert.Equal("UPDATE t SET Path = @p0 WHERE Id = @p1 AND Ref = @p2", result.Sql);
+        Assert.Collection(result.Parameters,
+            p => { Assert.Equal("@p0", p.Name); Assert.Equal(@"C:\input\test\deposit_20260601.txt", p.Value); },
+            p => { Assert.Equal("@p1", p.Name); Assert.Equal("deposit-abc-123", p.Value); },
+            p => { Assert.Equal("@p2", p.Name); Assert.Equal(string.Empty, p.Value); }); // ReferenceId null → empty
+    }
+
+    [Fact]
+    public async Task ResolveSql_MaliciousSourceId_IsInertParameterValue_NotInjected()
+    {
+        // THE regression test for the second-order SQL-injection hole. A scanned
+        // row whose id is a tautology must NOT alter the SQL structure — it stays
+        // a single bound value, so WHERE Id = @p0 matches the literal string
+        // "' OR '1'='1", i.e. nothing. No bulk mutation.
+        const string attack = "' OR '1'='1";
+        _db.JobFailures.Add(new JobFailure
+        {
+            FailureId      = FailureId + 10,
+            JobTypeId      = JobTypeId,
+            MonitoredJobId = MonitoredJobId,
+            ScanSourceId   = ScanSourceId,
+            SourceId       = attack,
+            SourceLogPath  = @"C:\logs\test\app.log",
+            Status         = JobStatus.Failed,
+        });
+        await _db.SaveChangesAsync();
+
+        var rec    = MakeRec(FailureId + 10);
+        var result = await _resolver.ResolveSqlAsync(
+            "UPDATE dbo.Files SET Status = 1 WHERE Id = '{sourceId}'", rec);
+
+        // Structure is untouched — exactly one param marker, no injected OR.
+        Assert.Equal("UPDATE dbo.Files SET Status = 1 WHERE Id = @p0", result.Sql);
+        Assert.DoesNotContain("OR", result.Sql);
+        Assert.DoesNotContain("'1'='1", result.Sql);
+        // The attack text survives verbatim ONLY as an inert bound value.
+        Assert.Equal(attack, Assert.Single(result.Parameters).Value);
+    }
+
+    [Fact]
+    public async Task ResolveSql_UnknownPlaceholder_LeftLiteralWithQuotes()
+    {
+        var rec    = MakeRec(FailureId);
+        var result = await _resolver.ResolveSqlAsync(
+            "UPDATE t SET x = '{notAToken}' WHERE Id = '{sourceId}'", rec);
+
+        // Unknown token untouched (quotes preserved); only {sourceId} parameterized.
+        Assert.Equal("UPDATE t SET x = '{notAToken}' WHERE Id = @p0", result.Sql);
+        Assert.Equal("deposit-abc-123", Assert.Single(result.Parameters).Value);
+    }
+
+    [Fact]
+    public async Task ResolveSql_LoneQuoteAroundToken_DegradesToInertLiteral()
+    {
+        // Odd case: token abuts a wildcard inside a string literal (LIKE '{sourceId}%').
+        // The matched-pair branch can't fire (trailing char is % not '), so the bare
+        // token is parameterized and the quotes stay balanced → '@p0%' is a harmless
+        // literal (matches nothing at runtime). Crucially: no unbalanced quote, no
+        // injection.
+        var rec    = MakeRec(FailureId);
+        var result = await _resolver.ResolveSqlAsync(
+            "DELETE FROM t WHERE Name LIKE '{sourceId}%'", rec);
+
+        Assert.Equal("DELETE FROM t WHERE Name LIKE '@p0%'", result.Sql);
+        // Quotes remain balanced (even count) — statement stays parseable.
+        Assert.Equal(0, result.Sql.Count(c => c == '\'') % 2);
+    }
+
+    [Fact]
+    public async Task ResolveSql_EmptyTemplate_NoParameters()
+    {
+        var rec    = MakeRec(FailureId);
+        var result = await _resolver.ResolveSqlAsync("", rec);
+
+        Assert.Equal("", result.Sql);
+        Assert.Empty(result.Parameters);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
 
     private static AiRecommendation MakeRec(int failureId) => new()

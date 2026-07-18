@@ -18,6 +18,7 @@ public static class ServiceRegistration
     public static IServiceCollection AddApplicationServices(this IServiceCollection services)
     {
         services.AddScoped<IClassifyJobsUseCase,         ClassifyJobsUseCase>();
+        services.AddScoped<IReclassifyOrphanedFailuresUseCase, ReclassifyOrphanedFailuresUseCase>();
         services.AddScoped<IGenerateSuggestionsUseCase,  GenerateSuggestionsUseCase>();
         services.AddScoped<IExecuteFixesUseCase,         ExecuteFixesUseCase>();
         services.AddScoped<IDirectoryPipelineUseCase,    DirectoryPipelineUseCase>();

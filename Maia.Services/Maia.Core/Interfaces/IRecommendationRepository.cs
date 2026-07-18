@@ -55,4 +55,17 @@ public interface IRecommendationRepository
     /// Returns <c>true</c> if a row was updated, <c>false</c> if no recommendation exists with that id.
     /// </summary>
     Task<bool> SetApprovalAsync(int recommendationId, bool approved, CancellationToken ct = default);
+
+    /// <summary>
+    /// Re-arms a recommendation whose fix previously failed to execute, for an
+    /// operator Retry: clears <c>IsExecuted</c> + any stale claim, sets
+    /// <c>OperatorApproved = true</c> (so it's eligible regardless of
+    /// <c>AutoFixAvailable</c>), and moves its <c>Failure.Status</c> back to
+    /// <c>Failed</c> so the drain's claim guard lets it through. The rec + failure
+    /// updates commit in a SINGLE transaction so the drain never sees a half-armed
+    /// row. Returns <c>false</c> when the rec (or its failure) no longer exists.
+    /// The caller is responsible for validating the failure is currently in
+    /// <c>ManualRequired</c> before calling.
+    /// </summary>
+    Task<bool> ReArmForRetryAsync(int recommendationId, CancellationToken ct = default);
 }

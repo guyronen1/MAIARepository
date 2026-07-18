@@ -23,6 +23,17 @@ public sealed class PlaceholderResolver(IDbContextFactory<MaiaDbContext> factory
         @"\{(?<name>[a-zA-Z][a-zA-Z0-9]*)\}",
         RegexOptions.Compiled);
 
+    // Same token for the SQL path, but the FIRST alternative also consumes a
+    // MATCHED PAIR of surrounding single quotes: 'sourceId' → @pN so the
+    // operator's WHERE Id = '{sourceId}' becomes WHERE Id = @p0, not '@p0'.
+    // A lone quote on one side is deliberately NOT matched by the pair branch —
+    // it falls through to the bare branch, leaving the quotes intact (the token
+    // becomes a harmless literal fragment, e.g. LIKE '@p0%', never an injection
+    // and never an unbalanced-quote syntax error).
+    private static readonly Regex SqlToken = new(
+        @"'\{(?<name>[a-zA-Z][a-zA-Z0-9]*)\}'|\{(?<name>[a-zA-Z][a-zA-Z0-9]*)\}",
+        RegexOptions.Compiled);
+
     public async Task<string> ResolveAsync(
         string template,
         AiRecommendation recommendation,
@@ -44,6 +55,31 @@ public sealed class PlaceholderResolver(IDbContextFactory<MaiaDbContext> factory
 
         var failure = await LoadFailureAsync(recommendation.FailureId, ct);
         return Substitute(template, recommendation, failure, requiredPlaceholders);
+    }
+
+    public async Task<ParameterizedSql> ResolveSqlAsync(
+        string template,
+        AiRecommendation recommendation,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(template))
+            return new ParameterizedSql(template, Array.Empty<SqlPlaceholderParameter>());
+
+        var failure    = await LoadFailureAsync(recommendation.FailureId, ct);
+        var parameters = new List<SqlPlaceholderParameter>();
+
+        var sql = SqlToken.Replace(template, m =>
+        {
+            var name = m.Groups["name"].Value;
+            if (!TryResolveValue(name, recommendation, failure, out var value))
+                return m.Value;   // unknown → left literal (surrounding quotes preserved)
+
+            var paramName = "@p" + parameters.Count;
+            parameters.Add(new SqlPlaceholderParameter(paramName, value));
+            return paramName;
+        });
+
+        return new ParameterizedSql(sql, parameters);
     }
 
     private async Task<JobFailure?> LoadFailureAsync(int failureId, CancellationToken ct)
@@ -69,23 +105,9 @@ public sealed class PlaceholderResolver(IDbContextFactory<MaiaDbContext> factory
 
         return Token.Replace(template, m =>
         {
-            var name  = m.Groups["name"].Value;
-            var value = name.ToLowerInvariant() switch
-            {
-                "failureid"      => rec.FailureId.ToString(),
-                "sourceid"       => failure?.SourceId               ?? string.Empty,
-                "referenceid"    => failure?.ReferenceId            ?? string.Empty,
-                "sourcelogpath"  => failure?.SourceLogPath           ?? string.Empty,
-                "sourcefilepath" => failure?.SourceFilePath          ?? string.Empty,
-                // Filename-only slice of {sourceFilePath} (handles both \ and /
-                // separators). Empty when no source path was captured. Lets a
-                // CopyFile dest reuse the original name: {inputFolder}\{sourceFileName}.
-                "sourcefilename" => failure?.SourceFilePath is { Length: > 0 } sfp
-                    ? Path.GetFileName(sfp) : string.Empty,
-                "jobfolder"      => failure?.ScanSource?.LogFolder   ?? string.Empty,
-                "inputfolder"    => failure?.ScanSource?.InputFolder ?? string.Empty,
-                _                => m.Value   // unknown → left literal
-            };
+            var name = m.Groups["name"].Value;
+            if (!TryResolveValue(name, rec, failure, out var value))
+                return m.Value;   // unknown → left literal
 
             if (required is not null
                 && required.Contains(name)
@@ -98,6 +120,35 @@ public sealed class PlaceholderResolver(IDbContextFactory<MaiaDbContext> factory
             }
             return value;
         });
+    }
+
+    /// <summary>
+    /// The single token→value table, shared by the text (<see cref="Substitute"/>)
+    /// and SQL (<see cref="ResolveSqlAsync"/>) paths so a new placeholder is added
+    /// in exactly one place. Returns false for an unrecognised name (caller leaves
+    /// it literal); recognised-but-unavailable values resolve to empty string.
+    /// </summary>
+    private static bool TryResolveValue(
+        string name, AiRecommendation rec, JobFailure? failure, out string value)
+    {
+        switch (name.ToLowerInvariant())
+        {
+            case "failureid":      value = rec.FailureId.ToString();            return true;
+            case "sourceid":       value = failure?.SourceId       ?? string.Empty; return true;
+            case "referenceid":    value = failure?.ReferenceId    ?? string.Empty; return true;
+            case "sourcelogpath":  value = failure?.SourceLogPath  ?? string.Empty; return true;
+            case "sourcefilepath": value = failure?.SourceFilePath ?? string.Empty; return true;
+            // Filename-only slice of {sourceFilePath} (handles both \ and /
+            // separators). Empty when no source path was captured. Lets a
+            // CopyFile dest reuse the original name: {inputFolder}\{sourceFileName}.
+            case "sourcefilename":
+                value = failure?.SourceFilePath is { Length: > 0 } sfp
+                    ? Path.GetFileName(sfp) : string.Empty;
+                return true;
+            case "jobfolder":      value = failure?.ScanSource?.LogFolder   ?? string.Empty; return true;
+            case "inputfolder":    value = failure?.ScanSource?.InputFolder ?? string.Empty; return true;
+            default:               value = string.Empty; return false;
+        }
     }
 
     private static string BuildSpecificError(string name, AiRecommendation rec, JobFailure? f)

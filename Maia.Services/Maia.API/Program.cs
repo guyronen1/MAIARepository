@@ -58,9 +58,11 @@ builder.Services.AddMaia(
 builder.Services.AddApplicationServices();
 
 // ── Authentication: server-side opaque-token sessions in an httpOnly cookie ──
-// Phase 1 is authn-OPEN: the handler populates the principal when a valid cookie
-// is present but never rejects anonymous (no policies / fallback yet). Enforcement
-// lands in Phase 3 by adding policies + a fallback policy here — no handler change.
+// The handler populates the principal from a valid cookie but never rejects —
+// authentication only. Enforcement is LIVE at the authorization layer below: the
+// default fallback policy (RequireAuthenticatedUser) rejects anonymous requests, plus
+// per-endpoint role policies (RequireOperator / RequireAdmin). Anonymous endpoints
+// opt out via [AllowAnonymous] (login, health checks).
 var authOptions = builder.Configuration.GetSection("Auth").Get<AuthOptions>() ?? new AuthOptions();
 builder.Services.AddSingleton(authOptions);
 builder.Services.AddHttpContextAccessor();

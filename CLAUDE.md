@@ -4,7 +4,7 @@ The objective of the MAIA AI Assistant System is to monitor and manage automated
 
 # Documentation Drift Note
 
-MAIA_Specification_v2.pdf in the project root is a snapshot from before the lease-coordinated worker rewrite, approval endpoints, scan-strategy execute removal, auto-heal toggle UI, ScanRunHistory, and JobTypeId-aware policy lookup. The PDF "Feature Status" page lists items as In Progress that are now built (auto-heal toggle, MonitoredJob config forms). The PDF also describes four background workers; only two run today (MonitoringWorker, ScanHistoryRetentionWorker).
+The MAIA specification PDF (under `docs/`) is a snapshot from before the lease-coordinated worker rewrite, approval endpoints, scan-strategy execute removal, auto-heal toggle UI, ScanRunHistory, and JobTypeId-aware policy lookup. The PDF "Feature Status" page lists items as In Progress that are now built (auto-heal toggle, MonitoredJob config forms). The PDF also describes four background workers; only two run today (MonitoringWorker, ScanHistoryRetentionWorker).
 
 CLAUDE.md is the live source of truth for current architecture, endpoints, and decisions. Update the PDF only when there's a formal release milestone.
 
@@ -47,7 +47,7 @@ CLAUDE.md is the live source of truth for current architecture, endpoints, and d
 
 ## Workflow
 
-1. `MonitoringWorker` does one synchronous startup drain of `ExecuteFixesUseCase` to handle approvals/auto-heals that arrived while the process was down.
+1. `MonitoringWorker` does one synchronous startup drain of `ExecuteFixesUseCase` to handle approvals/auto-heals that arrived while the process was down, then one startup **orphaned-unclassified sweep** (`IReclassifyOrphanedFailuresUseCase`) to recover failures a prior crash left saved-but-unclassified past their watermark. The sweep also runs throttled each tick (`Scan:OrphanReclassifyMinutes`, default 10, = both the age gate and cadence). See `MD-Files/DECISIONS.md` → "Orphaned-unclassified sweep".
 2. On each tick the worker atomically claims up to N eligible jobs from `MonitoredJobLeases` (per-`ScanType` lease duration — FS=300s, DB=1800s, ApiEndpoint=60s). Idle ticks sleep 5s; nothing happens if nothing was claimed.
 3. Claimed jobs run in parallel under `Parallel.ForEachAsync` (degree 4). Each job gets a fresh DI scope and a `CancellationTokenSource` armed with its lease duration as a hard timeout.
 4. Per claimed job: `IScanStrategy.ScanAsync` runs scan → classify (`RuleBasedClassifier`) → suggest (`IFixCatalogue`-driven). No execute call inside the strategy.
@@ -73,7 +73,7 @@ CLAUDE.md is the live source of truth for current architecture, endpoints, and d
 - `[dbo].[JobTypes]`
 - `[dbo].[AuditLog]` — `FailureId` nullable; `EntityType` + `EntityId` columns discriminate failure-scoped events from config audits
 - `[dbo].[FixPolicyRules]`
-- `[dbo].[FixPolicyRuleSteps]` — ordered child rows for `ActionType=Composite` policies; FK to `FixPolicyRules` with `ON DELETE CASCADE`; unique `(RuleId, StepOrder)`
+- `[dbo].[FixPolicyRuleSteps]` — ordered child rows for `ActionType=Composite` policies; FK to `FixPolicyRules` with `ON DELETE CASCADE`; unique `(RuleId, StepOrder)`. CHECK constraints (migration `AddCompositeInvariantCheckConstraints`): step `ActionType NOT IN ('Manual','Composite')`, step `ActionPayload` non-blank; sibling `FixPolicyRules` CHECK forbids a payload on a `Composite` header — DB-level defense-in-depth mirroring `FixPolicyConfigController.ValidateCompositePayload`.
 - `[dbo].[FixExecutionLog]`
 - `[dbo].[OperatorActions]`
 - `[dbo].[ScanRunHistory]` — append-only history; one row per completed worker scan (timing + counts + outcome). Bounded by `ScanHistoryRetentionWorker` (default 30 days).
@@ -162,3 +162,4 @@ These have caused or nearly caused regressions; full rationale in `MD-Files/DECI
 - **Scan = read-strict; fix = scope-strict.** Enforcement asymmetry is by design, not an oversight.
 - **`{sourceId}`/`{referenceId}` in WHERE** satisfies the SqlScript write-guard; `{failureId}` deliberately does NOT (it is MAIA's internal PK, meaningless as a fix target).
 - **Job is a pure identity container; `ScanType` lives only on sources.** Do not reintroduce ScanType on the job.
+- **Controller DbContextFactory: reads OK (CQRS-lite), writes NEVER.** A controller may use `IDbContextFactory<MaiaDbContext>` for read-only query-shaping (`AsNoTracking()`), but any write (`Add`/`Update`/`Remove`/`SaveChanges`/`ExecuteUpdate`/`ExecuteDelete`) must go through a Core interface. See `MD-Files/DECISIONS.md` → "API read-side DbContextFactory". (`ConfigController` still has inline writes pending its decomposition.)

@@ -44,7 +44,41 @@ public interface IPlaceholderResolver
         AiRecommendation recommendation,
         IReadOnlyCollection<string> requiredPlaceholders,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Resolve a template destined for a SQL command WITHOUT interpolating any
+    /// value into the SQL text. Every recognised <c>{placeholder}</c> is replaced
+    /// with a positional <c>@pN</c> parameter marker and its value bound in the
+    /// returned <see cref="ParameterizedSql.Parameters"/> list — so scanned data
+    /// (SourceId, ReferenceId, file paths, …) can never become executable SQL.
+    /// This is the SQL-injection-safe counterpart to <see cref="ResolveAsync"/>;
+    /// SqlScript fixes (single-action and composite steps) MUST use it.
+    ///
+    /// Quote handling: operators quote the placeholder (<c>WHERE Id = '{sourceId}'</c>)
+    /// and the "scope to the failing row" UI helper appends the same. A placeholder
+    /// wrapped in a matched pair of single quotes has those quotes consumed, so the
+    /// result is a bare parameter reference (<c>WHERE Id = @p0</c>), never the literal
+    /// <c>'@p0'</c>. Unknown placeholders are left literal (quotes preserved).
+    /// </summary>
+    Task<ParameterizedSql> ResolveSqlAsync(
+        string template,
+        AiRecommendation recommendation,
+        CancellationToken ct = default);
 }
+
+/// <summary>
+/// Result of <see cref="IPlaceholderResolver.ResolveSqlAsync"/>: the rewritten SQL
+/// with <c>@pN</c> markers, plus the parameter values to bind. Provider-neutral so
+/// this Core type stays free of any SqlClient dependency — the executor turns each
+/// <see cref="SqlPlaceholderParameter"/> into a driver parameter.
+/// </summary>
+public sealed record ParameterizedSql(
+    string Sql,
+    IReadOnlyList<SqlPlaceholderParameter> Parameters);
+
+/// <summary>A single bound value: the <c>@pN</c> marker name and its (never-null,
+/// empty-when-unresolved) string value.</summary>
+public sealed record SqlPlaceholderParameter(string Name, string Value);
 
 public sealed class PlaceholderUnresolvedException : Exception
 {

@@ -109,6 +109,26 @@ public sealed class SqlRecommendationRepository(IDbContextFactory<MaiaDbContext>
         return rows > 0;
     }
 
+    public async Task<bool> ReArmForRetryAsync(int recommendationId, CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        // Tracked load of rec + its failure so both tables' updates flush in ONE
+        // SaveChanges (single transaction) — the drain must never see a rec re-armed
+        // while its failure is still ManualRequired, or vice-versa.
+        var rec = await db.AIRecommendations
+            .Include(r => r.Failure)
+            .FirstOrDefaultAsync(r => r.RecommendationId == recommendationId, ct);
+        if (rec is null || rec.Failure is null) return false;
+
+        rec.IsExecuted       = false;
+        rec.OperatorApproved = true;
+        rec.ClaimedBy        = null;
+        rec.ClaimedAt        = null;
+        rec.Failure.Status   = JobStatus.Failed;
+        await db.SaveChangesAsync(ct);
+        return true;
+    }
+
     public async Task<bool> ExistsForFailureAsync(int failureId, CancellationToken ct = default)
     {
         await using var db = await factory.CreateDbContextAsync(ct);

@@ -4,6 +4,7 @@ import { FailuresService } from '../../core/services/failures.service';
 import { RecommendationsService } from '../../core/services/recommendations.service';
 import { ConfigService, FixPolicyRuleStep } from '../../core/services/config.service';
 import { AuthService } from '../../core/services/auth.service';
+import { NotificationService } from '../../core/services/notification.service';
 import { FailureStatus, FixExecution, Recommendation } from '../../core/models';
 import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
 
@@ -426,6 +427,7 @@ export class FailureDetailComponent implements OnDestroy {
   private recSvc    = inject(RecommendationsService);
   private configSvc = inject(ConfigService);
   private auth      = inject(AuthService);
+  private notify    = inject(NotificationService);
 
   /** Approve/reject/retry/mark-resolved are Operator+. A read-only User sees the
    *  failure detail but no action controls (cosmetic; the API enforces too). */
@@ -590,7 +592,11 @@ export class FailureDetailComponent implements OnDestroy {
         if (!opts.silent) this.loading.set(false);
         this.loadStepsForComposites(f.recommendations);
       },
-      error: () => { if (!opts.silent) this.loading.set(false); }
+      // Silent poll refreshes stay quiet (they'd spam a toast every 5s during an
+      // outage); only the initial, operator-visible load surfaces an error.
+      error: () => {
+        if (!opts.silent) { this.loading.set(false); this.notify.error('Could not load failure details.'); }
+      }
     });
   }
 

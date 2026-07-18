@@ -58,9 +58,13 @@ public class RecommendationsController(
     [HttpPost("{id:int}/retry")]
     public async Task<IActionResult> Retry(int id, CancellationToken ct)
     {
+        // Read for validation (sanctioned read-side use of the context factory —
+        // see DECISIONS "API read-side DbContextFactory"). The WRITE goes through
+        // the repository below so no fix state is mutated via the raw context.
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var rec = await db.AIRecommendations
             .Include(r => r.Failure)
+            .AsNoTracking()
             .FirstOrDefaultAsync(r => r.RecommendationId == id, ct);
 
         if (rec is null)
@@ -78,16 +82,11 @@ public class RecommendationsController(
                 Message = $"Retry only applies to failures in ManualRequired (current: {rec.Failure.Status}).",
             });
 
-        // Re-arm: clear the executed flag + any stale claim, approve so it's
-        // eligible regardless of AutoFixAvailable, and move the failure back to
-        // Failed so the drain's claim guard lets it through. Persist BEFORE the
-        // drain so the use case's fresh query sees the re-armed row.
-        rec.IsExecuted       = false;
-        rec.OperatorApproved = true;
-        rec.ClaimedBy        = null;
-        rec.ClaimedAt        = null;
-        rec.Failure.Status   = JobStatus.Failed;
-        await db.SaveChangesAsync(ct);
+        // Re-arm (rec + failure in one transaction) so the drain's fresh query sees
+        // the re-armed row. Persisted BEFORE the drain call below.
+        var reArmed = await recommendations.ReArmForRetryAsync(id, ct);
+        if (!reArmed)
+            return NotFound(new { Message = $"Recommendation {id} not found." });
 
         var actor = Actor;
         await operatorActions.SaveAsync(new OperatorAction

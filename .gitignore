@@ -25,6 +25,12 @@ Thumbs.db
 # ── Logs ─────────────────────────────────────────────────────────────────
 *.log
 
+# ── Server secrets: the deployed connection strings / credentials live only on
+#    the server, never in the repo. The checked-in appsettings.json holds dev
+#    placeholders; Production is provisioned per-host. ───────────────────────
+Maia.Services/Maia.API/appsettings.Production.json
+appsettings.*.Local.json
+
 # ── .NET publish output (build artifacts — regenerable, never commit) ──────
 Maia.Services/Maia.API/publish/
 Maia.Services/Maia.API/publish-fx/

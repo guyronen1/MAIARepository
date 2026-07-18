@@ -1,26 +1,18 @@
-import { Component, OnInit, inject, signal, computed } from '@angular/core';
-import { Observable } from 'rxjs';
+import { Component, OnInit, inject, signal, computed, viewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import {
   ConfigService, FixPolicyRule, JobType, ErrorType, ClassificationRule,
-  UpsertJobRequest, UpsertScanSourceRequest, UpsertScanRuleRequest,
-  UpsertJobClassificationRuleRequest, UpsertFixPolicyRuleRequest, UpsertClassificationRuleRequest,
 } from '../../../core/services/config.service';
 import { MonitoredJob, ScanSource, ScanCheckRule, RuleOverride } from '../../../core/models';
-import { DrawerComponent } from '../../../shared/drawer/drawer.component';
+import { NotificationService } from '../../../core/services/notification.service';
+import { EditJobDrawerComponent } from './drawers/edit-job-drawer.component';
+import { ScanSourceDrawerComponent } from './drawers/scan-source-drawer.component';
+import { ScanRuleDrawerComponent } from './drawers/scan-rule-drawer.component';
+import { ClassRuleDrawerComponent } from './drawers/class-rule-drawer.component';
+import { FixOptionDrawerComponent } from './drawers/fix-option-drawer.component';
 import { computeEffectiveClassRules, scanRulePredictedPattern,
   scanRuleNeedsClassification as coverageNeedsClassification } from '../../../core/util/coverage-match.util';
-
-const SCAN_TYPES = [
-  { id: 1, name: 'FileSystem' }, { id: 2, name: 'Database' },
-  { id: 3, name: 'ApiEndpoint' }, { id: 4, name: 'FileContent' },
-];
-const DB_CHECK_TYPES  = ['ColumnRange', 'ValueEquals', 'SqlQuery'];
-const FILE_FORMATS    = ['Xml'];
-const PREDICATE_TYPES = ['Equals', 'NotEquals', 'Contains', 'NotContains'];
-const SEVERITIES      = ['Low', 'Medium', 'High', 'Critical'];
-const FIX_CATEGORIES  = ['Retry', 'FileRepair', 'DbFix', 'Manual'];
 
 /**
  * Tier 2.5 (d2): dedicated per-job configuration screen at
@@ -36,7 +28,8 @@ const FIX_CATEGORIES  = ['Retry', 'FileRepair', 'DbFix', 'Manual'];
 @Component({
   selector: 'app-job-config',
   standalone: true,
-  imports: [RouterLink, FormsModule, DrawerComponent],
+  imports: [RouterLink, FormsModule, EditJobDrawerComponent, ScanSourceDrawerComponent,
+            ScanRuleDrawerComponent, ClassRuleDrawerComponent, FixOptionDrawerComponent],
   template: `
     <div class="page">
       @if (loading()) {
@@ -270,570 +263,16 @@ const FIX_CATEGORIES  = ['Retry', 'FileRepair', 'DbFix', 'Manual'];
         </div>
 
         <!-- ── Edit Job drawer (identity only; scan config lives on sources) ── -->
-        <app-drawer [open]="editOpen()" [ariaLabel]="'Edit job ' + j.name" (close)="editOpen.set(false)">
-          <ng-container drawer-title>Edit Job &nbsp;<span class="drawer-title-sub">{{ j.name }}</span></ng-container>
-          <div class="form-grid">
-            <div class="form-group span2">
-              <label>Name *</label>
-              <input [(ngModel)]="jobForm.name" />
-            </div>
-            <div class="form-group span2">
-              <label>Display Name</label>
-              <input [(ngModel)]="jobForm.displayName" placeholder="Optional friendly name" />
-            </div>
-            <div class="form-group">
-              <label>Job Type *</label>
-              <select [(ngModel)]="jobForm.jobTypeId">
-                <option [ngValue]="0" disabled>Select…</option>
-                @for (t of jobTypes(); track t.jobTypeId) { <option [ngValue]="t.jobTypeId">{{ t.name }}</option> }
-              </select>
-            </div>
-            <div class="form-group">
-              <label>Poll Interval (seconds)</label>
-              <input type="number" [(ngModel)]="jobForm.pollingIntervalSeconds" min="10" />
-              <span class="field-hint">Scan cadence at the job level. All sources of this job scan together within each tick, sequentially — sources cannot scan at independent frequencies in this version.</span>
-            </div>
-            <div class="form-group">
-              <label class="toggle-label"><input type="checkbox" [(ngModel)]="jobForm.isActive" /> Active</label>
-            </div>
-            <div class="form-group span2">
-              <label>Description</label>
-              <textarea [(ngModel)]="jobForm.description" rows="2" placeholder="Optional notes"></textarea>
-            </div>
-          </div>
-          @if (editError()) { <div class="edit-error">⚠ {{ editError() }}</div> }
-          <div class="drawer-foot">
-            <button class="btn btn-ghost" (click)="editOpen.set(false)">Cancel</button>
-            <button class="btn btn-primary" (click)="saveJobEdit()" [disabled]="saving()">
-              @if (saving()) { <span class="spinner"></span> } Save Changes
-            </button>
-          </div>
-        </app-drawer>
+        <app-edit-job-drawer [jobTypes]="jobTypes()" [jobId]="jobId" (saved)="reload()" />
 
-        <!-- ── Scan Source drawer (config branches on ScanType; immutable on edit) ── -->
-        <app-drawer [open]="sourceDrawerOpen()" [ariaLabel]="'Scan source'" (close)="sourceDrawerOpen.set(false)">
-          <ng-container drawer-title>{{ editingSourceId() ? 'Edit' : 'New' }} Scan Source</ng-container>
-          <div class="form-grid">
-            <div class="form-group span2">
-              <label>Name *</label>
-              <input [(ngModel)]="sourceForm.name" placeholder="e.g. App logs, Orders DB" />
-            </div>
-            <div class="form-group span2">
-              <label>Scan Type *</label>
-              @if (editingSourceId()) {
-                <input [value]="scanTypeName(sourceForm.scanTypeId)" disabled />
-                <span class="field-hint">Scan type can't change after creation — delete and recreate to switch it.</span>
-              } @else {
-                <select [(ngModel)]="sourceForm.scanTypeId">
-                  @for (t of scanTypes; track t.id) { <option [ngValue]="t.id">{{ t.name }}</option> }
-                </select>
-              }
-            </div>
-
-            @if (isFileBased(sourceForm.scanTypeId)) {
-              <div class="form-group span2">
-                <label>Folder to Scan *</label>
-                <input [(ngModel)]="sourceForm.logFolder" placeholder="C:\logs\app" />
-              </div>
-              @if (sourceForm.scanTypeId === 1) {
-                <div class="form-group span2">
-                  <label>Search Patterns</label>
-                  <input [(ngModel)]="sourceForm.searchPatterns" placeholder="app*.log, error*.log" />
-                </div>
-                <div class="form-group span2">
-                  <label>Input Folder</label>
-                  <input [(ngModel)]="sourceForm.inputFolder" placeholder="Optional — base for relative input paths" />
-                </div>
-              }
-              <div class="form-group span2">
-                <label class="toggle-label"><input type="checkbox" [(ngModel)]="sourceForm.includeSubfolders" /> Include subfolders (recurse)</label>
-              </div>
-            }
-            @if (sourceForm.scanTypeId === 2) {
-              <div class="form-group span2">
-                <label>Connection Name *</label>
-                <input [(ngModel)]="sourceForm.connectionName" placeholder="appsettings connection key" />
-              </div>
-            }
-            @if (sourceForm.scanTypeId === 3) {
-              <div class="form-group span2">
-                <label>API URL *</label>
-                <input [(ngModel)]="sourceForm.logSourceUrl" placeholder="https://api.example.com/health" />
-              </div>
-            }
-            @if (editingSourceId()) {
-              <div class="form-group span2">
-                <label class="toggle-label"><input type="checkbox" [(ngModel)]="sourceForm.isActive" /> Active</label>
-              </div>
-            }
-          </div>
-          @if (sourceError()) { <div class="edit-error">⚠ {{ sourceError() }}</div> }
-          <div class="drawer-foot">
-            <button class="btn btn-ghost" (click)="sourceDrawerOpen.set(false)">Cancel</button>
-            <button class="btn btn-primary" (click)="saveSource()" [disabled]="savingSource()">
-              @if (savingSource()) { <span class="spinner"></span> } Save
-            </button>
-          </div>
-        </app-drawer>
-
-        <!-- ── Scan Rule drawer (config branches on the source's ScanType) ────── -->
-        <app-drawer [open]="ruleDrawerOpen()" [ariaLabel]="'Scan rule'" (close)="ruleDrawerOpen.set(false)">
-          <ng-container drawer-title>
-            {{ editingRuleId() ? 'Edit' : 'New' }} Scan Rule
-            @if (editingRuleSource(); as src) { &nbsp;<span class="drawer-title-sub">{{ src.name }}</span> }
-          </ng-container>
-          <div class="form-grid">
-            @if (editingRuleSource()?.scanTypeId === 1) {
-              <!-- FileSystem: keyword + optional input-path extraction -->
-              <div class="form-group span2">
-                <label>Keyword / Pattern *</label>
-                <input [(ngModel)]="ruleForm.targetField" placeholder="e.g. ERROR|FAILED|Exception" />
-                <span class="field-hint">Text searched in each log file line (case-insensitive). Wildcards (*) are ignored — just type the keyword, e.g. File Not Found.</span>
-              </div>
-              <div class="form-group span2">
-                <label>Input File Extraction</label>
-                <input [(ngModel)]="ruleForm.inputPathPattern" placeholder="e.g. Processing file: (.+\.txt)" />
-                <span class="field-hint">Optional. Regex; capture group #1 must be the input file path. Full regex (<em>not</em> the <code>*</code>-wildcard shorthand). The captured path becomes the <code>{{'{'}}sourceFilePath{{'}'}}</code> placeholder for a fix policy's payload. Leave blank if no fix needs the input file.</span>
-              </div>
-            } @else if (editingRuleSource()?.scanTypeId === 4) {
-              <!-- FileContent: structured extraction from input data files -->
-              <div class="form-group span2">
-                <label>Filename Pattern *</label>
-                <input [(ngModel)]="ruleForm.targetField" placeholder="e.g. *WARNING*.xml  or  *.xml" />
-                <span class="field-hint">Files whose name matches are examined. Uses <code>*</code> as a wildcard, case-insensitive — same DSL as classification patterns (<em>not</em> regex).</span>
-              </div>
-              <div class="form-group span2">
-                <label>Format *</label>
-                <select [(ngModel)]="ruleForm.extractorType">
-                  @for (f of fileFormats; track f) { <option [ngValue]="f">{{ f }}</option> }
-                </select>
-                <span class="field-hint">Extractor used to read the file. XML only in v1.</span>
-              </div>
-              <div class="form-group span2">
-                <label>Value Locator (XPath)</label>
-                <input [(ngModel)]="ruleForm.extractorLocator" placeholder="e.g. /file/status/code" />
-                <span class="field-hint"><strong>Leave blank if the filename match alone signals the failure.</strong> Namespaces are ignored — write plain element names, not <code>local-name()</code>.</span>
-              </div>
-              <div class="form-group">
-                <label>Predicate</label>
-                <!-- Two-way bind splits into [ngModel]+(ngModelChange) so we can
-                     clear the stale predicate value when the operator switches to
-                     "None". Without this the invisible value field retains its old
-                     string and the backend returns PredicateIncomplete 400. -->
-                <select [ngModel]="ruleForm.extractorPredicateType"
-                        (ngModelChange)="onPredicateTypeChange($event)">
-                  <option [ngValue]="null">None — filename match is the failure</option>
-                  @for (p of predicateTypes; track p) { <option [ngValue]="p">{{ p }}</option> }
-                </select>
-              </div>
-              @if (ruleForm.extractorPredicateType) {
-                <div class="form-group">
-                  <label>Predicate Value *</label>
-                  <input [(ngModel)]="ruleForm.extractorPredicateValue" placeholder="e.g. ERROR" />
-                </div>
-                @if (!ruleForm.extractorLocator) {
-                  <div class="soft-warn span2">⚠ A predicate needs a <strong>Value Locator</strong> to extract the value it tests.</div>
-                }
-              }
-              <div class="form-group span2">
-                <label>Identifier Locator (XPath)</label>
-                <input [(ngModel)]="ruleForm.identifierLocator" placeholder="e.g. /file/header/invoiceId" />
-                <span class="field-hint">XPath to the natural key, stored as the failure's <code>{{'{'}}sourceId{{'}'}}</code>. Leave blank to use the filename without extension.</span>
-              </div>
-            } @else {
-              <!-- Database: ColumnRange / ValueEquals -->
-              <div class="form-group span2">
-                <label>Check Type *</label>
-                <select [(ngModel)]="ruleForm.checkType">
-                  @for (ct of dbCheckTypes; track ct) { <option [ngValue]="ct">{{ ct }}</option> }
-                </select>
-              </div>
-              @if (ruleForm.checkType === 'SqlQuery') {
-                <div class="form-group span2">
-                  <label>Source Query *</label>
-                  <textarea [(ngModel)]="ruleForm.sourceTable" rows="4" class="sql-area"
-                            placeholder="SELECT OrderId, IsStuck FROM Orders o JOIN Shipments s ON … WHERE …&#10;— or —&#10;EXEC sp_CheckStuckOrders @threshold=60"></textarea>
-                  <span class="field-hint">
-                    Full SQL <code>SELECT</code> or a stored-procedure call (<code>EXEC sp_Name @p=…</code>), run as-is.
-                    <strong>Every row the query returns becomes a failure</strong> — put the condition in your
-                    <code>WHERE</code>/<code>JOIN</code> (there's no separate predicate). Handles cross-table checks the
-                    single-table rules can't. Runs under the source's connection login — use a least-privilege read-only login.
-                  </span>
-                </div>
-                @if (sqlQueryNeedsWhereWarning()) {
-                  <div class="soft-warn span2">⚠️ This query has no <code>WHERE</code> clause — it will flag <strong>every</strong> returned row as a failure (up to 500). Add a <code>WHERE</code> to target specific problem rows, or confirm this is intentional (e.g., a pre-filtered view or aggregation).</div>
-                }
-                <div class="form-group">
-                  <label>Result Column *</label>
-                  <input [(ngModel)]="ruleForm.targetField" placeholder="IsStuck" />
-                  <span class="field-hint">Result-set column whose value is shown on each failure.</span>
-                </div>
-                <div class="form-group">
-                  <label>Source ID Column <span class="text-muted">(row identity)</span></label>
-                  <input [(ngModel)]="ruleForm.sourceIdColumn" placeholder="OrderId" />
-                  <span class="field-hint">
-                    Result-set column used as the failure's <code>{{'{'}}sourceId{{'}'}}</code>. Blank → row number.
-                    <strong>Set this</strong> so a new problem row is detected even while an earlier row's failure is still open
-                    (per-row dedup, case-insensitive).
-                  </span>
-                </div>
-                <div class="form-group">
-                  <label>Reference ID Column <span class="text-muted">(parent / FK key — optional)</span></label>
-                  <input [(ngModel)]="ruleForm.referenceIdColumn" placeholder="OrderId" />
-                  <span class="field-hint">
-                    A related row's identity — e.g. the parent order id when fixing all line items.
-                    Stored as the failure's <code>{{'{'}}referenceId{{'}'}}</code> placeholder.
-                    Must be in your <code>SELECT</code>. Blank → <code>{{'{'}}referenceId{{'}'}}</code> resolves to empty (safe no-op, not a bulk write).
-                  </span>
-                </div>
-                <div class="form-group span2">
-                  <label>Watermark Column <span class="text-muted">(scan cursor — optional)</span></label>
-                  <input [(ngModel)]="ruleForm.watermarkColumn" placeholder="UpdateDate" />
-                  <span class="field-hint">
-                    Incremental scanning, same as the single-table rules: each scan only processes rows whose value
-                    here exceeds the last one seen. <strong>The column must be in your <code>SELECT</code></strong>
-                    (e.g. add <code>UpdateDate</code> to the query). Blank → the whole query re-runs every tick and
-                    dedup relies on Source ID / open-failure state. For large result sets add
-                    <code>ORDER BY {{ ruleForm.watermarkColumn || 'UpdateDate' }} ASC</code> so the 500-row cap reads oldest-first.
-                  </span>
-                </div>
-              } @else {
-                <div class="form-group">
-                  <label>Source Table *</label>
-                  <input [(ngModel)]="ruleForm.sourceTable" placeholder="dbo.Files" />
-                </div>
-                <div class="form-group">
-                  <label>Target Field *</label>
-                  <input [(ngModel)]="ruleForm.targetField" placeholder="FileStatusCode" />
-                </div>
-                @if (ruleForm.checkType === 'ValueEquals') {
-                  <div class="form-group span2">
-                    <label>Expected Value (triggers failure)</label>
-                    <input [(ngModel)]="ruleForm.expectedValue" placeholder="5" />
-                  </div>
-                }
-                @if (ruleForm.checkType === 'ColumnRange') {
-                  <div class="form-group">
-                    <label>Min Value</label>
-                    <input type="number" [(ngModel)]="ruleForm.minValue" placeholder="blank = −∞" />
-                  </div>
-                  <div class="form-group">
-                    <label>Max Value</label>
-                    <input type="number" [(ngModel)]="ruleForm.maxValue" placeholder="blank = +∞" />
-                  </div>
-                }
-                <div class="form-group">
-                  <label>Watermark Column <span class="text-muted">(scan cursor)</span></label>
-                  <input [(ngModel)]="ruleForm.watermarkColumn" placeholder="UpdateDate" />
-                </div>
-                <div class="form-group">
-                  <label>Source ID Column <span class="text-muted">(row identity)</span></label>
-                  <input [(ngModel)]="ruleForm.sourceIdColumn" placeholder="Id" />
-                </div>
-                <div class="form-group">
-                  <label>Reference ID Column <span class="text-muted">(parent / FK key)</span></label>
-                  <input [(ngModel)]="ruleForm.referenceIdColumn" placeholder="OrderId" />
-                </div>
-                <div class="form-group span2">
-                  <label>File Path Column</label>
-                  <input [(ngModel)]="ruleForm.filePathColumn" placeholder="e.g. FilePath  or  j.FilePath" />
-                  <span class="field-hint">Optional. Column on the source row holding the input file path → the <code>{{'{'}}sourceFilePath{{'}'}}</code> placeholder. No auto-JOIN — put any JOIN into Source Table and use <code>alias.Column</code> here.</span>
-                </div>
-              }
-            }
-            <div class="form-group">
-              <label>Severity</label>
-              <select [(ngModel)]="ruleForm.severity">
-                @for (sv of severities; track sv) { <option [ngValue]="sv">{{ sv }}</option> }
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="toggle-label"><input type="checkbox" [(ngModel)]="ruleForm.isActive" /> Active</label>
-            </div>
-            <div class="form-group span2">
-              <label>Description</label>
-              <input [(ngModel)]="ruleForm.description" placeholder="Optional notes" />
-            </div>
-          </div>
-          @if (ruleError()) { <div class="edit-error">⚠ {{ ruleError() }}</div> }
-          <div class="drawer-foot">
-            <button class="btn btn-ghost" (click)="ruleDrawerOpen.set(false)">Cancel</button>
-            <button class="btn btn-primary" (click)="saveRule()" [disabled]="savingRule()">
-              @if (savingRule()) { <span class="spinner"></span> } {{ editingRuleId() ? 'Save Changes' : 'Add Rule' }}
-            </button>
-          </div>
-        </app-drawer>
-
-        <!-- ── Classification Rule drawer ────────────────────────────────────── -->
-        <app-drawer [open]="classDrawerOpen()" [ariaLabel]="'Classification rule'" (close)="classDrawerOpen.set(false)">
-          <ng-container drawer-title>{{ editingClassRule() ? 'Edit' : 'New' }} Classification Rule</ng-container>
-          <div class="form-grid">
-            <div class="form-group span2">
-              <label>Match Pattern *</label>
-              <input [(ngModel)]="classRuleForm.pattern" placeholder="e.g. FileNotFoundException  or  Error code * occurred" />
-              <span class="field-hint">Case-insensitive substring of the error message. Use <code>*</code> as a wildcard for any text; other characters are literal.</span>
-            </div>
-            <div class="form-group span2">
-              <label>Error Type *</label>
-              <select [(ngModel)]="classRuleForm.errorTypeId">
-                <option [ngValue]="0" disabled>Select error type…</option>
-                @for (et of errorTypes(); track et.errorTypeId) { <option [ngValue]="et.errorTypeId">{{ et.code }} — {{ et.displayName }}</option> }
-              </select>
-            </div>
-            <div class="form-group">
-              <label>Confidence (0 – 1)</label>
-              <input type="number" [(ngModel)]="classRuleForm.confidence" min="0" max="1" step="0.05" />
-            </div>
-            <div class="form-group">
-              <label>Priority</label>
-              <input type="number" [(ngModel)]="classRuleForm.priority" min="1" />
-              <span class="field-hint">Lower = evaluated first.</span>
-            </div>
-            <div class="form-group">
-              <label class="toggle-label"><input type="checkbox" [(ngModel)]="classRuleForm.isActive" /> Active</label>
-            </div>
-          </div>
-          @if (classRuleSaveError()) {
-            <div class="dup-warn save-error" role="alert">
-              ⚠ {{ classRuleSaveError() }}
-              @if (classRuleConflictId()) {
-                <br><button class="link-btn" (click)="linkConflictingClassRule()">{{ editingClassRule() ? 'Swap to existing rule' : 'Link the existing rule instead' }}</button>
-              }
-            </div>
-          }
-          <div class="drawer-foot">
-            <button class="btn btn-ghost" (click)="classDrawerOpen.set(false)">Cancel</button>
-            <button class="btn btn-primary" (click)="saveClassRule()" [disabled]="savingClass()">
-              @if (savingClass()) { <span class="spinner"></span> } {{ editingClassRule() ? 'Save Changes' : 'Add Rule' }}
-            </button>
-          </div>
-        </app-drawer>
-
-        <!-- ── Link Existing Classification Rule drawer ──────────────────────── -->
-        <app-drawer [open]="linkDrawerOpen()" [ariaLabel]="'Link classification rule'" (close)="linkDrawerOpen.set(false)">
-          <ng-container drawer-title>Link Existing Classification Rule</ng-container>
-          <div class="form-group" style="margin-bottom:12px">
-            <input [ngModel]="linkRuleSearch()" (ngModelChange)="linkRuleSearch.set($event)" placeholder="Search by pattern or error type…" />
-          </div>
-          @if (loadingLinkRules()) {
-            <div class="loading-overlay" style="padding:20px 0"><span class="spinner"></span> Loading…</div>
-          } @else if (filteredLinkableRules().length === 0) {
-            <div class="empty-state"><span class="empty-icon">🏷️</span><p>No unlinked rules found{{ linkRuleSearch() ? ' matching "' + linkRuleSearch() + '"' : '' }}.</p></div>
-          } @else {
-            <div class="link-rule-list">
-              @for (r of filteredLinkableRules(); track r.ruleId) {
-                <div class="link-rule-item" (click)="confirmLinkRule(r)">
-                  <div class="link-rule-pattern font-mono">{{ r.pattern }}</div>
-                  <div class="link-rule-meta">
-                    <span class="badge badge-classified">{{ r.errorTypeCode }}</span>
-                    <span class="text-muted text-sm">{{ r.jobTypeName }}</span>
-                    <span class="text-muted text-sm">conf {{ (r.confidence * 100).toFixed(0) }}%</span>
-                  </div>
-                </div>
-              }
-            </div>
-          }
-          <div class="drawer-foot">
-            <button class="btn btn-ghost" (click)="linkDrawerOpen.set(false)">Cancel</button>
-          </div>
-        </app-drawer>
-
-        <!-- ── Fix Option drawer ─────────────────────────────────────────────── -->
-        <app-drawer [open]="fixDrawerOpen()" [ariaLabel]="'Fix option'" (close)="fixDrawerOpen.set(false)">
-          <ng-container drawer-title>{{ editingFixRule() ? 'Edit' : 'New' }} Fix Option</ng-container>
-          <div class="drawer-context-banner">
-            <span class="banner-icon" aria-hidden="true">i</span>
-            <span>
-              @if (fixRuleForm.monitoredJobId !== null) {
-                Fix policy for <strong>{{ j.displayName ?? j.name }}</strong> — applies to this job only.
-              } @else {
-                Fix policy for <strong>all {{ j.jobTypeName }} jobs</strong> (JobType-wide default) — a per-job policy overrides it.
-              }
-            </span>
-          </div>
-          <div class="form-grid">
-            <div class="span2 scope-line">
-              @if (fixRuleForm.monitoredJobId !== null) {
-                <span class="scope-current">Scope: <strong>This job</strong></span>
-                <button type="button" class="link-btn" (click)="setFixRuleScope(null)">Apply to all {{ j.jobTypeName }} jobs instead</button>
-              } @else {
-                <span class="scope-current">Scope: <strong>All {{ j.jobTypeName }} jobs</strong> (default)</span>
-                <button type="button" class="link-btn" (click)="setFixRuleScope(j.monitoredJobId)">Scope to just this job instead</button>
-              }
-            </div>
-            @if (effectiveClassRules().length > 0) {
-              <div class="form-group span2">
-                <label>Target a classification rule <span class="text-muted">(shortcut)</span></label>
-                <select [ngModel]="shortcutRuleId" (ngModelChange)="pickClassificationRuleById($event)">
-                  <option [ngValue]="null" disabled>Pick a symptom to target…</option>
-                  @for (cr of effectiveClassRules(); track cr.ruleId) { <option [ngValue]="cr.ruleId">{{ cr.pattern }} → {{ cr.errorTypeCode }}</option> }
-                </select>
-                <span class="field-hint">Sets the Error Type below from the rule's type.</span>
-              </div>
-            }
-            <div class="form-group span2">
-              <label>Error Type *</label>
-              <select [(ngModel)]="fixRuleForm.errorTypeId" (ngModelChange)="shortcutRuleId = null; syncFixRuleSignal()">
-                <option [ngValue]="0" disabled>Select error type…</option>
-                @for (et of errorTypes(); track et.errorTypeId) { <option [ngValue]="et.errorTypeId">{{ et.code }} — {{ et.displayName }}</option> }
-              </select>
-              @if (fixRuleDuplicateConflict(); as conflict) {
-                <div class="dup-warn">
-                  ⚠ An active fix policy already exists for this Error Type at the
-                  <strong>{{ fixRuleForm.monitoredJobId === null ? 'default (all jobs)' : 'override (this job)' }}</strong> scope.
-                  Existing: <strong>{{ conflict.fixCategory }} / {{ conflict.actionType }}</strong>.
-                  <button type="button" class="link-btn" (click)="openConflictingPolicy(conflict)">Edit existing policy instead?</button>
-                </div>
-              } @else if (fixRuleSaveConflict(); as conflict) {
-                <div class="dup-warn">⚠ {{ conflict.message }}
-                  <button type="button" class="link-btn" (click)="openConflictingPolicyById(conflict.conflictingPolicyId)">Open existing policy</button>
-                </div>
-              }
-              @if (selectedErrorTypeCode(); as code) {
-                @if (classRulesForSelectedErrorType().length > 0) {
-                  <span class="field-hint covers-hint">
-                    Covers {{ classRulesForSelectedErrorType().length }} classification {{ classRulesForSelectedErrorType().length === 1 ? 'rule' : 'rules' }} on this job:
-                    @for (cr of classRulesForSelectedErrorType(); track cr.ruleId; let last = $last) { <code>{{ cr.pattern }}</code>{{ last ? '' : ', ' }} }
-                  </span>
-                } @else {
-                  <div class="dup-warn reachability-warn">
-                    ⚠ No classification rule on this job maps to <strong>{{ code }}</strong> — this fix won't trigger until one exists. Add a matching rule in <strong>Classification Rules</strong> above.
-                  </div>
-                }
-              }
-            </div>
-            <div class="form-group">
-              <label>Action Description *</label>
-              <input [(ngModel)]="fixRuleForm.actionToApply" placeholder="e.g. Retry DTSX job via management API" />
-            </div>
-            <div class="form-group">
-              <label>Execution Type *</label>
-              <select [ngModel]="fixRuleForm.actionType" (ngModelChange)="setFixRuleActionType($event)">
-                <option [ngValue]="''" disabled>Select execution type…</option>
-                @for (a of orderedActionTypes(); track a) { <option [ngValue]="a">{{ a }}</option> }
-              </select>
-            </div>
-            <div class="form-group">
-              <label>Fix Category</label>
-              <!-- Read-only — derived automatically from Execution Type.
-                   Manual execution type locks both to Manual; any other
-                   execution type auto-assigns the natural category. -->
-              <input [value]="fixRuleForm.fixCategory || 'Derived from execution type'" readonly />
-            </div>
-            <div class="form-group">
-              <label>Behaviour</label>
-              <div class="toggles-row">
-                <label class="toggle-pair">
-                  <span class="toggle"><input type="checkbox" [(ngModel)]="fixRuleForm.isAutoHealEligible" /><span class="slider"></span></span>
-                  <span class="toggle-text">Auto-Heal</span>
-                </label>
-                <label class="toggle-pair">
-                  <span class="toggle"><input type="checkbox" [(ngModel)]="fixRuleForm.enabled" (ngModelChange)="syncFixRuleSignal()" /><span class="slider"></span></span>
-                  <span class="toggle-text">Enabled</span>
-                </label>
-              </div>
-            </div>
-            @if (fixRuleForm.actionType && fixRuleForm.actionType !== 'Manual' && fixRuleForm.actionType !== 'Composite') {
-              <div class="form-group span2">
-                <label>Action Payload</label>
-                @if (fixRuleForm.actionType === 'ApiCall') {
-                  <input [ngModel]="fixRuleForm.actionPayload" (ngModelChange)="fixRuleForm.actionPayload = $event; syncFixRuleSignal()" placeholder="http://jobs.internal/api/jobs/{failureId}/retry" />
-                  <span class="field-hint">Use {{'{'}}failureId{{'}'}} as a placeholder — replaced at runtime.</span>
-                } @else if (fixRuleForm.actionType === 'StoredProcedure') {
-                  <input [ngModel]="fixRuleForm.actionPayload" (ngModelChange)="fixRuleForm.actionPayload = $event; syncFixRuleSignal()" placeholder="dbo.sp_RetryJob  or  ConnName|dbo.sp_RetryJob" />
-                } @else if (fixRuleForm.actionType === 'SqlScript') {
-                  <textarea [ngModel]="fixRuleForm.actionPayload" (ngModelChange)="fixRuleForm.actionPayload = $event; syncFixRuleSignal()" rows="4" placeholder="UPDATE dbo.Files SET FileStatusCode = 0 WHERE Id = '{sourceId}'"></textarea>
-                  <span class="field-hint">Runs against the job's configured connection. Key the source row on <code>'{{'{'}}sourceId{{'}'}}'</code> (quoted) — <em>not</em> <code>{{'{'}}failureId{{'}'}}</code> (MAIA's internal id). A fix must be scoped to the failing row or it won't save.</span>
-                  @if (sqlFixNeedsScopeShortcut(fixRuleForm.actionPayload)) {
-                    <button type="button" class="link-btn scope-shortcut" (click)="scopeFixPayloadToSourceId()">+ scope to the failing row — add <code>{{ scopeClauseFor(fixRuleForm.actionPayload) }} {{ fixScopeColumn }} = '{{'{'}}sourceId{{'}'}}'</code></button>
-                  }
-                } @else if (fixRuleForm.actionType === 'CopyFile') {
-                  <input [ngModel]="fixRuleForm.actionPayload" (ngModelChange)="fixRuleForm.actionPayload = $event; syncFixRuleSignal()" placeholder="{sourceFilePath}|{inputFolder}\reprocess\{sourceFileName}" />
-                  <span class="field-hint">Format <code>SOURCE|DEST</code>. Atomic copy, overwrite by default. <code>{{'{'}}sourceFilePath{{'}'}}</code> needs Input File Extraction (FS) or File Path Column (DB) on a scan rule.</span>
-                } @else {
-                  <input [ngModel]="fixRuleForm.actionPayload" (ngModelChange)="fixRuleForm.actionPayload = $event; syncFixRuleSignal()" placeholder="powershell.exe C:\scripts\fix.ps1 {failureId}" />
-                }
-              </div>
-            }
-            @if (fixRuleForm.actionType === 'Composite') {
-              <div class="form-group span2">
-                <label>Steps *</label>
-                <div class="steps-editor">
-                  @for (step of fixRuleForm.steps ?? []; track $index; let i = $index) {
-                    <div class="step-block">
-                      <div class="step-row">
-                        <span class="step-order">{{ i + 1 }}.</span>
-                        <select [(ngModel)]="step.actionType" class="step-type">
-                          <option value="SqlScript">SqlScript</option>
-                          <option value="Script">Script</option>
-                          <option value="CopyFile">CopyFile</option>
-                          <option value="ApiCall">ApiCall</option>
-                          <option value="StoredProcedure">StoredProcedure</option>
-                        </select>
-                        @if (step.actionType === 'SqlScript') {
-                          <textarea [ngModel]="step.actionPayload" (ngModelChange)="step.actionPayload = $event; syncFixRuleSignal()" rows="2" class="step-payload step-payload-sql" [placeholder]="payloadPlaceholderFor(step.actionType)"></textarea>
-                        } @else {
-                          <input [ngModel]="step.actionPayload" (ngModelChange)="step.actionPayload = $event; syncFixRuleSignal()" class="step-payload" [placeholder]="payloadPlaceholderFor(step.actionType)" />
-                        }
-                        <div class="step-controls">
-                          <button type="button" class="btn btn-ghost btn-icon" title="Move up" (click)="moveStep(i, -1)" [disabled]="i === 0">↑</button>
-                          <button type="button" class="btn btn-ghost btn-icon" title="Move down" (click)="moveStep(i, +1)" [disabled]="i === (fixRuleForm.steps?.length ?? 0) - 1">↓</button>
-                          <button type="button" class="btn btn-ghost btn-icon" title="Remove step" (click)="removeStep(i)">✕</button>
-                        </div>
-                      </div>
-                      @if (step.actionType === 'SqlScript' && sqlFixNeedsScopeShortcut(step.actionPayload)) {
-                        <button type="button" class="link-btn step-scope" (click)="scopeStepToSourceId(step)">+ scope to the failing row — add <code>{{ scopeClauseFor(step.actionPayload) }} {{ fixScopeColumn }} = '{{'{'}}sourceId{{'}'}}'</code></button>
-                      }
-                      <input [(ngModel)]="step.description" class="step-desc" placeholder="Description (optional)" />
-                    </div>
-                  }
-                  <button type="button" class="btn btn-ghost btn-sm step-add" (click)="addStep()">+ Add Step</button>
-                </div>
-                <span class="field-hint">Steps run in order. Any step failure routes the failure to <strong>ManualRequired</strong>; subsequent steps still run (best-effort). One log row per step.</span>
-              </div>
-            }
-            @if (fixRuleSourcePathWarning()) {
-              <div class="form-group span2">
-                <div class="dup-warn">⚠ This payload uses <code>{{'{'}}sourceFilePath{{'}'}}</code>, but no scan rule on <strong>{{ j.displayName ?? j.name }}</strong> captures a file path. Set <strong>Input File Extraction</strong> (FS) or <strong>File Path Column</strong> (DB) on a scan rule, or the fix fails at runtime with an empty source path.</div>
-              </div>
-            }
-            @if (fixRuleForm.actionType && fixRuleForm.actionType !== 'Manual') {
-              <div class="form-group span2">
-                <details class="token-legend">
-                  <summary>Available placeholders</summary>
-                  <dl>
-                    <dt><code>{{'{'}}failureId{{'}'}}</code></dt><dd>This failure's numeric id.</dd>
-                    <dt><code>{{'{'}}sourceId{{'}'}}</code></dt><dd>Source row's natural key (DB scan) or matched id.</dd>
-                    <dt><code>{{'{'}}referenceId{{'}'}}</code></dt><dd>Related row's identity (parent/FK key) — needs Reference ID Column on the scan rule.</dd>
-                    <dt><code>{{'{'}}sourceLogPath{{'}'}}</code></dt><dd>Log file/source where the error was detected.</dd>
-                    <dt><code>{{'{'}}sourceFilePath{{'}'}}</code></dt><dd>Input file path — needs Input File Extraction (FS) or File Path Column (DB).</dd>
-                    <dt><code>{{'{'}}sourceFileName{{'}'}}</code></dt><dd>Filename only, sliced from {{'{'}}sourceFilePath{{'}'}}.</dd>
-                    <dt><code>{{'{'}}jobFolder{{'}'}}</code></dt><dd>The source's scanned folder.</dd>
-                    <dt><code>{{'{'}}inputFolder{{'}'}}</code></dt><dd>The source's input folder.</dd>
-                  </dl>
-                  <span class="token-note">Unknown tokens are left as-is. Matching is case-insensitive.</span>
-                </details>
-              </div>
-            }
-            @if (!fixRuleForm.enabled && fixRuleForm.monitoredJobId === null && editingFixRule() !== null && editingFixRule()!.enabled) {
-              <div class="dup-warn span2">⚠ Disabling this default — jobs of this JobType without their own override for this error type fall back to the built-in catalogue. Overrides on other jobs are unaffected.</div>
-            }
-          </div>
-          @if (fixRuleForm.isAutoHealEligible) {
-            <div class="auto-heal-banner"><span>⚡</span><span>Auto-heal is ON — this fix executes <strong>automatically</strong> without operator approval whenever this error type is detected.</span></div>
-          }
-          @if (fixRuleSaveError(); as msg) {
-            <div class="dup-warn save-error" role="alert">⚠ Save failed: {{ msg }}</div>
-          }
-          <div class="drawer-foot">
-            <button class="btn btn-ghost" (click)="fixDrawerOpen.set(false)">Cancel</button>
-            <button class="btn btn-primary" (click)="saveFixRule()"
-                    [disabled]="savingFix() || !fixRuleForm.actionType"
-                    [title]="!fixRuleForm.actionType ? 'Select an execution type first' : ''">
-              @if (savingFix()) { <span class="spinner"></span> } {{ editingFixRule() ? 'Save Changes' : 'Add Fix Option' }}
-            </button>
-          </div>
-        </app-drawer>
+        <!-- ── Editor drawers (extracted to child components) ───────────────── -->
+        <app-scan-source-drawer [jobId]="jobId" (saved)="reload()" />
+        <app-scan-rule-drawer (saved)="reload()" />
+        <app-class-rule-drawer [job]="j" [jobTypeId]="getJobTypeId(j)" [errorTypes]="errorTypes()"
+                               (saved)="reload()" (allClassRulesRefreshed)="allClassRules.set($event)" />
+        <app-fix-option-drawer [job]="j" [jobTypeId]="getJobTypeId(j)" [errorTypes]="errorTypes()"
+                               [fixPolicies]="fixPolicies()" [effectiveClassRules]="effectiveClassRules()"
+                               (saved)="reload()" />
       } @else {
         <div class="card"><div class="empty-state"><span class="empty-icon">❓</span><p>Job not found.</p>
           <a class="btn btn-primary btn-sm" routerLink="/config/monitored-jobs">Back to Monitored Jobs</a></div></div>
@@ -997,6 +436,7 @@ export class JobConfigComponent implements OnInit {
   private svc    = inject(ConfigService);
   private route  = inject(ActivatedRoute);
   private router = inject(Router);
+  private notify = inject(NotificationService);
 
   job           = signal<MonitoredJob | null>(null);
   fixPolicies   = signal<FixPolicyRule[]>([]);
@@ -1006,126 +446,22 @@ export class JobConfigComponent implements OnInit {
   allJobs       = signal<MonitoredJob[]>([]);
   loading       = signal(true);
 
-  // Edit-job drawer (identity only — scan config lives on sources in Tier 2.5).
-  editOpen  = signal(false);
-  saving    = signal(false);
-  editError = signal<string | null>(null);
-  jobForm: UpsertJobRequest = this.blankJob();
-
-  // Scan Source drawer.
-  readonly scanTypes = SCAN_TYPES;
-  sourceDrawerOpen = signal(false);
-  savingSource     = signal(false);
-  sourceError      = signal<string | null>(null);
-  editingSourceId  = signal<number | null>(null);
-  sourceForm: UpsertScanSourceRequest = this.blankSource();
-
-  // Scan Rule drawer (config branches on the rule's owning source ScanType).
-  readonly dbCheckTypes   = DB_CHECK_TYPES;
-  readonly fileFormats    = FILE_FORMATS;
-  readonly predicateTypes = PREDICATE_TYPES;
-  readonly severities     = SEVERITIES;
-  ruleDrawerOpen    = signal(false);
-  savingRule        = signal(false);
-  ruleError         = signal<string | null>(null);
-  editingRuleSource = signal<ScanSource | null>(null);
-  editingRuleId     = signal<number | null>(null);
-  ruleForm: UpsertScanRuleRequest & { isActive: boolean } = this.blankScanRule();
-
-  // ── Classification Rule drawers ───────────────────────────────────────────
-  classDrawerOpen     = signal(false);
-  savingClass         = signal(false);
-  editingClassRule    = signal<RuleOverride | null>(null);
-  classRuleForm: UpsertJobClassificationRuleRequest = this.blankClassRule();
-  classRuleSaveError  = signal<string | null>(null);
-  classRuleConflictId = signal<number | null>(null);
-  // Link-existing drawer.
-  linkDrawerOpen   = signal(false);
-  loadingLinkRules = signal(false);
-  linkRuleSearch   = signal('');
-  filteredLinkableRules = computed(() => {
-    const linked = new Set(this.job()?.rules.map(r => r.ruleId) ?? []);
-    const q = this.linkRuleSearch().toLowerCase();
-    return this.allClassRules().filter(r =>
-      !linked.has(r.ruleId) &&
-      (!q || r.pattern.toLowerCase().includes(q) || r.errorTypeCode.toLowerCase().includes(q)));
-  });
-
-  // ── Fix Option drawer ─────────────────────────────────────────────────────
-  readonly fixCategories = FIX_CATEGORIES;
-
-  // Part 3 — soft guidance: order ActionType options with the most natural
-  // choices for the current FixCategory first, all types still available
-  // (DbFix+ApiCall can be legitimate — see CLAUDE.md decision).
-  // Exception: FixCategory=Manual → only 'Manual' shown (hard coupling).
-  orderedActionTypes = computed((): string[] => {
-    const cat = this.fixRuleFormSignal().fixCategory;
-    // No category yet, or Manual — neutral order so the operator can pick freely.
-    // (Manual is never locked here: since Fix Category is read-only/derived,
-    //  the operator escapes Manual by simply picking a different execution type.)
-    if (!cat || cat === 'Manual') return ['SqlScript', 'ApiCall', 'CopyFile', 'Script', 'StoredProcedure', 'Composite', 'Manual'];
-    const orderMap: Record<string, string[]> = {
-      'DbFix':      ['SqlScript', 'StoredProcedure', 'Composite', 'ApiCall', 'Script', 'CopyFile', 'Manual'],
-      'FileRepair': ['CopyFile', 'Script', 'Composite', 'ApiCall', 'SqlScript', 'StoredProcedure', 'Manual'],
-      'Retry':      ['ApiCall', 'Script', 'Composite', 'SqlScript', 'StoredProcedure', 'CopyFile', 'Manual'],
-    };
-    return orderMap[cat] ?? ['SqlScript', 'ApiCall', 'CopyFile', 'Script', 'StoredProcedure', 'Composite', 'Manual'];
-  });
-  fixDrawerOpen   = signal(false);
-  savingFix       = signal(false);
-  editingFixRule  = signal<FixPolicyRule | null>(null);
-  fixRuleForm: UpsertFixPolicyRuleRequest = this.blankFixRule();
-  shortcutRuleId: number | null = null;
-  /** Mirror of fixRuleForm so the warning/dup computeds re-evaluate on change. */
-  private fixRuleFormSignal = signal<UpsertFixPolicyRuleRequest>(this.blankFixRule());
-  fixRuleSaveConflict = signal<{ message: string; conflictingPolicyId: number } | null>(null);
-  fixRuleSaveError    = signal<string | null>(null);
-
-  /** Two-pronged duplicate detection — same key shape as the backend 409. */
-  fixRuleDuplicateConflict = computed<FixPolicyRule | null>(() => {
-    const form = this.fixRuleFormSignal();
-    if (!form.enabled || !form.errorTypeId || !form.jobTypeId) return null;
-    const editingId = this.editingFixRule()?.ruleId;
-    return this.fixPolicies().find(p => {
-      if (!p.enabled || p.ruleId === editingId) return false;
-      if (p.errorTypeId !== form.errorTypeId)   return false;
-      return form.monitoredJobId !== null
-        ? p.monitoredJobId === form.monitoredJobId
-        : p.monitoredJobId === null && p.jobTypeId === form.jobTypeId;
-    }) ?? null;
-  });
-
-  /** Soft config-time warning: payload references {sourceFilePath} but no scan
-   *  rule on the job captures one (no InputPathPattern / FilePathColumn). */
-  fixRuleSourcePathWarning = computed<boolean>(() => {
-    const form = this.fixRuleFormSignal();
-    const usesToken = (s: string | null | undefined) => !!s && /\{sourceFilePath\}/i.test(s);
-    const referenced = usesToken(form.actionPayload) || (form.steps ?? []).some(s => usesToken(s.actionPayload));
-    if (!referenced) return false;
-    const captures = (this.job()?.sources ?? []).flatMap(s => s.scanCheckRules)
-      .some(r => !!r.inputPathPattern?.trim() || !!r.filePathColumn?.trim());
-    return !captures;
-  });
+  // The five editor drawers were extracted to child components; the parent opens
+  // each via its viewChild ref and reloads on the child's (saved) output.
+  private editJobDrawer    = viewChild(EditJobDrawerComponent);
+  private scanSourceDrawer = viewChild(ScanSourceDrawerComponent);
+  private scanRuleDrawer   = viewChild(ScanRuleDrawerComponent);
+  private classRuleDrawer  = viewChild(ClassRuleDrawerComponent);
+  private fixOptionDrawer  = viewChild(FixOptionDrawerComponent);
 
   /** Effective classifier rules for this job: linked rules ∪ JobType-global
-   *  defaults (rules of this JobType linked to no job). Mirrors GetEffectiveRulesAsync. */
+   *  defaults (rules of this JobType linked to no job). Mirrors GetEffectiveRulesAsync.
+   *  Shared with the read-only flow view via coverage-match.util, and passed into
+   *  the fix-option drawer (its reachability/shortcut logic). */
   effectiveClassRules = computed<{ ruleId: number; pattern: string; errorTypeCode: string }[]>(() => {
     const job = this.job();
     if (!job) return [];
-    // Shared with the read-only flow view via coverage-match.util — single source.
     return computeEffectiveClassRules(job, this.allJobs(), this.allClassRules(), this.getJobTypeId(job));
-  });
-
-  selectedErrorTypeCode = computed<string | null>(() => {
-    const id = this.fixRuleFormSignal().errorTypeId;
-    if (!id) return null;
-    return this.errorTypes().find(e => e.errorTypeId === id)?.code ?? null;
-  });
-
-  classRulesForSelectedErrorType = computed(() => {
-    const code = this.selectedErrorTypeCode();
-    if (!code) return [];
-    return this.effectiveClassRules().filter(r => r.errorTypeCode === code);
   });
 
   /** JobType-global rules that ALSO classify this job (active, same JobType,
@@ -1141,14 +477,9 @@ export class JobConfigComponent implements OnInit {
       .sort((a, b) => a.priority - b.priority);
   });
 
-  /** Subset of jobTypeGlobalRules whose pattern overlaps with at least one
-   *  scan rule on this job — irrelevant defaults are hidden by default.
-   *
-   *  Match logic: for each default class rule (pattern P), it is relevant if any
-   *  scan rule's representative keyword overlaps P bidirectionally after stripping
-   *  wildcards.  SqlQuery rules use their TargetField as the keyword (same as
-   *  ColumnRange) — the error message format is "[TargetField] = value", so only
-   *  class rules whose literal overlaps the TargetField survive. */
+  /** Subset of jobTypeGlobalRules whose pattern overlaps with at least one scan
+   *  rule on this job — irrelevant defaults are hidden by default. Both sides are
+   *  compared after stripping wildcards; Field=Value patterns require exact match. */
   relevantDefaultClassRules = computed<ClassificationRule[]>(() => {
     const allScanRules = (this.job()?.sources ?? []).flatMap(s => s.scanCheckRules);
     return this.jobTypeGlobalRules().filter(cr => {
@@ -1157,10 +488,7 @@ export class JobConfigComponent implements OnInit {
       return allScanRules.some(rule => {
         const keyword = this.classPatternForScanRule(rule).toLowerCase();
         if (!keyword) return false;
-        // Both sides are Field=Value patterns (ValueEquals-style): require exact
-        // match to avoid "FileStatusCode=2" showing as relevant for "FileStatusCode=22".
         if (keyword.includes('=') && crLiteral.includes('=')) return keyword === crLiteral;
-        // Otherwise (broad keyword vs pattern): bidirectional substring.
         return keyword.includes(crLiteral) || crLiteral.includes(keyword);
       });
     });
@@ -1172,7 +500,9 @@ export class JobConfigComponent implements OnInit {
     this.showAllDefaults() ? this.jobTypeGlobalRules() : this.relevantDefaultClassRules()
   );
 
-  private jobId = 0;
+  // Public (not private) so the template can bind it to child drawers, e.g.
+  // <app-edit-job-drawer [jobId]="jobId">.
+  jobId = 0;
 
   ngOnInit() {
     this.jobId = Number(this.route.snapshot.paramMap.get('id'));
@@ -1186,8 +516,9 @@ export class JobConfigComponent implements OnInit {
     this.reload(true);
   }
 
-  /** (Re)load the job + its fix policies. Called on init and after any edit. */
-  private reload(initial = false) {
+  /** (Re)load the job + its fix policies. Called on init, after any edit, and
+   *  from child drawers' (saved) outputs — so it can't be private. */
+  reload(initial = false) {
     if (initial) this.loading.set(true);
     this.svc.getJob(this.jobId).subscribe({
       next: j => {
@@ -1199,159 +530,32 @@ export class JobConfigComponent implements OnInit {
           const jobTypeId = types.find(t => t.name === j.jobTypeName)?.jobTypeId;
           if (jobTypeId) this.svc.getFixPolicyRules(jobTypeId, j.monitoredJobId)
             .subscribe(p => this.fixPolicies.set(p));
-          if (initial) this.applyFixDeepLink(j);
+          if (initial) this.applyFixDeepLink();
         });
       },
-      error: () => this.loading.set(false),
+      error: () => { this.loading.set(false); this.notify.error('Could not load this job\'s configuration.'); },
     });
   }
 
-  /** Case-B deep-link from /unconfigured: ?errorTypeId=<id> on this screen pops
-   *  a pre-filled new-fix drawer (per-job scope + that ErrorType). Param is
-   *  cleared afterward so a refresh/back doesn't re-trigger. */
-  private applyFixDeepLink(job: MonitoredJob) {
+  /** Case-B deep-link from /unconfigured: ?errorTypeId=<id> pops a pre-filled
+   *  new-fix drawer (per-job scope + that ErrorType). Deferred one tick so the
+   *  drawer child (inside @if (job())) is rendered and its viewChild ref resolved.
+   *  Param cleared afterward so a refresh/back doesn't re-trigger. */
+  private applyFixDeepLink() {
     const etId = Number(this.route.snapshot.queryParamMap.get('errorTypeId') ?? 0);
     if (!etId) return;
-    this.openFixRuleDrawer(null);
-    this.fixRuleForm.errorTypeId = etId;
-    this.syncFixRuleSignal();
+    setTimeout(() => this.fixOptionDrawer()?.openFor(null, { errorTypeId: etId }));
     this.router.navigate([], { relativeTo: this.route, queryParams: {}, replaceUrl: true });
   }
 
-  openEditJob(j: MonitoredJob) {
-    this.editError.set(null);
-    const jt = this.jobTypes().find(t => t.name === j.jobTypeName);
-    this.jobForm = {
-      name: j.name, displayName: j.displayName, jobTypeId: jt?.jobTypeId ?? 0,
-      pollingIntervalSeconds: j.pollingIntervalSeconds, isActive: j.isActive,
-      description: j.description,
-    };
-    this.editOpen.set(true);
-  }
+  openEditJob(j: MonitoredJob) { this.editJobDrawer()?.open(j); }
 
-  saveJobEdit() {
-    if (!this.jobForm.name || !this.jobForm.jobTypeId) {
-      this.editError.set('Name and Job Type are required.');
-      return;
-    }
-    this.saving.set(true);
-    this.editError.set(null);
-    this.svc.updateJob(this.jobId, this.jobForm).subscribe({
-      next: () => { this.editOpen.set(false); this.saving.set(false); this.reload(); },
-      error: e => { this.editError.set(e?.error?.message ?? 'Save failed.'); this.saving.set(false); },
-    });
-  }
-
-  private blankJob(): UpsertJobRequest {
-    return { name: '', displayName: null, jobTypeId: 0,
-             pollingIntervalSeconds: 300, isActive: true, description: null };
-  }
-
-  // ── Scan Source CRUD ──────────────────────────────────────────────────────
-  /** Soft, non-blocking hint for a SqlQuery rule whose query has no row filter:
-   *  no WHERE, no HAVING, and not an EXEC (stored procs filter internally). Such a
-   *  query flags every returned row as a failure — bounded (500-row cap) but
-   *  usually a mistake. Read path, so warn-not-block; no server-side check. */
-  sqlQueryNeedsWhereWarning(): boolean {
-    const q = this.ruleForm.sourceTable ?? '';
-    if (!q.trim()) return false;              // empty → handled by required validation
-    if (/^\s*EXEC\b/i.test(q)) return false;  // stored proc — filtering lives inside it
-    return !/\bWHERE\b/i.test(q) && !/\bHAVING\b/i.test(q);
-  }
-
-  isFileBased(scanTypeId: number): boolean { return scanTypeId === 1 || scanTypeId === 4; }
-  scanTypeName(id: number): string { return this.scanTypes.find(t => t.id === id)?.name ?? String(id); }
-
-  openSourceDrawer(s: ScanSource | null) {
-    this.sourceError.set(null);
-    this.editingSourceId.set(s?.scanSourceId ?? null);
-    this.sourceForm = s
-      ? { name: s.name, scanTypeId: s.scanTypeId, logFolder: s.logFolder, searchPatterns: s.searchPatterns,
-          inputFolder: s.inputFolder, includeSubfolders: s.includeSubfolders,
-          connectionName: s.connectionName, logSourceUrl: s.logSourceUrl, isActive: s.isActive }
-      : this.blankSource();
-    this.sourceDrawerOpen.set(true);
-  }
-
-  saveSource() {
-    if (!this.sourceForm.name?.trim()) { this.sourceError.set('Name is required.'); return; }
-    this.savingSource.set(true);
-    this.sourceError.set(null);
-    const id = this.editingSourceId();
-    const req$: Observable<unknown> = id
-      ? this.svc.updateScanSource(id, this.sourceForm)
-      : this.svc.createScanSource(this.jobId, this.sourceForm);
-    req$.subscribe({
-      next: () => { this.sourceDrawerOpen.set(false); this.savingSource.set(false); this.reload(); },
-      // 400 from the validation matrix (SourceFolderConflict, LogFolderRequired, …)
-      // carries { error, message } — surface the message in the drawer footer.
-      error: e => { this.sourceError.set(e?.error?.message ?? 'Save failed.'); this.savingSource.set(false); },
-    });
-  }
+  // ── Scan Source ───────────────────────────────────────────────────────────
+  openSourceDrawer(s: ScanSource | null) { this.scanSourceDrawer()?.open(s); }
 
   deleteSource(s: ScanSource) {
     if (!confirm(`Delete source "${s.name}"? Its scan rules will be deactivated.`)) return;
     this.svc.deleteScanSource(s.scanSourceId).subscribe({ next: () => this.reload() });
-  }
-
-  private blankSource(): UpsertScanSourceRequest {
-    return { name: '', scanTypeId: 1, logFolder: null, searchPatterns: null, inputFolder: null,
-             includeSubfolders: false, connectionName: null, logSourceUrl: null, isActive: true };
-  }
-
-  // ── Scan Rule CRUD (per source) ───────────────────────────────────────────
-  openRuleDrawer(source: ScanSource, rule: ScanCheckRule | null) {
-    this.ruleError.set(null);
-    this.editingRuleSource.set(source);
-    this.editingRuleId.set(rule?.checkRuleId ?? null);
-    this.ruleForm = rule ? {
-      checkType: rule.checkType, sourceTable: rule.sourceTable, targetField: rule.targetField,
-      minValue: rule.minValue, maxValue: rule.maxValue, expectedValue: rule.expectedValue,
-      watermarkColumn: rule.watermarkColumn, sourceIdColumn: rule.sourceIdColumn,
-      referenceIdColumn: rule.referenceIdColumn,
-      filePathColumn: rule.filePathColumn, inputPathPattern: rule.inputPathPattern,
-      extractorType: rule.extractorType, extractorLocator: rule.extractorLocator,
-      identifierLocator: rule.identifierLocator, extractorPredicateType: rule.extractorPredicateType,
-      extractorPredicateValue: rule.extractorPredicateValue,
-      severity: rule.severity, description: rule.description, isActive: true,
-    } : this.blankScanRule(source.scanTypeId);
-    this.ruleDrawerOpen.set(true);
-  }
-
-  saveRule() {
-    if (!this.ruleForm.targetField?.trim()) { this.ruleError.set('Target field / pattern is required.'); return; }
-    this.savingRule.set(true);
-    this.ruleError.set(null);
-    const ruleId   = this.editingRuleId();
-    const sourceId = this.editingRuleSource()!.scanSourceId;
-    const req$: Observable<unknown> = ruleId
-      ? this.svc.updateScanRule(ruleId, this.ruleForm)
-      : this.svc.createScanRuleForSource(sourceId, this.ruleForm);
-    req$.subscribe({
-      // 400 FileContent validation (ExtractorTypeRequired / PredicateIncomplete /
-      // PredicateRequiresLocator) carries { error, message } — surface the message.
-      next: () => { this.ruleDrawerOpen.set(false); this.savingRule.set(false); this.reload(); },
-      error: e => { this.ruleError.set(e?.error?.message ?? 'Save failed. Check the rule fields and try again.'); this.savingRule.set(false); },
-    });
-  }
-
-  deleteRule(rule: ScanCheckRule) {
-    if (!confirm(`Delete scan rule "${rule.targetField}"?`)) return;
-    this.svc.deleteScanRule(rule.checkRuleId).subscribe({ next: () => this.reload() });
-  }
-
-  private blankScanRule(scanTypeId = 2): UpsertScanRuleRequest & { isActive: boolean } {
-    const checkType = scanTypeId === 1 ? 'ErrorKeyword'
-                    : scanTypeId === 4 ? 'FileContent'
-                    : 'ValueEquals';
-    return { checkType, sourceTable: null, targetField: '', minValue: null,
-             maxValue: null, expectedValue: null, watermarkColumn: null, sourceIdColumn: null,
-             referenceIdColumn: null,
-             filePathColumn: null, inputPathPattern: null,
-             extractorType: scanTypeId === 4 ? 'Xml' : null,
-             extractorLocator: null, identifierLocator: null,
-             extractorPredicateType: null, extractorPredicateValue: null,
-             severity: 'Medium', description: null, isActive: true };
   }
 
   scanIcon(scanTypeId: number): string {
@@ -1363,6 +567,14 @@ export class JobConfigComponent implements OnInit {
     if (s.connectionName) return '🔌 ' + s.connectionName;
     if (s.logSourceUrl)   return '🌐 ' + s.logSourceUrl;
     return '';
+  }
+
+  // ── Scan Rule ─────────────────────────────────────────────────────────────
+  openRuleDrawer(source: ScanSource, rule: ScanCheckRule | null) { this.scanRuleDrawer()?.open(source, rule); }
+
+  deleteRule(rule: ScanCheckRule) {
+    if (!confirm(`Delete scan rule "${rule.targetField}"?`)) return;
+    this.svc.deleteScanRule(rule.checkRuleId).subscribe({ next: () => this.reload() });
   }
 
   ruleDetail(r: { checkType: string; expectedValue: string | null; minValue: number | null; maxValue: number | null; extractorLocator: string | null; extractorPredicateType: string | null; extractorPredicateValue: string | null }): string {
@@ -1380,75 +592,13 @@ export class JobConfigComponent implements OnInit {
     return this.jobTypes().find(t => t.name === job.jobTypeName)?.jobTypeId ?? 0;
   }
 
-  // ── Classification Rule CRUD ──────────────────────────────────────────────
+  // ── Classification Rule ───────────────────────────────────────────────────
   openClassDrawer(rule: RuleOverride | null) {
-    this.editingClassRule.set(rule);
-    this.classRuleSaveError.set(null);
-    this.classRuleConflictId.set(null);
-    if (rule) {
-      const et = this.errorTypes().find(e => e.code === rule.errorTypeCode);
-      this.classRuleForm = { errorTypeId: et?.errorTypeId ?? 0, pattern: rule.pattern,
-                             confidence: rule.confidence, priority: rule.priority, isActive: true };
-    } else {
-      this.classRuleForm = this.blankClassRule();
-    }
-    this.classDrawerOpen.set(true);
+    if (rule) this.classRuleDrawer()?.openEdit(rule);
+    else      this.classRuleDrawer()?.openNew();
   }
 
-  saveClassRule() {
-    if (!this.classRuleForm.pattern?.trim() || !this.classRuleForm.errorTypeId) return;
-    this.savingClass.set(true);
-    this.classRuleSaveError.set(null);
-    this.classRuleConflictId.set(null);
-    const job = this.job()!;
-    const ruleId = this.editingClassRule()?.ruleId;
-    const req$: Observable<unknown> = ruleId
-      ? this.svc.updateClassificationRule(ruleId, {
-          jobTypeId: this.getJobTypeId(job), errorTypeId: this.classRuleForm.errorTypeId,
-          pattern: this.classRuleForm.pattern, confidence: this.classRuleForm.confidence,
-          priority: this.classRuleForm.priority, isActive: this.classRuleForm.isActive,
-        } as UpsertClassificationRuleRequest)
-      : this.svc.createJobClassificationRule(job.monitoredJobId, this.classRuleForm);
-    req$.subscribe({
-      next: () => { this.classDrawerOpen.set(false); this.savingClass.set(false); this.reload(); },
-      error: (err: any) => {
-        this.savingClass.set(false);
-        const body = err?.error;
-        if (err?.status === 409 && body?.error === 'DuplicateClassificationRule') {
-          this.classRuleConflictId.set(body.conflictingRuleId ?? null);
-          this.classRuleSaveError.set(body.message);
-        } else {
-          this.classRuleSaveError.set(body?.message || 'Save failed. Check the server logs.');
-        }
-      },
-    });
-  }
-
-  linkConflictingClassRule() {
-    const ruleId      = this.classRuleConflictId();
-    const oldRule     = this.editingClassRule(); // set when editing, null when creating
-    const jobId       = this.job()!.monitoredJobId;
-    if (!ruleId) return;
-    this.savingClass.set(true);
-    this.svc.linkJobClassificationRule(jobId, ruleId).subscribe({
-      next: () => {
-        // Edit mode: unlink the rule that was being edited so the job swaps
-        // to the existing rule instead of holding both.
-        if (oldRule && oldRule.ruleId !== ruleId) {
-          this.svc.deleteJobClassificationRule(jobId, oldRule.ruleId).subscribe({
-            next:  () => { this.classDrawerOpen.set(false); this.savingClass.set(false); this.reload(); },
-            error: () => { this.classDrawerOpen.set(false); this.savingClass.set(false); this.reload(); },
-          });
-        } else {
-          this.classDrawerOpen.set(false); this.savingClass.set(false); this.reload();
-        }
-      },
-      error: (err: any) => {
-        this.savingClass.set(false);
-        this.classRuleSaveError.set(err?.error?.message || 'Link failed.');
-      },
-    });
-  }
+  openLinkDrawer() { this.classRuleDrawer()?.openLink(); }
 
   deleteClassRule(rule: RuleOverride) {
     if (!confirm(`Remove pattern "${rule.pattern}" from this job?`)) return;
@@ -1456,84 +606,8 @@ export class JobConfigComponent implements OnInit {
       .subscribe({ next: () => this.reload() });
   }
 
-  openLinkDrawer() {
-    this.linkRuleSearch.set('');
-    this.loadingLinkRules.set(true);
-    this.linkDrawerOpen.set(true);
-    this.svc.getAllClassificationRules().subscribe({
-      next: r => { this.allClassRules.set(r); this.loadingLinkRules.set(false); },
-      error: () => this.loadingLinkRules.set(false),
-    });
-  }
-
-  confirmLinkRule(rule: ClassificationRule) {
-    this.savingClass.set(true);
-    this.svc.linkJobClassificationRule(this.job()!.monitoredJobId, rule.ruleId).subscribe({
-      next: () => { this.linkDrawerOpen.set(false); this.savingClass.set(false); this.reload(); },
-      error: () => this.savingClass.set(false),
-    });
-  }
-
-  private blankClassRule(): UpsertJobClassificationRuleRequest {
-    return { errorTypeId: 0, pattern: '', confidence: 0.9, priority: 1, isActive: true };
-  }
-
-  // ── Fix Option CRUD ───────────────────────────────────────────────────────
-  openFixRuleDrawer(rule: FixPolicyRule | null) {
-    const job = this.job()!;
-    this.editingFixRule.set(rule);
-    this.shortcutRuleId = null;
-    this.fixRuleSaveConflict.set(null);
-    this.fixRuleSaveError.set(null);
-    if (rule) {
-      // Normalize legacy mismatches: only Manual↔Manual is a valid pair.
-      // If an existing rule has fixCategory=Manual but actionType≠Manual (or vice versa),
-      // enforce the coupling silently so the operator doesn't see an illegal state.
-      let fixCategory = rule.fixCategory;
-      let actionType  = rule.actionType;
-      if (fixCategory === 'Manual' && actionType !== 'Manual') actionType  = 'Manual';
-      if (actionType  === 'Manual' && fixCategory !== 'Manual') fixCategory = 'Manual';
-      this.fixRuleForm = {
-        jobTypeId: rule.jobTypeId, errorTypeId: rule.errorTypeId, monitoredJobId: rule.monitoredJobId,
-        actionToApply: rule.actionToApply, fixCategory, actionType,
-        actionPayload: rule.actionPayload, isAutoHealEligible: rule.isAutoHealEligible, enabled: rule.enabled,
-        steps: (rule.steps ?? []).map(s => ({ stepOrder: s.stepOrder, actionType: s.actionType,
-                                              actionPayload: s.actionPayload, description: s.description })),
-      };
-    } else {
-      // New rule defaults to THIS job (per-job override) — the common case.
-      this.fixRuleForm = { ...this.blankFixRule(), jobTypeId: this.getJobTypeId(job), monitoredJobId: job.monitoredJobId };
-    }
-    this.fixRuleFormSignal.set({ ...this.fixRuleForm });
-    this.fixDrawerOpen.set(true);
-  }
-
-  saveFixRule() {
-    if (!this.fixRuleForm.actionType || !this.fixRuleForm.actionToApply || !this.fixRuleForm.errorTypeId) return;
-    this.savingFix.set(true);
-    this.fixRuleSaveConflict.set(null);
-    this.fixRuleSaveError.set(null);
-    const id = this.editingFixRule()?.ruleId;
-    const req$: Observable<unknown> = id
-      ? this.svc.updateFixPolicyRule(id, this.fixRuleForm)
-      : this.svc.createFixPolicyRule(this.fixRuleForm);
-    req$.subscribe({
-      next: () => { this.fixDrawerOpen.set(false); this.savingFix.set(false); this.reload(); },
-      error: (err: { status?: number; error?: { error?: string; message?: string; conflictingPolicyId?: number } | string; message?: string }) => {
-        const body = err?.error;
-        if (err?.status === 409 && typeof body === 'object' && body?.error === 'DuplicateFixPolicy' && body?.conflictingPolicyId) {
-          this.fixRuleSaveConflict.set({ message: body.message ?? 'A duplicate active policy exists.', conflictingPolicyId: body.conflictingPolicyId });
-        } else if (err?.status === 400 && typeof body === 'object' && body?.message) {
-          this.fixRuleSaveError.set(body.message);
-        } else if (err?.status === 400 && typeof body === 'string') {
-          this.fixRuleSaveError.set(body);
-        } else {
-          this.fixRuleSaveError.set(err?.message || 'Save failed. Check the server logs and try again.');
-        }
-        this.savingFix.set(false);
-      },
-    });
-  }
+  // ── Fix Option ────────────────────────────────────────────────────────────
+  openFixRuleDrawer(rule: FixPolicyRule | null) { this.fixOptionDrawer()?.openFor(rule); }
 
   deleteFixRule(rule: FixPolicyRule) {
     if (!confirm(`Delete fix option for "${rule.errorTypeCode}"?`)) return;
@@ -1550,15 +624,6 @@ export class JobConfigComponent implements OnInit {
   // ── Coverage gap indicators ───────────────────────────────────────────────
   // Quiet config-time hints — a gap may be intentional (operator plans the
   // downstream piece later). Inform, don't block or error-style.
-
-  /** ⚠ on scan rule rows: fires when there are ZERO effective class rules for this
-   *  job. That's the reliable proxy — pattern matching against future log lines
-   *  isn't computable at config time. Never shown for SqlQuery (arbitrary result
-   *  shape whose output can't be predicted). */
-  onPredicateTypeChange(next: string | null): void {
-    this.ruleForm.extractorPredicateType = next;
-    if (!next) this.ruleForm.extractorPredicateValue = null;
-  }
 
   scanRuleNeedsClassification(rule: ScanCheckRule): boolean {
     // Delegates to the shared coverage matcher so this marker and the flow view
@@ -1577,62 +642,40 @@ export class JobConfigComponent implements OnInit {
     return !this.fixPolicies().some(p => p.errorTypeCode === rule.errorTypeCode && p.enabled);
   }
 
-  /** ⚠ on fix policy rows: no effective class rule produces this errorTypeCode,
-   *  so the fix won't trigger automatically (mirrors the reachability warning
-   *  already built into the fix drawer). */
+  /** ⚠ on fix policy rows: no effective class rule produces this errorTypeCode, so
+   *  the fix won't trigger automatically. */
   fixHasNoClassCoverage(policy: FixPolicyRule): boolean {
     return !this.effectiveClassRules().some(r => r.errorTypeCode === policy.errorTypeCode);
   }
 
-  // ── Gap-marker click-throughs ─────────────────────────────────────────────
+  // ── Gap-marker click-throughs (open the relevant extracted drawer, pre-filled) ──
 
-  /** Scan-rule ⚠ click: open the classification drawer pre-filled with a
-   *  pattern derived from what the rule's ErrorMessage will look like.
-   *  - ErrorKeyword → pattern is the keyword (strip *)
-   *  - ValueEquals / ColumnRange → pattern like "TargetField=ExpectedValue"
-   *  - FileContent → pattern is the filename keyword (strip *)
-   *  Leaves ErrorType blank so the operator picks one explicitly. */
+  /** Scan-rule ⚠ click: open the classification drawer pre-filled with a pattern
+   *  derived from what the rule's ErrorMessage will look like. */
   openClassDrawerForScanRule(rule: ScanCheckRule): void {
-    const pattern = this.classPatternForScanRule(rule);
-    this.editingClassRule.set(null);
-    this.classRuleForm = { ...this.blankClassRule(), pattern };
-    this.classDrawerOpen.set(true);
+    this.classRuleDrawer()?.openNew({ pattern: this.classPatternForScanRule(rule) });
   }
 
   private classPatternForScanRule(rule: ScanCheckRule): string {
     return scanRulePredictedPattern(rule);   // shared with the flow view
   }
 
-  /** Classification-rule ⚠ click: open the fix drawer pre-filled with the
-   *  error type that has no fix option, scoped to this job (override). */
+  /** Classification-rule ⚠ click: open the fix drawer pre-filled with the error
+   *  type that has no fix option, scoped to this job (override). */
   openFixRuleDrawerForClassRule(rule: RuleOverride): void {
-    const job = this.job()!;
-    const et  = this.errorTypes().find(e => e.code === rule.errorTypeCode);
-    this.openFixRuleDrawer(null);                 // resets form to per-job blank
-    if (et) {
-      this.fixRuleForm.errorTypeId = et.errorTypeId;
-      this.syncFixRuleSignal();
-    }
+    const et = this.errorTypes().find(e => e.code === rule.errorTypeCode);
+    this.fixOptionDrawer()?.openFor(null, et ? { errorTypeId: et.errorTypeId } : undefined);
   }
 
-  /** Fix-options ⚠ click: open the classification drawer pre-filled with the
-   *  error type that has no class rule coverage — operator adds the upstream
-   *  classification rule to complete the pipeline. */
+  /** Fix-options ⚠ click: open the classification drawer pre-filled with the error
+   *  type that has no class rule coverage. */
   openClassDrawerForFixGap(policy: FixPolicyRule): void {
     const et = this.errorTypes().find(e => e.code === policy.errorTypeCode);
-    this.editingClassRule.set(null);
-    this.classRuleForm = {
-      ...this.blankClassRule(),
-      errorTypeId: et?.errorTypeId ?? 0,
-      pattern: '',
-    };
-    this.classDrawerOpen.set(true);
+    this.classRuleDrawer()?.openNew({ errorTypeId: et?.errorTypeId ?? 0 });
   }
 
   // ── Per-source collapse (only for jobs with 2+ sources) ──────────────────
-  // Default: all sources expanded (show the full picture on load).
-  // Single-source jobs: no collapse affordance at all.
-
+  // Default: all sources expanded. Single-source jobs: no collapse affordance.
   private _collapsedSources = signal<Set<number>>(new Set<number>());
 
   isSourceCollapsed(sourceId: number): boolean {
@@ -1643,162 +686,5 @@ export class JobConfigComponent implements OnInit {
     const next = new Set(this._collapsedSources());
     next.has(sourceId) ? next.delete(sourceId) : next.add(sourceId);
     this._collapsedSources.set(next);
-  }
-
-  // Hard coupling: Manual ↔ Manual enforced both directions.
-  // No-default: category derives from execution type on first pick; unlocking
-  // Manual resets actionType to '' (operator must re-choose execution type
-  // explicitly — safer than auto-picking when any default could be wrong).
-  setFixRuleCategory(next: string) {
-    const prevActionType = this.fixRuleForm.actionType;
-    this.fixRuleForm.fixCategory = next;
-    if (next === 'Manual') {
-      this.fixRuleForm.actionType    = 'Manual';
-      this.fixRuleForm.actionPayload = null;
-      this.fixRuleForm.steps         = [];
-    } else if (prevActionType === 'Manual') {
-      // Unlocking — clear actionType so the operator explicitly re-chooses.
-      this.fixRuleForm.actionType = '';
-    }
-    this.fixRuleSaveError.set(null);
-    this.syncFixRuleSignal();
-  }
-
-  setFixRuleActionType(next: string) {
-    const prev = this.fixRuleForm.actionType;
-    this.fixRuleForm.actionType = next;
-    if (next === 'Manual') {
-      this.fixRuleForm.fixCategory   = 'Manual';
-      this.fixRuleForm.actionPayload = null;
-      this.fixRuleForm.steps         = [];
-    } else {
-      if (next === 'Composite') {
-        // Composite uses steps, not a header payload — clear it.
-        this.fixRuleForm.actionPayload = null;
-      } else {
-        // Any execution-type change clears the payload — Script payloads don't
-        // belong in SqlScript fields and vice versa.
-        if (next !== prev) this.fixRuleForm.actionPayload = null;
-      }
-      if (prev === 'Composite') {
-        this.fixRuleForm.steps = [];
-      }
-      // Always re-derive the category — Fix Category is read-only so it must
-      // always reflect the current execution type, not a stale prior selection.
-      this.fixRuleForm.fixCategory = this.defaultCategoryFor(next);
-    }
-    this.fixRuleSaveError.set(null);
-    this.syncFixRuleSignal();
-  }
-
-  // Reverse of the order-map above: execution type → most natural fix category.
-  private defaultCategoryFor(actionType: string): string {
-    const map: Record<string, string> = {
-      'SqlScript': 'DbFix', 'StoredProcedure': 'DbFix',
-      'CopyFile':  'FileRepair',
-      'Manual':    'Manual',
-      'ApiCall': 'Retry', 'Script': 'Retry', 'Composite': 'Retry',
-    };
-    return map[actionType] ?? 'Retry';
-  }
-
-  syncFixRuleSignal() { this.fixRuleFormSignal.set({ ...this.fixRuleForm }); }
-
-  pickClassificationRuleById(ruleId: number | null) {
-    if (ruleId == null) return;
-    const cr = this.effectiveClassRules().find(r => r.ruleId === ruleId);
-    const et = cr ? this.errorTypes().find(e => e.code === cr.errorTypeCode) : null;
-    if (et) { this.shortcutRuleId = ruleId; this.fixRuleForm.errorTypeId = et.errorTypeId; this.syncFixRuleSignal(); }
-  }
-
-  setFixRuleScope(monitoredJobId: number | null) {
-    this.fixRuleForm.monitoredJobId = monitoredJobId;
-    this.fixRuleSaveConflict.set(null);
-    this.syncFixRuleSignal();
-  }
-
-  openConflictingPolicy(conflict: FixPolicyRule) { this.openFixRuleDrawer(conflict); }
-  openConflictingPolicyById(id: number) {
-    const rule = this.fixPolicies().find(p => p.ruleId === id);
-    if (rule) this.openFixRuleDrawer(rule);
-  }
-
-  addStep() {
-    const steps = this.fixRuleForm.steps ?? [];
-    steps.push({ stepOrder: steps.length + 1, actionType: 'SqlScript', actionPayload: '', description: null });
-    this.fixRuleForm.steps = steps;
-    this.syncFixRuleSignal();
-  }
-  removeStep(index: number) {
-    const steps = this.fixRuleForm.steps ?? [];
-    steps.splice(index, 1);
-    steps.forEach((s, i) => s.stepOrder = i + 1);
-    this.fixRuleForm.steps = steps;
-    this.syncFixRuleSignal();
-  }
-  moveStep(index: number, delta: number) {
-    const steps = this.fixRuleForm.steps ?? [];
-    const target = index + delta;
-    if (target < 0 || target >= steps.length) return;
-    [steps[index], steps[target]] = [steps[target], steps[index]];
-    steps.forEach((s, i) => s.stepOrder = i + 1);
-    this.fixRuleForm.steps = steps;
-    this.syncFixRuleSignal();
-  }
-  payloadPlaceholderFor(actionType: string): string {
-    switch (actionType) {
-      case 'SqlScript':       return 'UPDATE dbo.Files SET FileStatusCode = 0 WHERE Id = {sourceId}';
-      case 'Script':          return 'powershell.exe C:\\scripts\\fix.ps1 {failureId}';
-      case 'ApiCall':         return 'http://jobs.internal/api/jobs/{failureId}/retry';
-      case 'StoredProcedure': return 'dbo.sp_RetryJob  or  ConnName|dbo.sp_RetryJob';
-      case 'CopyFile':        return '{sourceFilePath}|{inputFolder}\\reprocess\\{sourceFileName}';
-      default:                return 'payload';
-    }
-  }
-
-  private blankFixRule(): UpsertFixPolicyRuleRequest {
-    return { jobTypeId: 0, errorTypeId: 0, monitoredJobId: null, actionToApply: '', fixCategory: '',
-             actionType: '', actionPayload: null, isAutoHealEligible: false, enabled: true, steps: [] };
-  }
-
-  // ── SqlScript "scope to failing row" shortcut ─────────────────────────────
-  // The server-side write-guard rejects a SqlScript fix unless it references
-  // {sourceId} in its WHERE. This shortcut appends a starter scope clause so the
-  // operator doesn't have to hand-type it. Shown only when missing (and not an
-  // EXEC — those scope via a parameter). Operator edits the key column name.
-  sqlFixNeedsScopeShortcut(payload: string | null | undefined): boolean {
-    const q = (payload ?? '').trim();
-    if (!q) return false;
-    if (/^\s*EXEC\b/i.test(q)) return false;   // EXEC: add {sourceId} as a parameter by hand
-    return !/\{sourceId\}/i.test(q);            // already scoped → hide
-  }
-
-  /** WHERE when the payload has none yet, else AND — so the snippet appends cleanly. */
-  scopeClauseFor(payload: string | null | undefined): string {
-    return /\bWHERE\b/i.test(payload ?? '') ? 'AND' : 'WHERE';
-  }
-
-  /** Placeholder key column for the scope clause. Deliberately NOT derived from
-   *  the scan rule's SourceIdColumn — a fix may update a DIFFERENT table where
-   *  {sourceId} is an FK under another name, so any guess would be misleading.
-   *  An obvious bracketed placeholder forces the operator to fill in the real
-   *  target column; the guard only requires {sourceId} in the WHERE, not a
-   *  specific column, so this still saves and fails safe (ManualRequired) if
-   *  left unedited. */
-  readonly fixScopeColumn = '[KeyColumn]';
-
-  private appendSourceIdScope(payload: string | null | undefined): string {
-    const base = (payload ?? '').replace(/;\s*$/, '').trimEnd();   // drop a trailing ';'
-    return `${base} ${this.scopeClauseFor(base)} ${this.fixScopeColumn} = '{sourceId}'`;
-  }
-
-  scopeFixPayloadToSourceId() {
-    this.fixRuleForm.actionPayload = this.appendSourceIdScope(this.fixRuleForm.actionPayload);
-    this.syncFixRuleSignal();
-  }
-
-  scopeStepToSourceId(step: { actionPayload: string }) {
-    step.actionPayload = this.appendSourceIdScope(step.actionPayload);
-    this.syncFixRuleSignal();
   }
 }

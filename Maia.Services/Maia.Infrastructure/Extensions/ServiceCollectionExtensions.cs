@@ -86,7 +86,6 @@ public static class ServiceCollectionExtensions
 
         // ── Parsing & I/O ────────────────────────────────────────────────────
         services.AddScoped<ILogParser, SimpleLogParser>();
-        services.AddScoped<ILogReader, FileLogReader>();
 
         // ── File-content extractors (one per FileFormat, resolved via
         //    IEnumerable<IFileContentExtractor>; FileContentScanStrategy dispatches

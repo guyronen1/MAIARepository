@@ -2,6 +2,7 @@ import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { ConfigService, JobType, UpsertJobRequest } from '../../../core/services/config.service';
+import { NotificationService } from '../../../core/services/notification.service';
 import { MonitoredJob } from '../../../core/models';
 import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
 import { DrawerComponent } from '../../../shared/drawer/drawer.component';
@@ -183,6 +184,7 @@ import { JobFlowComponent } from './job-flow.component';
 })
 export class MonitoredJobsComponent implements OnInit {
   private svc    = inject(ConfigService);
+  private notify = inject(NotificationService);
   private router = inject(Router);
   private auth   = inject(AuthService);
 
@@ -209,7 +211,7 @@ export class MonitoredJobsComponent implements OnInit {
     this.loading.set(true);
     this.svc.getAllJobs().subscribe({
       next: j => { this.jobs.set(j); this.loading.set(false); },
-      error: () => this.loading.set(false),
+      error: () => { this.loading.set(false); this.notify.error('Could not load monitored jobs.'); },
     });
     this.svc.getJobTypes().subscribe({ next: t => this.jobTypes.set(t) });
   }

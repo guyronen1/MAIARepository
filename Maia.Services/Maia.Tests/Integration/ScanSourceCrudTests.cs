@@ -15,16 +15,18 @@ using Xunit;
 namespace Maia.Tests.Integration;
 
 /// <summary>
-/// Pins the Tier 2.5 phase-(d1) ScanSource CRUD + validation matrix on
-/// ConfigController: per-type config requirements, name rules, ScanType
-/// immutability, the SourceFolderConflict watermark-grain guard, and the
-/// soft-delete cascade to child rules. Controller exercised directly over an
-/// in-memory MaiaDbContext (ScanTypes 1-4 come from seed HasData).
+/// Pins the Tier 2.5 phase-(d1) ScanSource CRUD + validation matrix on the config
+/// controllers (post-decomposition: ScanSource ops on ScanSourcesConfigController,
+/// source-scoped rule create on ScanRulesConfigController): per-type config
+/// requirements, name rules, ScanType immutability, the SourceFolderConflict
+/// watermark-grain guard, and the soft-delete cascade to child rules. Controllers
+/// exercised directly over an in-memory MaiaDbContext (ScanTypes 1-4 come from seed HasData).
 /// </summary>
 public class ScanSourceCrudTests : IAsyncLifetime
 {
     private MaiaDbContext _db = null!;
-    private ConfigController _ctrl = null!;
+    private ScanSourcesConfigController _ctrl = null!;
+    private ScanRulesConfigController _rules = null!;
     private CapturingAudit _audit = null!;
 
     private const int JobTypeId = 70;
@@ -44,17 +46,16 @@ public class ScanSourceCrudTests : IAsyncLifetime
         await _db.SaveChangesAsync();
 
         _audit = new CapturingAudit();
-        _ctrl = new ConfigController(
-            Mock.Of<IMonitoredJobRepository>(),
-            Mock.Of<IClassificationRuleRepository>(),
-            _audit,
-            NullLogger<ConfigController>.Instance,
-            new TestDbContextFactory(options),
+        var factory     = new TestDbContextFactory(options);
+        var currentUser = Mock.Of<ICurrentUserAccessor>();
+        _ctrl = new ScanSourcesConfigController(
+            factory, _audit, currentUser,
+            NullLogger<ScanSourcesConfigController>.Instance);
+        _rules = new ScanRulesConfigController(
+            factory,
             new IFileContentExtractor[] { new XmlContentExtractor(NullLogger<XmlContentExtractor>.Instance) },
-            new SqlFixScopeValidator(),
-            // Anonymous accessor (UserName null) → Actor() falls back to the request's
-            // operatorId, the Phase-1 behavior these tests assert against.
-            Mock.Of<ICurrentUserAccessor>());
+            _audit, currentUser,
+            NullLogger<ScanRulesConfigController>.Instance);
     }
 
     public Task DisposeAsync() => _db.DisposeAsync().AsTask();
@@ -171,7 +172,7 @@ public class ScanSourceCrudTests : IAsyncLifetime
     {
         var id = await CreateOkAsync(Req("src", FsType, logFolder: "c:/x"));
         // add a rule to the source via the source-scoped endpoint
-        await _ctrl.CreateScanRuleForSource(id, new UpsertScanCheckRuleRequest(
+        await _rules.CreateScanRuleForSource(id, new UpsertScanCheckRuleRequest(
             CheckType: "ErrorKeyword", SourceTable: null, TargetField: "ERROR",
             MinValue: null, MaxValue: null, ExpectedValue: null, WatermarkColumn: null,
             SourceIdColumn: null, Severity: "Medium", Description: null), default);
@@ -192,7 +193,7 @@ public class ScanSourceCrudTests : IAsyncLifetime
     public async Task CreateRuleForSource_SetsScanSourceId_AndJobId()
     {
         var id = await CreateOkAsync(Req("src", FsType, logFolder: "c:/x"));
-        var r = await _ctrl.CreateScanRuleForSource(id, new UpsertScanCheckRuleRequest(
+        var r = await _rules.CreateScanRuleForSource(id, new UpsertScanCheckRuleRequest(
             CheckType: "ErrorKeyword", SourceTable: null, TargetField: "FAIL",
             MinValue: null, MaxValue: null, ExpectedValue: null, WatermarkColumn: null,
             SourceIdColumn: null, Severity: "High", Description: null), default);

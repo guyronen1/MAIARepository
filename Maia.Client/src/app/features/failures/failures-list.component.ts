@@ -8,6 +8,7 @@ import { FormsModule } from '@angular/forms';
 import { Subject } from 'rxjs';
 import { debounceTime, takeUntil } from 'rxjs/operators';
 import { FailuresService } from '../../core/services/failures.service';
+import { NotificationService } from '../../core/services/notification.service';
 import { JobFailure, PagedResult } from '../../core/models';
 import { FailureDetailComponent } from './failure-detail.component';
 import { DrawerComponent } from '../../shared/drawer/drawer.component';
@@ -309,9 +310,10 @@ const COL_DEFAULT_DIR: Record<string, SortDir> = {
   `]
 })
 export class FailuresListComponent implements OnInit, OnDestroy, AfterViewChecked {
-  private svc   = inject(FailuresService);
-  private route = inject(ActivatedRoute);
-  router        = inject(Router);
+  private svc    = inject(FailuresService);
+  private route  = inject(ActivatedRoute);
+  private notify = inject(NotificationService);
+  router         = inject(Router);
 
   @ViewChildren('row', { read: ElementRef }) rowRefs!: QueryList<ElementRef<HTMLTableRowElement>>;
 
@@ -429,7 +431,7 @@ export class FailuresListComponent implements OnInit, OnDestroy, AfterViewChecke
     this.loading.set(true);
     this.svc.getFailures(this.page(), PAGE_SIZE, this.view() ?? undefined, this.sort(), this.dir()).subscribe({
       next: r => { this.paged.set(r); this.applyFilter(); this.loading.set(false); },
-      error: () => this.loading.set(false)
+      error: () => { this.loading.set(false); this.notify.error('Could not load failures. Check your connection and retry.'); }
     });
   }
 
@@ -583,7 +585,7 @@ export class FailuresListComponent implements OnInit, OnDestroy, AfterViewChecke
         this.showNavToast('page', `Page ${targetPage} of ${r.totalPages}`, 1300);
         this.patchUrl({ page: targetPage, selected: target.failureId });
       },
-      error: () => this.loading.set(false)
+      error: () => { this.loading.set(false); this.notify.error('Could not load the adjacent page.'); }
     });
   }
 

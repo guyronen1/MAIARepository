@@ -3,6 +3,7 @@ import { DatePipe } from '@angular/common';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ScanService } from '../../core/services/scan.service';
 import { MonitoredJobsService } from '../../core/services/monitored-jobs.service';
+import { NotificationService } from '../../core/services/notification.service';
 import { PolledData, WorkerStatusService } from '../../core/services/worker-status.service';
 import { MonitoredJob, ScanResult, WorkerStatus } from '../../core/models';
 import { scanIconForSources } from '../../core/util/scan-type-label.util';
@@ -148,6 +149,7 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
 })
 export class ScanJobsComponent implements OnInit, OnDestroy {
   private jobsSvc   = inject(MonitoredJobsService);
+  private notify    = inject(NotificationService);
   private scanSvc   = inject(ScanService);
   private statusSvc = inject(WorkerStatusService);
 
@@ -177,7 +179,7 @@ export class ScanJobsComponent implements OnInit, OnDestroy {
         this.runs.set(jobs.map(j => ({ job: j, result: null, running: false, error: null })));
         this.loading.set(false);
       },
-      error: () => this.loading.set(false)
+      error: () => { this.loading.set(false); this.notify.error('Could not load scan jobs.'); }
     });
   }
 

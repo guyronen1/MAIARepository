@@ -8,6 +8,17 @@ public interface IJobRepository
 {
     Task<List<JobFailure>> GetByStatusAsync(JobStatus status, CancellationToken ct = default);
     Task<List<JobFailure>> GetUnclassifiedAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Orphaned-unclassified sweep source: failures still <c>Status=Failed</c> with no
+    /// <c>ErrorTypeId</c>, detected strictly before <paramref name="detectedBefore"/>.
+    /// The age cutoff excludes rows a scan just created and is about to classify in its
+    /// post-loop step — only genuinely stranded failures (scan crashed/timed out between
+    /// saving them + advancing the watermark past them, and the classify call) are
+    /// returned, so the watermark never re-emits them. Cutoff is compared against
+    /// <c>DetectedAt</c>, which is written in server-local time — pass a local cutoff.
+    /// </summary>
+    Task<List<JobFailure>> GetUnclassifiedOlderThanAsync(DateTime detectedBefore, CancellationToken ct = default);
     Task<JobFailure?> GetByIdAsync(int failureId, CancellationToken ct = default);
     Task<JobFailure> SaveAsync(JobFailure job, CancellationToken ct = default);
     Task UpdateStatusAsync(int failureId, JobStatus status, CancellationToken ct = default);

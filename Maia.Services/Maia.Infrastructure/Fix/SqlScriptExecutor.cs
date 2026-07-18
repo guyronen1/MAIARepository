@@ -71,7 +71,13 @@ public sealed class SqlScriptExecutor(
             return FixActionResult.Fail($"Connection '{connectionName}' is not configured on this server.");
         }
 
-        var sql = await resolver.ResolveAsync(sqlTemplate, recommendation, ct);
+        // SECURITY: placeholder values (SourceId/ReferenceId/file paths) come from
+        // scanned data and must NEVER be interpolated into the SQL text — that was a
+        // second-order SQL-injection hole. ResolveSqlAsync rewrites each {token} to a
+        // @pN marker and returns the values to bind as SqlParameters below. The
+        // ScriptDom write-guard (save-time) checks the WHERE is *scoped*; this checks
+        // the value is *inert*. Both are required.
+        var parameterized = await resolver.ResolveSqlAsync(sqlTemplate, recommendation, ct);
 
         // Hard per-step wall clock — SqlClient's default is 30s but it's the
         // *server-side* execution timeout, not a wall-clock guarantee. Pair
@@ -83,8 +89,10 @@ public sealed class SqlScriptExecutor(
         {
             await using var conn = new SqlConnection(connStr);
             await conn.OpenAsync(cts.Token);
-            await using var cmd = new SqlCommand(sql, conn);
+            await using var cmd = new SqlCommand(parameterized.Sql, conn);
             cmd.CommandTimeout = (int)ExecutorTimeouts.Default.TotalSeconds;
+            foreach (var p in parameterized.Parameters)
+                cmd.Parameters.AddWithValue(p.Name, p.Value);
             var affected = await cmd.ExecuteNonQueryAsync(cts.Token);
 
             logger.LogInformation(

@@ -2,10 +2,8 @@ using Maia.Core.Entities;
 using Maia.Core.Enums;
 using Maia.Core.Interfaces;
 using Maia.Core.Security;
-using Maia.Infrastructure.DataAccess;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace Maia.API.Controllers;
 
@@ -22,7 +20,7 @@ namespace Maia.API.Controllers;
 [Route("api/users")]
 [Authorize(Policy = "RequireAdmin")]
 public class UsersController(
-    IDbContextFactory<MaiaDbContext> dbFactory,
+    IUserRepository                users,
     IPasswordHasher                hasher,
     IAuditRepository               audit,
     ICurrentUserAccessor           currentUser,
@@ -37,10 +35,9 @@ public class UsersController(
     [HttpGet]
     public async Task<IActionResult> List(CancellationToken ct)
     {
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var users = await db.Users
-            .Include(u => u.Role)
-            .OrderBy(u => u.Username)
+        // Project to safe fields (never expose PasswordHash) — the repo returns
+        // full entities; the shape below is the API contract.
+        var rows = (await users.ListAsync(ct))
             .Select(u => new
             {
                 u.UserId,
@@ -50,9 +47,8 @@ public class UsersController(
                 u.MustChangePassword,
                 u.CreatedAt,
                 u.LastLoginAt,
-            })
-            .ToListAsync(ct);
-        return Ok(users);
+            });
+        return Ok(rows);
     }
 
     [HttpPost]
@@ -65,8 +61,7 @@ public class UsersController(
         if (!TryResolveRole(req.Role, out var roleId))
             return BadRequest(new { error = "UnknownRole", message = "Role must be User, Operator, or Administrator." });
 
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        if (await db.Users.AnyAsync(u => u.Username == req.Username, ct))
+        if (await users.UsernameExistsAsync(req.Username.Trim(), ct))
             return Conflict(new { error = "DuplicateUsername", message = $"A user named '{req.Username}' already exists." });
 
         var user = new User
@@ -78,12 +73,11 @@ public class UsersController(
             MustChangePassword = true,   // force rotation off the admin-set temp password
             CreatedAt          = DateTime.Now,
         };
-        db.Users.Add(user);
-        await db.SaveChangesAsync(ct);
+        var userId = await users.AddAsync(user, ct);
 
-        await WriteAudit(user.UserId, "UserCreated",
+        await WriteAudit(userId, "UserCreated",
             $"Created user '{user.Username}' (Role={req.Role}, MustChangePassword=true)", ct);
-        return Ok(new { user.UserId });
+        return Ok(new { UserId = userId });
     }
 
     [HttpPut("{id:int}")]
@@ -92,8 +86,7 @@ public class UsersController(
         if (!TryResolveRole(req.Role, out var roleId))
             return BadRequest(new { error = "UnknownRole", message = "Role must be User, Operator, or Administrator." });
 
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var user = await db.Users.Include(u => u.Role).FirstOrDefaultAsync(u => u.UserId == id, ct);
+        var user = await users.GetByIdAsync(id, ct);
         if (user is null) return NotFound();
 
         // Lockout guard: don't let the last active administrator be demoted or disabled,
@@ -102,8 +95,8 @@ public class UsersController(
                           && (roleId != (int)MaiaRole.Administrator || !req.IsActive);
         if (losingAdmin)
         {
-            var otherActiveAdmins = await db.Users.CountAsync(
-                u => u.UserId != id && u.IsActive && u.RoleId == (int)MaiaRole.Administrator, ct);
+            var otherActiveAdmins = await users.CountActiveAdminsExceptAsync(
+                id, (int)MaiaRole.Administrator, ct);
             if (otherActiveAdmins == 0)
                 return Conflict(new { error = "LastAdmin", message = "Cannot demote or disable the last active administrator." });
         }
@@ -112,7 +105,7 @@ public class UsersController(
         var beforeActive = user.IsActive;
         user.RoleId   = roleId;
         user.IsActive = req.IsActive;
-        await db.SaveChangesAsync(ct);
+        await users.UpdateAsync(user, ct);
 
         await WriteAudit(id, "UserUpdated",
             $"Role: {beforeRole} → {req.Role}, IsActive: {beforeActive} → {req.IsActive}", ct);
@@ -125,13 +118,12 @@ public class UsersController(
         if (PasswordPolicy.Validate(req.NewPassword) is { } pwErr)
             return BadRequest(new { error = "PasswordTooShort", message = pwErr });
 
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var user = await db.Users.FindAsync([id], ct);
+        var user = await users.GetByIdAsync(id, ct);
         if (user is null) return NotFound();
 
         user.PasswordHash       = hasher.Hash(req.NewPassword);
         user.MustChangePassword = true;
-        await db.SaveChangesAsync(ct);
+        await users.UpdateAsync(user, ct);
 
         await WriteAudit(id, "UserPasswordReset",
             $"Reset password for user '{user.Username}' (MustChangePassword=true)", ct);

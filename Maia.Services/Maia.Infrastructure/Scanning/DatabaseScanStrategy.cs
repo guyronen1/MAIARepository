@@ -410,7 +410,7 @@ public sealed class DatabaseScanStrategy(
     {
         var (filterClause, filterParams) = BuildFilterClause(rule);
         var watermarkFilter = rule.WatermarkColumn is not null && watermark is not null
-            ? $" AND [{rule.WatermarkColumn}] > @Watermark"
+            ? $" AND {Bracket(rule.WatermarkColumn)} > @Watermark"
             : string.Empty;
 
         // WatermarkColumn / SourceIdColumn / FilePathColumn are extra columns
@@ -423,26 +423,26 @@ public sealed class DatabaseScanStrategy(
         // Style 121 = ISO `yyyy-mm-dd hh:mi:ss.fffffff` (full datetime2 precision).
         // For non-date columns the style is silently ignored and you get the default text form.
         var wmSelect  = rule.WatermarkColumn is not null
-            ? $", CONVERT(NVARCHAR(50), [{rule.WatermarkColumn}], 121) AS _WatermarkVal"
+            ? $", CONVERT(NVARCHAR(50), {Bracket(rule.WatermarkColumn)}, 121) AS _WatermarkVal"
             : string.Empty;
         var srcSelect = rule.SourceIdColumn is not null
-            ? $", CAST([{rule.SourceIdColumn}] AS NVARCHAR(100)) AS _SourceIdVal"
+            ? $", CAST({Bracket(rule.SourceIdColumn)} AS NVARCHAR(100)) AS _SourceIdVal"
             : string.Empty;
         var refSelect = rule.ReferenceIdColumn is not null
-            ? $", CAST([{rule.ReferenceIdColumn}] AS NVARCHAR(200)) AS _ReferenceIdVal"
+            ? $", CAST({Bracket(rule.ReferenceIdColumn)} AS NVARCHAR(200)) AS _ReferenceIdVal"
             : string.Empty;
         var fpSelect  = !string.IsNullOrEmpty(rule.FilePathColumn)
             ? $", CAST({QuoteColumnRef(rule.FilePathColumn)} AS NVARCHAR(500)) AS _FilePathVal"
             : string.Empty;
 
         var orderBy = rule.WatermarkColumn is not null
-            ? $"ORDER BY [{rule.WatermarkColumn}] ASC"
+            ? $"ORDER BY {Bracket(rule.WatermarkColumn)} ASC"
             : "ORDER BY (SELECT NULL)";
 
         var sql = $"""
             SELECT TOP 500
                 CAST(ROW_NUMBER() OVER ({orderBy}) AS NVARCHAR(20)) AS _RowKey,
-                [{rule.TargetField}]
+                {Bracket(rule.TargetField)}
                 {wmSelect}
                 {srcSelect}
                 {refSelect}
@@ -496,8 +496,8 @@ public sealed class DatabaseScanStrategy(
     {
         var dot = columnRef.LastIndexOf('.');
         return dot < 0
-            ? $"[{columnRef}]"
-            : $"{columnRef[..dot]}.[{columnRef[(dot + 1)..]}]";
+            ? Bracket(columnRef)
+            : $"{columnRef[..dot]}.{Bracket(columnRef[(dot + 1)..])}";
     }
 
     /// <summary>
@@ -509,7 +509,7 @@ public sealed class DatabaseScanStrategy(
         string connStr, string sourceTable, string watermarkColumn, ScanCheckRule rule, CancellationToken ct)
     {
         var (filterClause, filterParams) = BuildFilterClause(rule);
-        var sql = $"SELECT CONVERT(NVARCHAR(50), MAX([{watermarkColumn}]), 121) " +
+        var sql = $"SELECT CONVERT(NVARCHAR(50), MAX({Bracket(watermarkColumn)}), 121) " +
                   $"FROM {QuoteTable(sourceTable)} WHERE {filterClause}";
 
         await using var conn = new SqlConnection(connStr);
@@ -522,6 +522,12 @@ public sealed class DatabaseScanStrategy(
         return result is DBNull || result is null ? null : result.ToString();
     }
 
+    /// <summary>Bracket-quote a SQL identifier, escaping any embedded <c>]</c> as
+    /// <c>]]</c> so a column/table name containing <c>]</c> cannot break out of the
+    /// quoting. Admin-scoped config, but an unsanitized identifier is still worth
+    /// escaping (defense-in-depth; the identifier is the one thing not parameterised).</summary>
+    private static string Bracket(string identifier) => "[" + identifier.Replace("]", "]]") + "]";
+
     /// <summary>
     /// Converts "dbo.Files" → "[dbo].[Files]", or "Files" → "[Files]".
     /// Prevents the bracketing bug where [dbo.Files] is treated as a literal name.
@@ -529,7 +535,7 @@ public sealed class DatabaseScanStrategy(
     private static string QuoteTable(string sourceTable)
     {
         var parts = sourceTable.Split('.');
-        return string.Join(".", parts.Select(p => $"[{p.Trim('[', ']')}]"));
+        return string.Join(".", parts.Select(p => Bracket(p.Trim('[', ']'))));
     }
 
     private static (string Clause, List<(string Name, object Value)> Params) BuildFilterClause(ScanCheckRule rule)
@@ -538,7 +544,7 @@ public sealed class DatabaseScanStrategy(
         if (rule.CheckType == CheckType.ValueEquals)
         {
             p.Add(("@ExactVal", rule.ExpectedValue!));
-            return ($"([{rule.TargetField}] = @ExactVal)", p);
+            return ($"({Bracket(rule.TargetField)} = @ExactVal)", p);
         }
         // ColumnRange — wrap in parentheses so callers can safely AND
         // additional conditions onto this clause without the precedence bug
@@ -546,8 +552,8 @@ public sealed class DatabaseScanStrategy(
         // in QueryMatchingRowsAsync is exactly that "additional AND" case;
         // unparenthesized, it would bypass the OR's left branch entirely.
         var conditions = new List<string>();
-        if (rule.MinValue.HasValue) { conditions.Add($"[{rule.TargetField}] < @Min"); p.Add(("@Min", rule.MinValue.Value)); }
-        if (rule.MaxValue.HasValue) { conditions.Add($"[{rule.TargetField}] > @Max"); p.Add(("@Max", rule.MaxValue.Value)); }
+        if (rule.MinValue.HasValue) { conditions.Add($"{Bracket(rule.TargetField)} < @Min"); p.Add(("@Min", rule.MinValue.Value)); }
+        if (rule.MaxValue.HasValue) { conditions.Add($"{Bracket(rule.TargetField)} > @Max"); p.Add(("@Max", rule.MaxValue.Value)); }
         return ($"({string.Join(" OR ", conditions)})", p);
     }
 }

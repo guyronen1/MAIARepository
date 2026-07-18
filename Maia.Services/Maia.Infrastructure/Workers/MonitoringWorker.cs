@@ -3,6 +3,7 @@ using Maia.Core.Enums;
 using Maia.Core.Interfaces;
 using Maia.Core.Interfaces.UseCases;
 using Maia.Core.Results;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -17,6 +18,7 @@ namespace Maia.Infrastructure.Workers;
 public sealed class MonitoringWorker(
     IServiceScopeFactory      scopeFactory,
     IWorkerControlService     control,
+    IConfiguration            config,
     ILogger<MonitoringWorker> logger) : BackgroundService
 {
     private static readonly TimeSpan IdleDelay = TimeSpan.FromSeconds(5);
@@ -26,6 +28,13 @@ public sealed class MonitoringWorker(
     private readonly string _leasedBy =
         $"host={Environment.MachineName};pid={Environment.ProcessId};runId={Guid.NewGuid():N}";
 
+    // Orphaned-unclassified sweep cadence + age gate (see IReclassifyOrphanedFailuresUseCase).
+    // One knob drives both: a failure must be older than this to be swept (so in-flight
+    // scans aren't touched), and the sweep runs at most this often. Clamped ≥ 1 min.
+    private readonly TimeSpan _orphanMinAge = TimeSpan.FromMinutes(
+        Math.Max(1, config.GetValue<int?>("Scan:OrphanReclassifyMinutes") ?? 10));
+    private DateTime _lastOrphanSweep = DateTime.MinValue;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         logger.LogInformation("MonitoringWorker started as {LeasedBy}", _leasedBy);
@@ -33,6 +42,11 @@ public sealed class MonitoringWorker(
         // Startup drain — runs once before the polling loop to clear approvals or
         // auto-heals that accumulated while this process was down.
         await DrainPendingFixesAsync("startup", stoppingToken);
+
+        // Startup sweep — a crash last run may have stranded failures saved past their
+        // watermark without classification. Recover them immediately (force past the
+        // throttle) rather than waiting for the first cadence tick.
+        await SweepOrphanedUnclassifiedAsync(force: true, stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -44,6 +58,10 @@ public sealed class MonitoringWorker(
 
             try
             {
+                // Throttled safety-net sweep (runs even on ticks that claim nothing —
+                // the crash that stranded failures may have been another instance).
+                await SweepOrphanedUnclassifiedAsync(force: false, stoppingToken);
+
                 IReadOnlyList<ClaimedJobLease> claimed;
                 using (var scope = scopeFactory.CreateScope())
                 {
@@ -87,6 +105,32 @@ public sealed class MonitoringWorker(
         }
 
         logger.LogInformation("MonitoringWorker stopped");
+    }
+
+    /// <summary>
+    /// Recovers orphaned-unclassified failures (see IReclassifyOrphanedFailuresUseCase).
+    /// Throttled to <see cref="_orphanMinAge"/> cadence unless <paramref name="force"/>
+    /// (startup). Its own scope + try so a failure here never breaks the scan loop.
+    /// </summary>
+    private async Task SweepOrphanedUnclassifiedAsync(bool force, CancellationToken ct)
+    {
+        if (!force && DateTime.Now - _lastOrphanSweep < _orphanMinAge) return;
+        _lastOrphanSweep = DateTime.Now;
+
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var sweep = scope.ServiceProvider.GetRequiredService<IReclassifyOrphanedFailuresUseCase>();
+            await sweep.ExecuteAsync(_orphanMinAge, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "MonitoringWorker: orphaned-unclassified sweep failed");
+        }
     }
 
     private async Task DrainPendingFixesAsync(string trigger, CancellationToken ct)

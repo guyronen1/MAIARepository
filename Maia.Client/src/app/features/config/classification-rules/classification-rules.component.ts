@@ -5,6 +5,7 @@ import {
   ConfigService, ClassificationRule, JobType, ErrorType,
   UpsertClassificationRuleRequest,
 } from '../../../core/services/config.service';
+import { NotificationService } from '../../../core/services/notification.service';
 import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
 
 @Component({
@@ -323,6 +324,7 @@ import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
 })
 export class ClassificationRulesComponent implements OnInit {
   private svc = inject(ConfigService);
+  private notify = inject(NotificationService);
 
   loading     = signal(false);
   saving      = signal(false);
@@ -348,7 +350,7 @@ export class ClassificationRulesComponent implements OnInit {
     this.loading.set(true);
     this.svc.getAllClassificationRules().subscribe({
       next: r => { this.rules.set(r); this.filtered.set(r); this.loading.set(false); },
-      error: () => this.loading.set(false),
+      error: () => { this.loading.set(false); this.notify.error('Could not load classification rules.'); },
     });
     this.svc.getJobTypes().subscribe({ next: t => this.jobTypes.set(t) });
     this.svc.getErrorTypes().subscribe({ next: t => this.errorTypes.set(t) });
