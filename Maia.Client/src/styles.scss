@@ -23,6 +23,12 @@
   --purple:        #7c3aed;
   --purple-bg:     #ede9fe;
 
+  // Neutral chip — for error-type / classification chips so they carry NO
+  // semantic-palette hue. Frees amber (--warning) to mean "warning" only.
+  --neutral-bg:    #eef0f4;
+  --neutral:       #4b5563;
+  --neutral-bd:    #d3d8e2;
+
   // Warning PANELS/PILLS (soft-warn, auto-heal banner, coverage-gap pills, the
   // Flow view's no-classification row). Distinct from --warning/-bg (badge/text
   // accents) — these carry their own high-contrast text so they read on both
@@ -77,6 +83,10 @@
   --danger:        #f47272;  --danger-bg:  rgba(220, 38, 38, 0.20);
   --info:          #5aa2f5;  --info-bg:    rgba(37, 99, 235, 0.20);
   --purple:        #a98bfa;  --purple-bg:  rgba(124, 58, 237, 0.20);
+
+  --neutral-bg:    #232a37;
+  --neutral:       #a7b0c0;
+  --neutral-bd:    #333c4d;
 
   // Warning panels/pills on dark — amber tint over the dark card + bright amber
   // text (readable), instead of opaque light amber blocks.
@@ -268,6 +278,10 @@ select option { background: #fff; }
   &.badge-low         { background: var(--info-bg);    color: var(--info);    border: 1px solid #93c5fd; }
   &.badge-info        { background: var(--info-bg);    color: var(--info);    border: 1px solid #93c5fd; }
 
+  // Error-type / classification chip — deliberately hue-less so it never
+  // competes with the semantic status/severity colours in the same row.
+  &.badge-type        { background: var(--neutral-bg); color: var(--neutral); border: 1px solid var(--neutral-bd); }
+
   // JobStatus enum values rendered via `'badge-' + status.toLowerCase()`.
   // Failed and Resolved are already covered above; these fill the gap.
   &.badge-manualrequired       { background: var(--warning-bg); color: var(--warning); border: 1px solid #fcd34d; }
@@ -344,7 +358,14 @@ select option { background: #fff; }
   align-items: center;
   gap: 6px;
   .bar-track { flex: 1; height: 5px; background: var(--surface-3); border-radius: 3px; overflow: hidden;
-    .bar-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--primary), #f59e0b); transition: width 0.3s ease; }
+    // Value-encoded: fill colour reflects the confidence band, not a fixed
+    // brand gradient. Band set via [data-band] from confidenceBand() so the
+    // thresholds live in one place (core/util/confidence.util.ts).
+    .bar-fill { height: 100%; border-radius: 3px; background: var(--primary); transition: width 0.3s ease, background 0.3s ease;
+      &[data-band="low"]  { background: var(--danger);  }
+      &[data-band="mid"]  { background: var(--warning); }
+      &[data-band="high"] { background: var(--success); }
+    }
   }
   .bar-value { font-size: 11px; font-weight: 600; color: var(--text-muted); min-width: 30px; text-align: right; }
 }

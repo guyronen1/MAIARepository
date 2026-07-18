@@ -124,7 +124,7 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
             <tbody>
               @for (g of gaps()!.gaps; track g.errorTypeId + '-' + g.monitoredJobId) {
                 <tr>
-                  <td><span class="badge badge-classified">{{ g.errorTypeCode }}</span></td>
+                  <td><span class="badge badge-type">{{ g.errorTypeCode }}</span></td>
                   <td dir="auto">{{ g.monitoredJobName ?? '—' }}</td>
                   <td><span class="badge badge-info">{{ g.jobTypeName }}</span></td>
                   <td>{{ g.count }}</td>

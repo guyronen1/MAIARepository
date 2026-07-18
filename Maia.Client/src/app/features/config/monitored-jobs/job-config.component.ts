@@ -163,7 +163,7 @@ import { computeEffectiveClassRules, scanRulePredictedPattern,
                     @for (r of j.rules; track r.ruleId) {
                       <tr>
                         <td class="font-mono">{{ r.pattern }}</td>
-                        <td><span class="badge badge-classified">{{ r.errorTypeCode }}</span></td>
+                        <td><span class="badge badge-type">{{ r.errorTypeCode }}</span></td>
                         <td class="text-sm">{{ (r.confidence * 100).toFixed(0) }}%</td>
                         <td class="text-sm text-muted">#{{ r.priority }}</td>
                         <td class="rule-actions">
@@ -199,7 +199,7 @@ import { computeEffectiveClassRules, scanRulePredictedPattern,
                       @for (r of displayedDefaultClassRules(); track r.ruleId) {
                         <tr class="global-row">
                           <td class="font-mono">{{ r.pattern }}</td>
-                          <td><span class="badge badge-classified">{{ r.errorTypeCode }}</span></td>
+                          <td><span class="badge badge-type">{{ r.errorTypeCode }}</span></td>
                           <td class="text-sm">{{ (r.confidence * 100).toFixed(0) }}%</td>
                           <td class="text-sm text-muted">#{{ r.priority }}</td>
                         </tr>
@@ -236,7 +236,7 @@ import { computeEffectiveClassRules, scanRulePredictedPattern,
                   @for (p of fixPolicies(); track p.ruleId) {
                     <tr [class.shadowed]="isShadowedDefault(p)">
                       <td>
-                        <span class="badge badge-classified">{{ p.errorTypeCode }}</span>
+                        <span class="badge badge-type">{{ p.errorTypeCode }}</span>
                         @if (fixHasNoClassCoverage(p)) {
                           <button class="gap-warn gap-warn-btn"
                                   title="No classification rule produces this error type — this fix won't trigger. Click to add a classification rule pre-filled with this error type."

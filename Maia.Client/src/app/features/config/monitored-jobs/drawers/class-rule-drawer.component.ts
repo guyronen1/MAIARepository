@@ -83,7 +83,7 @@ import { DrawerComponent } from '../../../../shared/drawer/drawer.component';
             <div class="link-rule-item" (click)="confirmLink(r)">
               <div class="link-rule-pattern font-mono">{{ r.pattern }}</div>
               <div class="link-rule-meta">
-                <span class="badge badge-classified">{{ r.errorTypeCode }}</span>
+                <span class="badge badge-type">{{ r.errorTypeCode }}</span>
                 <span class="text-muted text-sm">{{ r.jobTypeName }}</span>
                 <span class="text-muted text-sm">conf {{ (r.confidence * 100).toFixed(0) }}%</span>
               </div>

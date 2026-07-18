@@ -7,6 +7,7 @@ import {
 } from '../../../core/services/config.service';
 import { NotificationService } from '../../../core/services/notification.service';
 import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
+import { confidenceBand } from '../../../core/util/confidence.util';
 
 @Component({
   selector: 'app-classification-rules',
@@ -111,12 +112,12 @@ import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
                     }
                   </td>
                   <td>
-                    <span class="badge badge-classified">{{ r.errorTypeCode }}</span>
+                    <span class="badge badge-type">{{ r.errorTypeCode }}</span>
                   </td>
                   <td>
                     <div class="confidence-bar">
                       <div class="bar-track">
-                        <div class="bar-fill" [style.width.%]="r.confidence * 100"></div>
+                        <div class="bar-fill" [style.width.%]="r.confidence * 100" [attr.data-band]="confBand(r.confidence)"></div>
                       </div>
                       <span class="bar-value">{{ (r.confidence * 100).toFixed(0) }}%</span>
                     </div>
@@ -215,7 +216,7 @@ import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
               <span class="font-mono">{{ form.pattern }}</span>
               <span class="preview-arrow">→</span>
               <span class="badge badge-info">{{ jobTypeName(form.jobTypeId) }}</span>
-              <span class="badge badge-classified">{{ errorTypeCode(form.errorTypeId) }}</span>
+              <span class="badge badge-type">{{ errorTypeCode(form.errorTypeId) }}</span>
               <span class="text-muted text-sm">({{ (form.confidence * 100).toFixed(0) }}% confidence, priority #{{ form.priority }})</span>
             </div>
           }
@@ -325,6 +326,9 @@ import { PluralizePipe } from '../../../core/pipes/pluralize.pipe';
 export class ClassificationRulesComponent implements OnInit {
   private svc = inject(ConfigService);
   private notify = inject(NotificationService);
+
+  /** Value-encoded confidence band (red/amber/green) for the shared bar fill. */
+  readonly confBand = confidenceBand;
 
   loading     = signal(false);
   saving      = signal(false);

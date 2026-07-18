@@ -10,6 +10,7 @@ import { ConfigService, UpsertFixPolicyRuleRequest } from '../../core/services/c
 import { AuthService } from '../../core/services/auth.service';
 import { Recommendation, PagedResult } from '../../core/models';
 import { pluralize } from '../../core/pipes/pluralize.pipe';
+import { confidenceBand } from '../../core/util/confidence.util';
 import { FailureDetailComponent } from '../failures/failure-detail.component';
 import { DrawerComponent } from '../../shared/drawer/drawer.component';
 
@@ -96,7 +97,7 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
                   <td>
                     <div class="confidence-bar" style="min-width:120px">
                       <div class="bar-track">
-                        <div class="bar-fill" [style.width.%]="r.confidenceScore * 100"></div>
+                        <div class="bar-fill" [style.width.%]="r.confidenceScore * 100" [attr.data-band]="confBand(r.confidenceScore)"></div>
                       </div>
                       <span class="bar-value">{{ r.confidenceScore | percent }}</span>
                     </div>
@@ -385,6 +386,9 @@ export class RecommendationsComponent implements OnInit {
       error: () => this.running.set(false)
     });
   }
+
+  /** Value-encoded confidence band (red/amber/green) for the shared bar fill. */
+  readonly confBand = confidenceBand;
 
   categoryBadge(cat: string): string {
     const map: Record<string, string> = {

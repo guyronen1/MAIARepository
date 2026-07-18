@@ -154,7 +154,7 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
                       [title]="f.errorMessage ?? ''">
                     <td dir="auto">{{ f.monitoredJobName ?? '—' }}</td>
                     <td class="truncate" style="max-width:120px" dir="auto">{{ f.stepName ?? '—' }}</td>
-                    <td><span class="badge badge-medium">{{ f.errorTypeCode ?? 'Unknown' }}</span></td>
+                    <td><span class="badge badge-type">{{ f.errorTypeCode ?? 'Unknown' }}</span></td>
                     <td class="text-muted">{{ f.detectedAt | date:'dd/MM HH:mm' }}</td>
                     <td><span class="badge" [class]="'badge-' + f.status.toLowerCase()">{{ f.status }}</span></td>
                   </tr>

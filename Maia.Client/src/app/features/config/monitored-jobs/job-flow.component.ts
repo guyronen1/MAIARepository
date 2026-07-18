@@ -86,7 +86,7 @@ interface FlowRow {
                     <td class="cell">
                       @switch (row.classifyState) {
                         @case ('matched') {
-                          <span class="badge badge-classified">{{ row.errorTypeCode }}</span>
+                          <span class="badge badge-type">{{ row.errorTypeCode }}</span>
                           @if (row.extraMatches > 0) { <span class="text-muted text-sm"> +{{ row.extraMatches }}</span> }
                           @if (row.classPattern) { <div class="detail text-muted mono">{{ row.classPattern }}</div> }
                         }

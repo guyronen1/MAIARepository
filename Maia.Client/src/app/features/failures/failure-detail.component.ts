@@ -7,6 +7,7 @@ import { AuthService } from '../../core/services/auth.service';
 import { NotificationService } from '../../core/services/notification.service';
 import { FailureStatus, FixExecution, Recommendation } from '../../core/models';
 import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
+import { confidenceBand } from '../../core/util/confidence.util';
 
 /**
  * Pure detail-content for a single failure. Input-driven — the host (currently
@@ -85,7 +86,7 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
               }
               <dt>Error Type</dt> <dd>
                 @if (failure()!.errorTypeCode) {
-                  <span class="badge badge-medium">{{ failure()!.errorTypeCode }}</span>
+                  <span class="badge badge-type">{{ failure()!.errorTypeCode }}</span>
                 } @else { <span class="text-muted">Not yet classified</span> }
               </dd>
               <dt>Detected</dt>   <dd>{{ failure()!.detectedAt | date:'dd/MM/yy HH:mm:ss' }}</dd>
@@ -181,7 +182,7 @@ import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
 
                     <div class="confidence-bar">
                       <div class="bar-track">
-                        <div class="bar-fill" [style.width.%]="rec.confidenceScore * 100"></div>
+                        <div class="bar-fill" [style.width.%]="rec.confidenceScore * 100" [attr.data-band]="confBand(rec.confidenceScore)"></div>
                       </div>
                       <span class="bar-value">{{ rec.confidenceScore | percent }}</span>
                     </div>
@@ -646,6 +647,9 @@ export class FailureDetailComponent implements OnDestroy {
     const current = this.failure()?.stage ?? 'Failed';
     return order.indexOf(key) < order.indexOf(current);
   }
+
+  /** Value-encoded confidence band (red/amber/green) for the shared bar fill. */
+  readonly confBand = confidenceBand;
 
   categoryBadge(cat: string): string {
     const map: Record<string, string> = {

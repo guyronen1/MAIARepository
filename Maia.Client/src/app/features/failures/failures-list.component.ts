@@ -136,7 +136,7 @@ const COL_DEFAULT_DIR: Record<string, SortDir> = {
                   <td class="truncate" style="max-width:160px" dir="auto">{{ f.stepName ?? '—' }}</td>
                   <td>
                     @if (f.errorTypeCode) {
-                      <span class="badge badge-medium">{{ f.errorTypeCode }}</span>
+                      <span class="badge badge-type">{{ f.errorTypeCode }}</span>
                     } @else {
                       <span class="badge badge-failed">Unclassified</span>
                     }
