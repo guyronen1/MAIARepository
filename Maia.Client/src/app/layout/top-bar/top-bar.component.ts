@@ -226,16 +226,27 @@ type DotState = 'green' | 'yellow' | 'red' | 'gray' | 'paused';
       border: 1px solid var(--border);
       .dot { background: var(--text-muted); }
     }
-    /* Paused = operator paused the scan loop */
+    /* Paused = operator paused the scan loop. Danger-tinted + a slow ring
+       pulse so a silently paused worker (nothing is being detected) is
+       unmistakable; the pulse also keeps it distinct from the static red
+       "Offline" pill (same colour, different behaviour + label). */
     .state-paused {
-      color: var(--warn-text);
-      background: var(--warn-bg-2);
-      border: 1px solid var(--warn-border);
-      .dot { background: var(--warn-text); }
+      color: var(--danger);
+      background: var(--danger-bg);
+      border: 1px solid var(--danger);
+      animation: paused-pulse 2s ease-in-out infinite;
+      .dot { background: var(--danger); }
     }
     @keyframes dot-pulse {
       0%, 100% { opacity: 0.65; }
       50%      { opacity: 1; }
+    }
+    @keyframes paused-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+      50%      { box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.25); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .state-paused { animation: none; }
     }
 
     /* Account menu — avatar-only circle trigger + dropdown. */
