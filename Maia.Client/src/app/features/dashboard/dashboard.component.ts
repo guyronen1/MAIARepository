@@ -98,25 +98,25 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
         <!-- Secondary 2×2 — recessed surface so it reads as context. Titles
              carry the breakdowns the old tiles showed inline (kept compact). -->
         <div class="kpi-secondary">
-          <a class="kpi-chip" [class.zero]="stats().active === 0"
+          <a class="kpi-chip danger" [class.zero]="stats().active === 0"
              routerLink="/failures" [queryParams]="{ view: 'active' }"
              title="All active failures">
             <span class="chip-label">Active</span>
             <span class="chip-value">{{ stats().active }}</span>
           </a>
-          <a class="kpi-chip" [class.zero]="stats().unconfigured === 0"
+          <a class="kpi-chip neutral" [class.zero]="stats().unconfigured === 0"
              routerLink="/unconfigured"
              [title]="'Unconfigured — no class: ' + stats().unclassified + ' · no policy: ' + stats().unconfiguredNoPolicy + '. Opens the Unconfigured screen.'">
             <span class="chip-label">Unconfigured</span>
             <span class="chip-value">{{ stats().unconfigured }}</span>
           </a>
-          <a class="kpi-chip alarm" [class.zero]="stats().fixFailedToday === 0"
+          <a class="kpi-chip alarm danger" [class.zero]="stats().fixFailedToday === 0"
              routerLink="/failures" [queryParams]="{ view: 'fix-failed' }"
              title="Failures whose automated fix attempts failed today — operator review needed">
             <span class="chip-label">Fix Failures</span>
             <span class="chip-value">{{ stats().fixFailedToday }}</span>
           </a>
-          <a class="kpi-chip" [class.zero]="stats().resolvedToday === 0"
+          <a class="kpi-chip success" [class.zero]="stats().resolvedToday === 0"
              routerLink="/failures" [queryParams]="{ view: 'resolved' }"
              [title]="'Resolved today — auto ' + stats().autoFixedToday + ' · manual ' + stats().manuallyFixedToday">
             <span class="chip-label">Resolved</span>
@@ -375,6 +375,11 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
       &:hover { transform: translateY(-1px); background: var(--surface-3); }
       &:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
     }
+    /* Category accent — colored inline-start border (RTL-safe), restoring the
+       per-metric colours the old tiles carried. */
+    .kpi-chip.danger  { border-inline-start: 3px solid var(--danger);  }
+    .kpi-chip.success { border-inline-start: 3px solid var(--success); }
+    .kpi-chip.neutral { border-inline-start: 3px solid var(--text-muted); }
     .chip-label { font-size: 11px; color: var(--text-muted); }
     .chip-value { font-size: 18px; font-weight: 700; line-height: 1; }
     /* Fix Failures is a system-problem signal — number reads red when > 0. */
