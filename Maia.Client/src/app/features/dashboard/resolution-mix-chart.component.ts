@@ -1,12 +1,14 @@
 import {
   AfterViewInit, Component, ElementRef, OnDestroy, ViewChild,
-  computed, effect, inject, signal, untracked,
+  computed, effect, inject, input, signal, untracked,
 } from '@angular/core';
 import { ArcElement, Chart, DoughnutController, Tooltip } from 'chart.js';
 import { FailuresService, ResolutionMixItem } from '../../core/services/failures.service';
 import { ThemeService } from '../../core/services/theme.service';
 
 Chart.register(ArcElement, DoughnutController, Tooltip);
+
+type Range = '24h' | '7d' | '30d';
 
 // Ring colours match the operator's reading model: green = "MAIA handled it
 // autonomously", blue = "operator decided + MAIA executed", amber = "needs you".
@@ -26,14 +28,14 @@ const COLORS = {
     <div class="card chart-card">
       <div class="chart-header">
         <h3>Resolution Mix</h3>
-        <span class="text-muted text-sm">Last 7 days</span>
+        <span class="text-muted text-sm">{{ rangeLabel() }}</span>
       </div>
 
       @if (loading()) {
         <div class="chart-skeleton" aria-hidden="true"></div>
       } @else if (isEmpty()) {
         <div class="chart-empty">
-          <p class="text-muted">No failures detected in the last 7 days</p>
+          <p class="text-muted">No failures detected in this range</p>
         </div>
       } @else {
         <div class="donut-block">
@@ -90,8 +92,10 @@ const COLORS = {
       color: var(--text-muted); text-align: center;
     }
 
-    .donut-block { display: flex; flex-direction: column; align-items: center; gap: 6px; }
-    .donut-wrap  { position: relative; height: 150px; width: 100%; }
+    /* min-height matches the other two charts' 200px body so the row stays
+       uniform; content centres when the card stretches to the tallest sibling. */
+    .donut-block { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 200px; }
+    .donut-wrap  { position: relative; height: 140px; width: 100%; }
     .donut-center {
       position: absolute; inset: 0;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -128,7 +132,18 @@ export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {
 
   @ViewChild('canvas') canvasRef?: ElementRef<HTMLCanvasElement>;
 
+  /** Time range driven by the dashboard parent — same 24h/7d/30d toggle as
+   *  Errors Over Time + Failures by Job. */
+  range = input.required<Range>();
+
   constructor() {
+    // Re-fetch whenever the parent changes the range (fires once on init too,
+    // before AfterViewInit; renderIfReady waits for the canvas @if branch).
+    effect(() => {
+      const r = this.range();
+      this.fetch(r);
+    });
+
     // Rebuild with the theme-matched segment border on theme flip (data read
     // untracked so this fires on theme change only).
     effect(() => {
@@ -144,6 +159,14 @@ export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {
 
   loading = signal(true);
   data    = signal<ResolutionMixItem[]>([]);
+
+  rangeLabel = computed(() => {
+    switch (this.range()) {
+      case '7d':  return 'Last 7 days';
+      case '30d': return 'Last 30 days';
+      default:    return 'Last 24 hours';
+    }
+  });
 
   /** Window totals across the gap-filled day rows. */
   totals = computed(() => this.data().reduce((a, r) => ({
@@ -173,15 +196,18 @@ export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {
   private chart?: Chart;
   private pendingRender = false;
 
-  ngAfterViewInit(): void { this.fetch(); }
+  ngAfterViewInit(): void {
+    // No-op — fetch runs from the range effect; renderIfReady waits for the
+    // canvas @if branch to render.
+  }
   ngOnDestroy(): void { this.chart?.destroy(); }
 
-  private fetch(): void {
+  private fetch(range: Range): void {
     this.loading.set(true);
     this.chart?.destroy();
     this.chart = undefined;
 
-    this.svc.getResolutionMix().subscribe({
+    this.svc.getResolutionMix(range).subscribe({
       next: rows => {
         this.data.set(rows);
         this.loading.set(false);

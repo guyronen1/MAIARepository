@@ -146,7 +146,8 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
             (rangeChange)="chartRange.set($event)"></app-errors-over-time-chart>
         <app-failures-by-job-chart
             [range]="chartRange()"></app-failures-by-job-chart>
-        <app-resolution-mix-chart></app-resolution-mix-chart>
+        <app-resolution-mix-chart
+            [range]="chartRange()"></app-resolution-mix-chart>
       </div>
 
       <div class="row-2col">

@@ -569,24 +569,28 @@ public class DataController(
     }
 
     /// <summary>
-    /// 7-day stacked-resolution-mix breakdown bucketed by JobFailure.DetectedAt.
-    /// Single timestamp source for all four stacks keeps the semantic clear:
-    /// "of failures detected on day X, here's the outcome composition".
-    /// Today's bar honestly includes in-progress failures via the stillActive
-    /// stack. Range param exists for future flexibility but only "7d" is wired.
+    /// Resolution-mix breakdown bucketed by JobFailure.DetectedAt over a rolling
+    /// 24h / 7d / 30d window (shares the dashboard range toggle). Single
+    /// timestamp source keeps the semantic clear: "of failures detected in the
+    /// window, here's the outcome composition". Includes in-progress failures
+    /// via the stillActive count. Returns day-buckets; the donut consumer sums
+    /// them (day granularity retained for a future trend view).
     /// </summary>
     [HttpGet("analytics/resolution-mix")]
     public async Task<IActionResult> GetResolutionMix(
         [FromQuery] string range = "7d",
         CancellationToken  ct    = default)
     {
-        // Range param accepted for future flexibility, but only 7d is wired now.
-        if (range != "7d") range = "7d";
-
-        // 7 days inclusive of today, server-local midnight boundaries.
-        var todayStart = DateTime.Today;
-        var windowStart = todayStart.AddDays(-6);
-        var windowEnd   = todayStart.AddDays(1);   // exclusive upper bound
+        // 24h / 7d / 30d rolling window, matching the other dashboard charts.
+        range = (range ?? "7d").ToLowerInvariant();
+        if (range != "24h" && range != "30d") range = "7d";
+        var nowLocal    = DateTime.Now;
+        var windowStart = range switch
+        {
+            "24h" => nowLocal.AddDays(-1),
+            "30d" => nowLocal.AddDays(-30),
+            _     => nowLocal.AddDays(-7),
+        };
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
 
@@ -602,7 +606,7 @@ public class DataController(
         // be counted in both columns. Idempotent suggestion generation makes
         // this rare in practice; documenting for parity with that endpoint.
         var raw = await db.JobFailures
-            .Where(f => f.DetectedAt >= windowStart && f.DetectedAt < windowEnd)
+            .Where(f => f.DetectedAt >= windowStart)
             .Select(f => new
             {
                 Day         = new DateTime(f.DetectedAt.Year, f.DetectedAt.Month, f.DetectedAt.Day),
@@ -626,10 +630,13 @@ public class DataController(
                 stillActive      = g.Count(f => f.Status == JobStatus.Failed),
             });
 
-        // Gap-fill: always return 7 rows, oldest first, so the chart can render
-        // a 7-bar row even when some days had zero failures detected.
-        var result = Enumerable.Range(0, 7)
-            .Select(offset => windowStart.AddDays(offset))
+        // Gap-fill day buckets from the window's first day through today,
+        // oldest first. The donut sums these; day granularity is retained for
+        // a future trend view.
+        var firstDay = windowStart.Date;
+        var dayCount = (int)(DateTime.Today - firstDay).TotalDays + 1;
+        var result = Enumerable.Range(0, dayCount)
+            .Select(offset => firstDay.AddDays(offset))
             .Select(d => grouped.TryGetValue(d, out var r)
                 ? new { bucketDay = d.ToString("yyyy-MM-dd"), r.autoHealed, r.operatorApproved, r.manualRequired, r.stillActive }
                 : new { bucketDay = d.ToString("yyyy-MM-dd"), autoHealed = 0, operatorApproved = 0, manualRequired = 0, stillActive = 0 })

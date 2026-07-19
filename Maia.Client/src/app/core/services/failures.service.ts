@@ -82,11 +82,12 @@ export class FailuresService {
       { params: new HttpParams().set('range', range).set('limit', limit) });
   }
 
-  /** 7-day stacked resolution breakdown — always returns exactly 7 day-buckets. */
-  getResolutionMix(): Observable<ResolutionMixItem[]> {
+  /** Resolution breakdown day-buckets within the chosen range. Shares the
+   *  24h/7d/30d toggle with the other dashboard charts. */
+  getResolutionMix(range: '24h' | '7d' | '30d' = '7d'): Observable<ResolutionMixItem[]> {
     return this.http.get<ResolutionMixItem[]>(
       `${this.base}/analytics/resolution-mix`,
-      { params: new HttpParams().set('range', '7d') });
+      { params: new HttpParams().set('range', range) });
   }
 }
 
