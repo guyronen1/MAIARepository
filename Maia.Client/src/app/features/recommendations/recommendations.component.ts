@@ -3,6 +3,8 @@ import { DatePipe, PercentPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { from, of } from 'rxjs';
+import { catchError, map, mergeMap, toArray } from 'rxjs/operators';
 import { RecommendationsService } from '../../core/services/recommendations.service';
 import { NotificationService } from '../../core/services/notification.service';
 import { ScanService } from '../../core/services/scan.service';
@@ -60,6 +62,23 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
         </select>
       </div>
 
+      <!-- Bulk action bar — appears when pending recs are selected. Filter to a
+           category/state first, select-all, then approve/reject the batch. -->
+      @if (canAct() && someSelected()) {
+        <div class="bulk-bar">
+          <span class="bulk-count">{{ selectedIds().size }} selected</span>
+          <div class="bulk-actions">
+            <button class="btn btn-success btn-sm" [disabled]="bulkRunning()" (click)="bulkApprove()">
+              @if (bulkRunning()) { <span class="spinner"></span> } ✓ Approve {{ selectedIds().size }}
+            </button>
+            <button class="btn btn-danger btn-sm" [disabled]="bulkRunning()" (click)="bulkReject()">
+              ✕ Reject {{ selectedIds().size }}
+            </button>
+            <button class="btn btn-ghost btn-sm" [disabled]="bulkRunning()" (click)="clearSelection()">Clear</button>
+          </div>
+        </div>
+      }
+
       <div class="card" style="padding:0;overflow:hidden">
         @if (loading()) {
           <div class="loading-overlay"><span class="spinner"></span> Loading…</div>
@@ -73,6 +92,15 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
           <table class="data-table">
             <thead>
               <tr>
+                @if (canAct()) {
+                  <th class="sel-col">
+                    <input type="checkbox" [checked]="allSelected()"
+                           [indeterminate]="someSelected() && !allSelected()"
+                           [disabled]="selectableRecs().length === 0"
+                           (change)="toggleSelectAll()"
+                           title="Select all actionable recommendations on this page" />
+                  </th>
+                }
                 <th>Failure</th>
                 <th>Category</th>
                 <th>Suggested Action</th>
@@ -86,7 +114,15 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
             </thead>
             <tbody>
               @for (r of filtered(); track r.recommendationId) {
-                <tr [class.row-executed]="r.isExecuted">
+                <tr [class.row-executed]="r.isExecuted" [class.row-selected]="selectedIds().has(r.recommendationId)">
+                  @if (canAct()) {
+                    <td class="sel-col">
+                      @if (isSelectable(r)) {
+                        <input type="checkbox" [checked]="selectedIds().has(r.recommendationId)"
+                               (change)="toggleSelect(r.recommendationId)" (click)="$event.stopPropagation()" />
+                      }
+                    </td>
+                  }
                   <td>
                     <div class="failure-ref" (click)="openFailure(r.failureId)">
                       <span class="failure-id">#{{ r.failureId }}</span>
@@ -220,6 +256,18 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
     .sev-dot.sev-none     { background:var(--text-dim); }
     .rec-action-cell { max-width: 280px; font-size: 12px; line-height: 1.5; }
     .row-executed td { opacity: 0.65; }
+    .row-selected td { background: var(--primary-light); }
+
+    /* Bulk selection */
+    .sel-col { width: 34px; text-align: center; }
+    .sel-col input[type="checkbox"] { width: auto; cursor: pointer; margin: 0; }
+    .bulk-bar {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      background: var(--primary-light); border: 1px solid var(--primary);
+      border-radius: var(--radius); padding: 8px 14px;
+    }
+    .bulk-count   { font-size: 13px; font-weight: 600; }
+    .bulk-actions { display: flex; gap: 8px; align-items: center; }
     .pagination { display:flex; align-items:center; justify-content:center; gap:16px; padding:12px; border-top:1px solid var(--border); }
     .policy-missing { display:flex; align-items:center; gap:6px; }
     .toggle.disabled { opacity: 0.4; cursor: not-allowed; }
@@ -256,6 +304,28 @@ export class RecommendationsComponent implements OnInit {
   filterText     = '';
   filterCategory = '';
   filterApproved = '';
+
+  // ── Bulk selection (pending recs only) ─────────────────────────────────────
+  selectedIds  = signal<Set<number>>(new Set<number>());
+  bulkRunning  = signal(false);
+  /** A rec is actionable (and thus selectable) only while pending. */
+  isSelectable = (r: Recommendation) => !r.isExecuted && r.operatorApproved === null && this.canAct();
+  selectableRecs = computed(() => this.filtered().filter(this.isSelectable));
+  allSelected  = computed(() => {
+    const sel = this.selectedIds(); const rows = this.selectableRecs();
+    return rows.length > 0 && rows.every(r => sel.has(r.recommendationId));
+  });
+  someSelected = computed(() => this.selectedIds().size > 0);
+
+  toggleSelect(id: number) {
+    this.selectedIds.update(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }
+  toggleSelectAll() {
+    this.selectedIds.update(() => this.allSelected()
+      ? new Set<number>()
+      : new Set<number>(this.selectableRecs().map(r => r.recommendationId)));
+  }
+  clearSelection() { this.selectedIds.set(new Set<number>()); }
 
   /** Drawer state — failureId of the rec currently open in the detail drawer.
    *  Driven by the ?selected query param so it's refresh-safe + shareable,
@@ -321,6 +391,39 @@ export class RecommendationsComponent implements OnInit {
     this.svc.rejectRecommendation(rec.recommendationId).subscribe();
   }
 
+  bulkApprove() { this.bulkAct('approve'); }
+  bulkReject()  { this.bulkAct('reject'); }
+
+  /**
+   * Approve or reject every selected pending rec. Each approve triggers a
+   * synchronous fix drain server-side, so we cap concurrency at 4 rather than
+   * firing the whole page at once. Per-item errors are caught so one failure
+   * doesn't abort the batch; we report how many succeeded and reload.
+   */
+  private bulkAct(kind: 'approve' | 'reject') {
+    const ids = [...this.selectedIds()];
+    if (ids.length === 0 || this.bulkRunning()) return;
+    if (kind === 'reject' &&
+        !confirm(`Reject ${ids.length} recommendation(s)? This declines the suggested fix for each.`)) return;
+
+    this.bulkRunning.set(true);
+    const call = (id: number) =>
+      (kind === 'approve' ? this.svc.approveRecommendation(id) : this.svc.rejectRecommendation(id))
+        .pipe(map(() => true), catchError(() => of(false)));
+
+    from(ids).pipe(mergeMap(id => call(id), 4), toArray()).subscribe(results => {
+      const ok = results.filter(Boolean).length;
+      const failed = results.length - ok;
+      this.notify.show(
+        `${ok} recommendation(s) ${kind === 'approve' ? 'approved' : 'rejected'}` +
+        (failed ? `; ${failed} failed.` : '.'),
+        failed ? 'error' : 'info');
+      this.clearSelection();
+      this.bulkRunning.set(false);
+      this.load();
+    });
+  }
+
   /**
    * Toggle FixPolicyRule.IsAutoHealEligible — affects FUTURE recommendations
    * generated for this ErrorType. Does NOT mutate AutoFixAvailable on existing
@@ -334,6 +437,17 @@ export class RecommendationsComponent implements OnInit {
 
     const ruleId   = rec.fixPolicyRuleId;
     const previous = rec.policyIsAutoHealEligible;
+
+    // Arming automation is consequential — confirm before enabling. On cancel,
+    // re-apply the unchanged model so the checkbox visual snaps back. Disarming
+    // (enabled=false) is safe and needs no confirmation.
+    if (enabled && !confirm(
+        'Arm auto-heal for this policy?\n\n' +
+        'Future recommendations for this error type will execute automatically, ' +
+        'without operator approval.')) {
+      this.applyPolicyChange(ruleId, previous);
+      return;
+    }
 
     // Optimistic: flip every visible rec that shares this policy
     this.applyPolicyChange(ruleId, enabled);
