@@ -30,11 +30,11 @@ import { StatusBadgeComponent } from '../../shared/status-badge/status-badge.com
         <div class="card">
           <div class="stage-pipeline">
             @for (s of stages(); track s.key) {
-              <div class="stage" [class.active]="s.key === failure()!.stage" [class.done]="isStageCompleted(s.key)">
+              <div class="stage" [class.active]="s.key === failure()!.stage && !isStageDone(s.key)" [class.done]="isStageDone(s.key)">
                 <div class="stage-dot">{{ s.icon }}</div>
                 <span class="stage-label">{{ s.label }}</span>
               </div>
-              @if (!$last) { <div class="stage-connector" [class.done]="isStageCompleted(s.key)"></div> }
+              @if (!$last) { <div class="stage-connector" [class.done]="isStageDone(s.key)"></div> }
             }
           </div>
         </div>
@@ -641,6 +641,15 @@ export class FailureDetailComponent implements OnDestroy {
     const order = this.stages().map(s => s.key);
     const current = this.failure()?.stage ?? 'Failed';
     return order.indexOf(key) < order.indexOf(current);
+  }
+
+  /** Green/done rendering. A stage is done if it's a past stage, OR it's the
+   *  terminal Fixed stage and the failure has actually reached it — so a
+   *  resolved failure ends on a green checkmark instead of leaving Fixed
+   *  highlighted as the "current" (orange) stage. */
+  isStageDone(key: string): boolean {
+    return this.isStageCompleted(key)
+        || (key === 'Fixed' && (this.failure()?.stage ?? '') === 'Fixed');
   }
 
   /** Value-encoded confidence band (red/amber/green) for the shared bar fill. */

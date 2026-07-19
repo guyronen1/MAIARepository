@@ -58,4 +58,17 @@ describe('FailureDetailComponent — stage derivation', () => {
     expect(c.isStageCompleted('Manual')).toBe(false);        // current
     expect(c.isStageCompleted('Fixed')).toBe(false);         // 4 < 3 is false (later)
   });
+
+  it('isStageDone: terminal Fixed reads done (green) once the failure is resolved', () => {
+    setFailure('Resolved', 'Fixed');
+    expect(c.isStageDone('Fixed')).toBe(true);          // reached terminal → green, not orange
+    expect(c.isStageDone('Acknowledged')).toBe(true);   // past
+  });
+
+  it('isStageDone: Fixed is NOT done while the failure is still mid-flow', () => {
+    setFailure('AwaitingManualAction', 'Acknowledged'); // current = Acknowledged
+    expect(c.isStageDone('Fixed')).toBe(false);         // not reached yet
+    expect(c.isStageDone('Recommended')).toBe(true);    // past
+    expect(c.isStageDone('Acknowledged')).toBe(false);  // current, still orange
+  });
 });
