@@ -68,7 +68,7 @@ const COL_DEFAULT_DIR: Record<string, SortDir> = {
           <h1>Failures</h1>
           <p class="text-muted text-sm">{{ paged()?.totalCount ?? 0 }} total failures</p>
         </div>
-        <button class="btn btn-primary btn-sm" (click)="reload()">
+        <button class="btn btn-ghost btn-sm" (click)="reload()">
           <span [class.spinner]="loading()"></span> Refresh
         </button>
       </div>
@@ -252,6 +252,29 @@ const COL_DEFAULT_DIR: Record<string, SortDir> = {
        either side. With the 760px drawer, total fitting width is ~720 (table) +
        760 (drawer) + gutter — anything narrower scrolls the page. */
     .list-card { min-width: 720px; padding: 0; overflow: hidden; }
+
+    /* ── Detail-drawer reflow (item P1.2) ────────────────────────────────
+       The drawer overlays the right ~760px of the viewport, so with the
+       list at full width the STATUS column — the one ↑/↓ navigation reads —
+       ends up hidden under the panel. When it's open, reflow the list into
+       the space to the inline-start of the panel: drop the min-width floor,
+       push the page content clear of the 760px drawer, let the card scroll
+       as a safety, and hide the two widest optional columns (Step/File,
+       Message) so the essential columns — including STATUS — stay visible.
+       Below 1100px the drawer effectively owns the width, so the reflow
+       padding is released (drawer's own max-width:100vw takes over). */
+    .failures-page { transition: padding-inline-end var(--transition); }
+    .failures-page.drawer-open { padding-inline-end: 776px; }
+    .failures-page.drawer-open .list-card { min-width: 0; overflow-x: auto; }
+    .failures-page.drawer-open .data-table th:nth-child(4),
+    .failures-page.drawer-open .data-table td:nth-child(4),   /* Step / File */
+    .failures-page.drawer-open .data-table th:nth-child(6),
+    .failures-page.drawer-open .data-table td:nth-child(6) {  /* Message */
+      display: none;
+    }
+    @media (max-width: 1100px) {
+      .failures-page.drawer-open { padding-inline-end: 20px; }
+    }
 
     .job-pill {
       display: inline-block;
