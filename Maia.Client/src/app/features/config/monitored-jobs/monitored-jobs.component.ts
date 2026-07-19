@@ -1,4 +1,4 @@
-import { Component, OnInit, computed, inject, signal } from '@angular/core';
+import { Component, HostListener, OnInit, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { ConfigService, JobType, UpsertJobRequest } from '../../../core/services/config.service';
@@ -40,7 +40,7 @@ import { JobFlowComponent } from './job-flow.component';
       } @else {
         <div class="jobs-list">
           @for (j of jobs(); track j.monitoredJobId) {
-            <div class="job-card">
+            <div class="job-card" [class.menu-open]="openMenuId() === j.monitoredJobId">
               <div class="job-card-header">
                 <div class="job-lead">
                   <span class="scan-icon">{{ jobIcon(j) }}</span>
@@ -72,8 +72,21 @@ import { JobFlowComponent } from './job-flow.component';
                             (click)="toggleFlow(j.monitoredJobId)">👁 Flow</button>
                   }
                   <a class="btn btn-ghost btn-sm" [routerLink]="['/config/monitored-jobs', j.monitoredJobId]">Configure →</a>
-                  <button class="btn btn-ghost btn-sm" (click)="openJobDrawer(j)">Edit</button>
-                  <button class="btn btn-danger btn-sm" (click)="deleteJob(j)">Delete</button>
+                  <!-- Edit + Delete moved into an overflow menu so the row's
+                       primary action (Configure) stands alone and no persistent
+                       red destructive button sits in the row. -->
+                  <div class="kebab-wrap">
+                    <button class="btn btn-ghost btn-sm kebab-btn"
+                            (click)="toggleMenu(j.monitoredJobId, $event)"
+                            [attr.aria-expanded]="openMenuId() === j.monitoredJobId"
+                            aria-haspopup="menu" title="More actions">⋯</button>
+                    @if (openMenuId() === j.monitoredJobId) {
+                      <div class="kebab-menu" role="menu">
+                        <button class="kebab-item" role="menuitem" (click)="openJobDrawer(j); closeMenu()">✎ Edit</button>
+                        <button class="kebab-item danger" role="menuitem" (click)="deleteJob(j); closeMenu()">🗑 Delete</button>
+                      </div>
+                    }
+                  </div>
                 </div>
               </div>
               @if (canViewFlow() && isFlowOpen(j.monitoredJobId)) {
@@ -151,6 +164,8 @@ import { JobFlowComponent } from './job-flow.component';
 
     .jobs-list  { display: flex; flex-direction: column; gap: 10px; }
     .job-card   { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    /* While the overflow menu is open, let it escape the card's clip. */
+    .job-card.menu-open { overflow: visible; }
     .job-card-header {
       display: flex; align-items: center; justify-content: space-between;
       padding: 14px 16px; gap: 12px; flex-wrap: wrap;
@@ -167,6 +182,26 @@ import { JobFlowComponent } from './job-flow.component';
     }
     .job-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
     .flow-toggle.active { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+
+    /* Overflow (⋯) menu — Edit / Delete. Anchored to the trailing edge
+       (inset-inline-end, RTL-safe). */
+    .kebab-wrap { position: relative; display: inline-flex; }
+    .kebab-btn  { font-size: 16px; line-height: 1; padding: 3px 9px; }
+    .kebab-menu {
+      position: absolute; inset-inline-end: 0; top: calc(100% + 4px);
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); box-shadow: var(--shadow);
+      z-index: 20; min-width: 150px; padding: 4px;
+      display: flex; flex-direction: column;
+    }
+    .kebab-item {
+      display: flex; align-items: center; gap: 8px;
+      background: none; border: none; text-align: start; cursor: pointer;
+      font: inherit; font-size: 12px; color: var(--text);
+      padding: 7px 10px; border-radius: var(--radius-sm); white-space: nowrap;
+      &:hover { background: var(--surface-2); }
+      &.danger { color: var(--danger); &:hover { background: var(--danger-bg); } }
+    }
 
     /* Drawer form (shell chrome comes from the shared DrawerComponent; the
        form here mirrors the config screen's drawers — same 560px form column,
@@ -196,6 +231,17 @@ export class MonitoredJobsComponent implements OnInit {
   drawerOpen  = signal(false);
   editingJob  = signal<MonitoredJob | null>(null);
   jobForm: UpsertJobRequest = this.blankJob();
+
+  // ── Per-row overflow (⋯) menu — at most one open at a time ─────────────────
+  openMenuId = signal<number | null>(null);
+  toggleMenu(jobId: number, ev: Event) {
+    ev.stopPropagation();   // don't let the document click immediately close it
+    this.openMenuId.update(cur => (cur === jobId ? null : jobId));
+  }
+  closeMenu() { this.openMenuId.set(null); }
+  /** Any click outside a menu, or Esc, closes it. */
+  @HostListener('document:click') onDocClick() { this.closeMenu(); }
+  @HostListener('document:keydown.escape') onEsc() { this.closeMenu(); }
 
   // ── Read-only flow view (Operator+); Users never see the icon ──────────────
   canViewFlow = computed(() => this.auth.hasAtLeast('Operator'));
