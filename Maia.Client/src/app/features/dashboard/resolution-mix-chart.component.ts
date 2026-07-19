@@ -47,9 +47,9 @@ const COLORS = {
               <div class="donut-center" aria-hidden="true">
                 <div class="donut-pct">{{ autoHealPct() }}%</div>
                 <div class="donut-cap">auto-healed</div>
+                <div class="donut-of">of {{ resolvedTotal() }} resolved</div>
               </div>
             </div>
-            <div class="donut-sub text-muted text-sm">of {{ resolvedTotal() }} resolved</div>
             <div class="donut-legend">
               <span class="lg"><span class="lg-dot dot-auto"></span>Auto-Healed <b>{{ totals().autoHealed }}</b></span>
               <span class="lg"><span class="lg-dot dot-op"></span>Operator-Approved <b>{{ totals().operatorApproved }}</b></span>
@@ -71,7 +71,7 @@ const COLORS = {
     </div>
   `,
   styles: [`
-    .chart-card { padding: 10px 12px; }
+    .chart-card { padding: 10px 12px; display: flex; flex-direction: column; }
     .chart-header {
       display: flex; justify-content: space-between; align-items: center;
       margin-bottom: 6px;
@@ -92,18 +92,18 @@ const COLORS = {
       color: var(--text-muted); text-align: center;
     }
 
-    /* min-height matches the other two charts' 200px body so the row stays
-       uniform; content centres when the card stretches to the tallest sibling. */
-    .donut-block { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 200px; }
-    .donut-wrap  { position: relative; height: 140px; width: 100%; }
+    /* flex:1 fills the card's remaining height so the donut centres within
+       whatever the row height is (the grid stretches all three cards equal). */
+    .donut-block { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
+    .donut-wrap  { position: relative; height: 132px; width: 100%; }
     .donut-center {
       position: absolute; inset: 0;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
       pointer-events: none;
     }
-    .donut-pct { font-size: 28px; font-weight: 800; color: var(--text); line-height: 1; }
+    .donut-pct { font-size: 26px; font-weight: 800; color: var(--text); line-height: 1; }
     .donut-cap { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-    .donut-sub { margin-top: -2px; }
+    .donut-of  { font-size: 10px; color: var(--text-dim); margin-top: 1px; }
 
     .donut-legend {
       display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px;
