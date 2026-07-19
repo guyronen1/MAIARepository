@@ -60,37 +60,46 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
 
       </div>
 
-      <!-- KPI Cards — the five action/problem tiles, click drills into /failures
-           with the matching view. "Resolved Today" is pure reassurance (no action)
-           so it's demoted to the slim strip below, not competing for attention with
-           the alarm tiles (item 4 — visual hierarchy). -->
-      <div class="kpi-grid">
-        <button class="kpi-card danger" (click)="drill('active')" title="Show all active failures">
-          <div class="kpi-icon">⚠</div>
-          <div class="kpi-body">
-            <div class="kpi-value">{{ stats().active }}</div>
-            <div class="kpi-label">Active Failures</div>
-          </div>
-        </button>
-        <button class="kpi-card info" (click)="drill('awaiting-action')" title="Show failures awaiting operator action">
+      <!-- Hero tiles — the two "what needs me now" queues, visually dominant.
+           Awaiting Action (operator decision pending) and Manual Required
+           (operator must act off-system) are the only tiles that answer
+           "is there work for me right now"; everything else is context and
+           lives in the compact strip below. Zero counts are muted so an empty
+           queue recedes rather than shouting a bold "0". All tiles drill into
+           their pre-filtered queue. -->
+      <div class="kpi-hero-row">
+        <button class="kpi-hero info" (click)="drill('awaiting-action')" title="Show failures awaiting operator action">
           <div class="kpi-icon">💡</div>
           <div class="kpi-body">
-            <div class="kpi-value">{{ stats().awaitingAction }}</div>
+            <div class="kpi-value" [class.zero]="stats().awaitingAction === 0">{{ stats().awaitingAction }}</div>
             <div class="kpi-label">Awaiting Action</div>
           </div>
         </button>
-        <button class="kpi-card warning" (click)="drill('manual-required')" title="Failures that need operator intervention">
+        <button class="kpi-hero warning" (click)="drill('manual-required')" title="Failures that need operator intervention">
           <div class="kpi-icon">!</div>
           <div class="kpi-body">
-            <div class="kpi-value">{{ stats().manualRequired }}</div>
+            <div class="kpi-value" [class.zero]="stats().manualRequired === 0">{{ stats().manualRequired }}</div>
             <div class="kpi-label">Manual Required</div>
+          </div>
+        </button>
+      </div>
+
+      <!-- Secondary strip — context/reassurance metrics. Compact, click-through,
+           zero-muted. Fix Failures Today keeps its alarm treatment (system
+           problem) even here. -->
+      <div class="kpi-secondary-strip">
+        <button class="kpi-card danger" (click)="drill('active')" title="Show all active failures">
+          <div class="kpi-icon">⚠</div>
+          <div class="kpi-body">
+            <div class="kpi-value" [class.zero]="stats().active === 0">{{ stats().active }}</div>
+            <div class="kpi-label">Active Failures</div>
           </div>
         </button>
         <button class="kpi-card danger alarm" (click)="drill('fix-failed')"
                 title="Failures whose automated fix attempts failed today — operator review needed">
-          <div class="kpi-icon kpi-icon-alarm">🚨</div>
+          <div class="kpi-icon" [class.kpi-icon-alarm]="stats().fixFailedToday > 0">🚨</div>
           <div class="kpi-body">
-            <div class="kpi-value">{{ stats().fixFailedToday }}</div>
+            <div class="kpi-value" [class.zero]="stats().fixFailedToday === 0">{{ stats().fixFailedToday }}</div>
             <div class="kpi-label">Fix Failures Today</div>
           </div>
         </button>
@@ -98,19 +107,16 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
                 title="Active failures MAIA can't act on yet — no classification rule, or no fix policy for the matched error type. Opens the Unconfigured screen to triage + configure.">
           <div class="kpi-icon">🛠</div>
           <div class="kpi-body">
-            <div class="kpi-value">{{ stats().unconfigured }}</div>
+            <div class="kpi-value" [class.zero]="stats().unconfigured === 0">{{ stats().unconfigured }}</div>
             <div class="kpi-label">Unconfigured</div>
             <div class="kpi-breakdown">No class: {{ stats().unclassified }} · No policy: {{ stats().unconfiguredNoPolicy }}</div>
           </div>
         </button>
-        <!-- Resolved Today — reassurance metric (no action). Kept as a tile but
-             de-emphasized: last position, narrower column + smaller value/icon
-             (item 4) so it doesn't compete with the action tiles. -->
-        <button class="kpi-card success compact" (click)="drill('resolved')"
+        <button class="kpi-card success" (click)="drill('resolved')"
                 title="Failures resolved today (auto-heal + operator approval)">
           <div class="kpi-icon">✓</div>
           <div class="kpi-body">
-            <div class="kpi-value">{{ stats().resolvedToday }}</div>
+            <div class="kpi-value" [class.zero]="stats().resolvedToday === 0">{{ stats().resolvedToday }}</div>
             <div class="kpi-label">Resolved Today</div>
             <div class="kpi-breakdown">Auto {{ stats().autoFixedToday }} · Manual {{ stats().manuallyFixedToday }}</div>
           </div>
@@ -316,19 +322,35 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
       max-width: 100%;
     }
 
-    /* Five equal action tiles + a narrower 6th (Resolved Today) so the
-       reassurance metric reads as secondary without leaving the row. */
-    .kpi-grid { display: grid; grid-template-columns: repeat(5, 1fr) 0.7fr; gap: 10px; }
-
-    /* Resolved Today, de-emphasized: smaller value/icon + muted fill. The
-       narrower grid column (above) does the width shrink; this softens the
-       content so it clearly reads as secondary reassurance, not an alarm. */
-    .kpi-card.compact {
-      padding: 8px 10px;
-      background: var(--surface-2);
+    /* Hero row — the two "what needs me now" queues, dominant. Logical
+       border-inline-start accent so it mirrors correctly under RTL. */
+    .kpi-hero-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+    .kpi-hero {
+      /* button reset — keyboard-accessible <button> */
+      font: inherit; color: inherit; text-align: start;
+      cursor: pointer;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      transition: transform var(--transition), box-shadow var(--transition);
+      &:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
+      &:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+      &.info    { border-inline-start: 4px solid var(--info);    }
+      &.warning { border-inline-start: 4px solid var(--warning); }
+      .kpi-icon  { font-size: 30px; opacity: 0.8; }
+      .kpi-value { font-size: 40px; font-weight: 800; line-height: 1; }
+      .kpi-label { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
     }
-    .kpi-card.compact .kpi-value { font-size: 16px; }
-    .kpi-card.compact .kpi-icon  { font-size: 16px; }
+
+    /* Secondary strip — context metrics, compact, wraps on narrow viewports. */
+    .kpi-secondary-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+
+    /* Zero-value muting — an empty queue recedes instead of shouting a bold 0. */
+    .kpi-value.zero { opacity: 0.4; font-weight: 600; color: var(--text-muted); }
     .kpi-card {
       /* button reset — these are <button> elements so they're keyboard-accessible */
       font: inherit; color: inherit; text-align: left;
