@@ -384,6 +384,9 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
     .chip-value { font-size: 18px; font-weight: 700; line-height: 1; }
     /* Fix Failures is a system-problem signal — number reads red when > 0. */
     .kpi-chip.alarm:not(.zero) .chip-value { color: var(--danger); }
+    /* Zero → recede fully: neutralise the accent too (comes after the colour
+       rules so it wins on equal specificity), and dim label + number. */
+    .kpi-chip.zero { border-inline-start-color: var(--border); }
     .kpi-chip.zero .chip-label,
     .kpi-chip.zero .chip-value { color: var(--text-dim); }
 
