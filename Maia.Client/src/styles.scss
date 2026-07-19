@@ -29,6 +29,12 @@
   --neutral:       #4b5563;
   --neutral-bd:    #d3d8e2;
 
+  // Dashboard hero-tile fills — faint diagonal wash behind the two action
+  // tiles (amber = Awaiting Action, red = Manual Required). Very subtle so the
+  // number stays the focus; the accent lives on border-inline-start.
+  --hero-amber-grad: linear-gradient(135deg, #ffffff, #fff7ee);
+  --hero-red-grad:   linear-gradient(135deg, #ffffff, #fdf3f3);
+
   // Warning PANELS/PILLS (soft-warn, auto-heal banner, coverage-gap pills, the
   // Flow view's no-classification row). Distinct from --warning/-bg (badge/text
   // accents) — these carry their own high-contrast text so they read on both
@@ -87,6 +93,9 @@
   --neutral-bg:    #232a37;
   --neutral:       #a7b0c0;
   --neutral-bd:    #333c4d;
+
+  --hero-amber-grad: linear-gradient(135deg, #15130c, #1a160d);
+  --hero-red-grad:   linear-gradient(135deg, #171010, #1c0f0f);
 
   // Warning panels/pills on dark — amber tint over the dark card + bright amber
   // text (readable), instead of opaque light amber blocks.

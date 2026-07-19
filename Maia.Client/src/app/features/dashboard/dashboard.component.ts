@@ -1,6 +1,6 @@
 import { Component, OnDestroy, OnInit, computed, effect, inject, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { DashboardStats } from '../../core/services/failures.service';
 import { ScanService } from '../../core/services/scan.service';
@@ -24,6 +24,7 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
   standalone: true,
   imports: [
     DatePipe,
+    RouterLink,
     ErrorsOverTimeChartComponent,
     FailuresByJobChartComponent,
     ResolutionMixChartComponent,
@@ -60,67 +61,68 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
 
       </div>
 
-      <!-- Hero tiles — the two "what needs me now" queues, visually dominant.
-           Awaiting Action (operator decision pending) and Manual Required
-           (operator must act off-system) are the only tiles that answer
-           "is there work for me right now"; everything else is context and
-           lives in the compact strip below. Zero counts are muted so an empty
-           queue recedes rather than shouting a bold "0". All tiles drill into
-           their pre-filtered queue. -->
-      <div class="kpi-hero-row">
-        <button class="kpi-hero info" (click)="drill('awaiting-action')" title="Show failures awaiting operator action">
-          <div class="kpi-icon">💡</div>
-          <div class="kpi-body">
-            <div class="kpi-value" [class.zero]="stats().awaitingAction === 0">{{ stats().awaitingAction }}</div>
-            <div class="kpi-label">Awaiting Action</div>
+      <!-- Action-first KPI row (P0.3): two hero tiles + a compact 2×2 secondary
+           block, one row. Awaiting Action (amber — a decision is pending) and
+           Manual Required (red — no automation will help, the loudest bucket)
+           dominate; the four context metrics recede into the nested block.
+           Every tile routerLinks to its pre-filtered queue. Zero counts dim
+           (label + number) so an empty queue recedes. Accents use
+           border-inline-start (RTL-safe). -->
+      <div class="kpi-row">
+        <a class="kpi-hero amber" [class.zero]="stats().awaitingAction === 0"
+           routerLink="/failures" [queryParams]="{ view: 'awaiting-action' }"
+           title="Failures awaiting an operator decision">
+          <div class="hero-eyebrow"><span class="hero-ico">⏳</span> Awaiting Action</div>
+          <div class="hero-body">
+            <div class="hero-main">
+              <span class="hero-value">{{ stats().awaitingAction }}</span>
+              <span class="hero-verb">Review →</span>
+            </div>
+            <div class="hero-sub">needs a decision</div>
           </div>
-        </button>
-        <button class="kpi-hero warning" (click)="drill('manual-required')" title="Failures that need operator intervention">
-          <div class="kpi-icon">!</div>
-          <div class="kpi-body">
-            <div class="kpi-value" [class.zero]="stats().manualRequired === 0">{{ stats().manualRequired }}</div>
-            <div class="kpi-label">Manual Required</div>
-          </div>
-        </button>
-      </div>
+        </a>
 
-      <!-- Secondary strip — context/reassurance metrics. Compact, click-through,
-           zero-muted. Fix Failures Today keeps its alarm treatment (system
-           problem) even here. -->
-      <div class="kpi-secondary-strip">
-        <button class="kpi-card danger" (click)="drill('active')" title="Show all active failures">
-          <div class="kpi-icon">⚠</div>
-          <div class="kpi-body">
-            <div class="kpi-value" [class.zero]="stats().active === 0">{{ stats().active }}</div>
-            <div class="kpi-label">Active Failures</div>
+        <a class="kpi-hero red" [class.zero]="stats().manualRequired === 0"
+           routerLink="/failures" [queryParams]="{ view: 'manual-required' }"
+           title="Failures that need operator intervention — no automation applies">
+          <div class="hero-eyebrow"><span class="hero-ico">⚠</span> Manual Required</div>
+          <div class="hero-body">
+            <div class="hero-main">
+              <span class="hero-value">{{ stats().manualRequired }}</span>
+              <span class="hero-verb">Handle →</span>
+            </div>
+            <div class="hero-sub">operator must act</div>
           </div>
-        </button>
-        <button class="kpi-card danger alarm" (click)="drill('fix-failed')"
-                title="Failures whose automated fix attempts failed today — operator review needed">
-          <div class="kpi-icon" [class.kpi-icon-alarm]="stats().fixFailedToday > 0">🚨</div>
-          <div class="kpi-body">
-            <div class="kpi-value" [class.zero]="stats().fixFailedToday === 0">{{ stats().fixFailedToday }}</div>
-            <div class="kpi-label">Fix Failures Today</div>
-          </div>
-        </button>
-        <button class="kpi-card neutral" (click)="router.navigate(['/unconfigured'])"
-                title="Active failures MAIA can't act on yet — no classification rule, or no fix policy for the matched error type. Opens the Unconfigured screen to triage + configure.">
-          <div class="kpi-icon">🛠</div>
-          <div class="kpi-body">
-            <div class="kpi-value" [class.zero]="stats().unconfigured === 0">{{ stats().unconfigured }}</div>
-            <div class="kpi-label">Unconfigured</div>
-            <div class="kpi-breakdown">No class: {{ stats().unclassified }} · No policy: {{ stats().unconfiguredNoPolicy }}</div>
-          </div>
-        </button>
-        <button class="kpi-card success" (click)="drill('resolved')"
-                title="Failures resolved today (auto-heal + operator approval)">
-          <div class="kpi-icon">✓</div>
-          <div class="kpi-body">
-            <div class="kpi-value" [class.zero]="stats().resolvedToday === 0">{{ stats().resolvedToday }}</div>
-            <div class="kpi-label">Resolved Today</div>
-            <div class="kpi-breakdown">Auto {{ stats().autoFixedToday }} · Manual {{ stats().manuallyFixedToday }}</div>
-          </div>
-        </button>
+        </a>
+
+        <!-- Secondary 2×2 — recessed surface so it reads as context. Titles
+             carry the breakdowns the old tiles showed inline (kept compact). -->
+        <div class="kpi-secondary">
+          <a class="kpi-chip" [class.zero]="stats().active === 0"
+             routerLink="/failures" [queryParams]="{ view: 'active' }"
+             title="All active failures">
+            <span class="chip-label">Active</span>
+            <span class="chip-value">{{ stats().active }}</span>
+          </a>
+          <a class="kpi-chip" [class.zero]="stats().unconfigured === 0"
+             routerLink="/unconfigured"
+             [title]="'Unconfigured — no class: ' + stats().unclassified + ' · no policy: ' + stats().unconfiguredNoPolicy + '. Opens the Unconfigured screen.'">
+            <span class="chip-label">Unconfigured</span>
+            <span class="chip-value">{{ stats().unconfigured }}</span>
+          </a>
+          <a class="kpi-chip alarm" [class.zero]="stats().fixFailedToday === 0"
+             routerLink="/failures" [queryParams]="{ view: 'fix-failed' }"
+             title="Failures whose automated fix attempts failed today — operator review needed">
+            <span class="chip-label">Fix Failures</span>
+            <span class="chip-value">{{ stats().fixFailedToday }}</span>
+          </a>
+          <a class="kpi-chip" [class.zero]="stats().resolvedToday === 0"
+             routerLink="/failures" [queryParams]="{ view: 'resolved' }"
+             [title]="'Resolved today — auto ' + stats().autoFixedToday + ' · manual ' + stats().manuallyFixedToday">
+            <span class="chip-label">Resolved</span>
+            <span class="chip-value">{{ stats().resolvedToday }}</span>
+          </a>
+        </div>
       </div>
 
       <!-- Analytics: all three charts in one row. Errors Over Time is widest
@@ -322,78 +324,67 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
       max-width: 100%;
     }
 
-    /* Hero row — the two "what needs me now" queues, dominant. Logical
-       border-inline-start accent so it mirrors correctly under RTL. */
-    .kpi-hero-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+    /* ── Action-first KPI row (P0.3) ─────────────────────────────────────
+       Two hero tiles + a compact 2×2 secondary block, one row. Accents are
+       border-inline-start (RTL-safe). Heroes stay the height of the 2×2
+       block (not tall). */
+    .kpi-row { display: grid; grid-template-columns: 1fr 1fr 1.15fr; gap: 12px; align-items: stretch; }
+
     .kpi-hero {
-      /* button reset — keyboard-accessible <button> */
-      font: inherit; color: inherit; text-align: start;
-      cursor: pointer;
-      background: var(--surface);
+      text-decoration: none; color: inherit; cursor: pointer;
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      padding: 18px 20px;
-      display: flex;
-      align-items: center;
-      gap: 16px;
+      padding: 12px 16px;
+      display: flex; flex-direction: column; justify-content: space-between; gap: 8px;
       transition: transform var(--transition), box-shadow var(--transition);
       &:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
       &:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-      &.info    { border-inline-start: 4px solid var(--info);    }
-      &.warning { border-inline-start: 4px solid var(--warning); }
-      .kpi-icon  { font-size: 30px; opacity: 0.8; }
-      .kpi-value { font-size: 40px; font-weight: 800; line-height: 1; }
-      .kpi-label { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+      &.amber { border-inline-start: 5px solid var(--warning); background: var(--hero-amber-grad); }
+      &.red   { border-inline-start: 5px solid var(--danger);  background: var(--hero-red-grad); }
     }
+    .hero-eyebrow {
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--text-muted); display: flex; align-items: center; gap: 5px;
+    }
+    .hero-ico { font-size: 13px; }
+    .hero-body { display: flex; flex-direction: column; gap: 2px; }
+    .hero-main { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; }
+    .hero-value { font-size: 34px; font-weight: 800; line-height: 1; color: var(--text); }
+    .hero-verb { font-size: 12px; font-weight: 600; white-space: nowrap; }
+    .kpi-hero.amber .hero-verb { color: var(--warning); }
+    .kpi-hero.red   .hero-verb { color: var(--danger);  }
+    .hero-sub { font-size: 11px; color: var(--text-muted); }
 
-    /* Secondary strip — context metrics, compact, wraps on narrow viewports. */
-    .kpi-secondary-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+    /* Zero → the whole tile recedes: mute the accent + fill, dim label+number. */
+    .kpi-hero.zero { background: var(--surface); border-inline-start-color: var(--border); }
+    .kpi-hero.zero .hero-value,
+    .kpi-hero.zero .hero-eyebrow,
+    .kpi-hero.zero .hero-verb,
+    .kpi-hero.zero .hero-sub { color: var(--text-dim); }
 
-    /* Zero-value muting — an empty queue recedes instead of shouting a bold 0. */
-    .kpi-value.zero { opacity: 0.4; font-weight: 600; color: var(--text-muted); }
-    .kpi-card {
-      /* button reset — these are <button> elements so they're keyboard-accessible */
-      font: inherit; color: inherit; text-align: left;
-      cursor: pointer;
-      background: var(--surface);
+    /* Secondary 2×2 — recessed surface, label-left / number-right chips. */
+    .kpi-secondary { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 8px; }
+    .kpi-chip {
+      text-decoration: none; color: inherit; cursor: pointer;
+      background: var(--surface-2);
       border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 10px 12px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      transition: transform var(--transition), box-shadow var(--transition);
-      &:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-      &:focus-visible { outline: 2px solid var(--primary, #6366f1); outline-offset: 2px; }
-      &.danger  { border-left: 3px solid var(--danger);  }
-      &.warning { border-left: 3px solid var(--warning); }
-      &.info    { border-left: 3px solid var(--info);    }
-      &.success { border-left: 3px solid var(--success); }
-      &.neutral { border-left: 3px solid var(--text-muted, #94a3b8); }
-      &.auto    { border-left: 3px solid var(--primary, #6366f1); }
-      &.muted   { border-left: 3px solid var(--border); }
+      border-radius: var(--radius-sm);
+      padding: 8px 10px;
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      transition: background var(--transition), transform var(--transition);
+      &:hover { transform: translateY(-1px); background: var(--surface-3); }
+      &:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
     }
-    .kpi-icon { font-size: 20px; opacity: 0.7; flex-shrink: 0; }
-    .kpi-value { font-size: 22px; font-weight: 700; line-height: 1; }
-    .kpi-label { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-    .kpi-breakdown { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+    .chip-label { font-size: 11px; color: var(--text-muted); }
+    .chip-value { font-size: 18px; font-weight: 700; line-height: 1; }
+    /* Fix Failures is a system-problem signal — number reads red when > 0. */
+    .kpi-chip.alarm:not(.zero) .chip-value { color: var(--danger); }
+    .kpi-chip.zero .chip-label,
+    .kpi-chip.zero .chip-value { color: var(--text-dim); }
 
-    /* Fix Failures Today tile — system-problem signal. Full-opacity icon
-       (vs the 0.7 default) so the alarm visually pops above the other
-       danger tile (Active Failures). Thicker red left border doubles the
-       semantic weight. Pulse runs whenever the icon is present — operators
-       on a quiet day see a "0" count which already reads as "no problem",
-       so the pulse on top of "0" is informational, not harassment. On a
-       noisy day the count + pulse together demand attention. Respects
-       prefers-reduced-motion. */
-    .kpi-card.alarm        { border-left-width: 4px; }
-    .kpi-icon-alarm        { opacity: 1; animation: alarm-pulse 2.4s ease-in-out infinite; }
-    @keyframes alarm-pulse {
-      0%, 100% { transform: scale(1);    filter: drop-shadow(0 0 0 rgba(220,38,38,0)); }
-      50%      { transform: scale(1.08); filter: drop-shadow(0 0 4px rgba(220,38,38,0.6)); }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      .kpi-icon-alarm { animation: none; opacity: 1; }
+    /* Stack on narrow viewports so nothing crushes. */
+    @media (max-width: 900px) {
+      .kpi-row { grid-template-columns: 1fr; }
     }
 
     .row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -760,15 +751,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
   ngOnDestroy() {
     this.statusSvc.stop();
     this.clearBeatTimer();
-  }
-
-  /** Navigate to the failures list with the matching server-side filter. */
-  drill(view:
-    | 'active' | 'unclassified' | 'awaiting-action'
-    | 'resolved' | 'manual-required'
-    | 'auto-fixed' | 'operator-fixed'
-    | 'fix-failed' | 'unconfigured' | 'all') {
-    this.router.navigate(['/failures'], { queryParams: view === 'all' ? {} : { view } });
   }
 
   triggerScan(job: MonitoredJob) {
