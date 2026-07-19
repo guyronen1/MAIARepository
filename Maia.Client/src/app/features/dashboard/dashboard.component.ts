@@ -99,24 +99,32 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
              carry the breakdowns the old tiles showed inline (kept compact). -->
         <div class="kpi-secondary">
           <a class="kpi-chip danger" [class.zero]="stats().active === 0"
+             [attr.tabindex]="stats().active === 0 ? -1 : null"
+             [attr.aria-disabled]="stats().active === 0 || null"
              routerLink="/failures" [queryParams]="{ view: 'active' }"
              title="All active failures">
             <span class="chip-label">Active</span>
             <span class="chip-value">{{ stats().active }}</span>
           </a>
           <a class="kpi-chip neutral" [class.zero]="stats().unconfigured === 0"
+             [attr.tabindex]="stats().unconfigured === 0 ? -1 : null"
+             [attr.aria-disabled]="stats().unconfigured === 0 || null"
              routerLink="/unconfigured"
              [title]="'Unconfigured — no class: ' + stats().unclassified + ' · no policy: ' + stats().unconfiguredNoPolicy + '. Opens the Unconfigured screen.'">
             <span class="chip-label">Unconfigured</span>
             <span class="chip-value">{{ stats().unconfigured }}</span>
           </a>
           <a class="kpi-chip alarm danger" [class.zero]="stats().fixFailedToday === 0"
+             [attr.tabindex]="stats().fixFailedToday === 0 ? -1 : null"
+             [attr.aria-disabled]="stats().fixFailedToday === 0 || null"
              routerLink="/failures" [queryParams]="{ view: 'fix-failed' }"
              title="Failures whose automated fix attempts failed today — operator review needed">
             <span class="chip-label">Fix Failures</span>
             <span class="chip-value">{{ stats().fixFailedToday }}</span>
           </a>
           <a class="kpi-chip success" [class.zero]="stats().resolvedToday === 0"
+             [attr.tabindex]="stats().resolvedToday === 0 ? -1 : null"
+             [attr.aria-disabled]="stats().resolvedToday === 0 || null"
              routerLink="/failures" [queryParams]="{ view: 'resolved' }"
              [title]="'Resolved today — auto ' + stats().autoFixedToday + ' · manual ' + stats().manuallyFixedToday">
             <span class="chip-label">Resolved</span>
@@ -384,9 +392,11 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
     .chip-value { font-size: 18px; font-weight: 700; line-height: 1; }
     /* Fix Failures is a system-problem signal — number reads red when > 0. */
     .kpi-chip.alarm:not(.zero) .chip-value { color: var(--danger); }
-    /* Zero → recede fully: neutralise the accent too (comes after the colour
-       rules so it wins on equal specificity), and dim label + number. */
-    .kpi-chip.zero { border-inline-start-color: var(--border); }
+    /* Zero → recede fully AND go inert (nothing to drill into): neutralise
+       the accent (comes after the colour rules so it wins on equal
+       specificity), dim label + number, and disable interaction. tabindex=-1
+       + aria-disabled on the anchors keep keyboard/AT out too. */
+    .kpi-chip.zero { border-inline-start-color: var(--border); pointer-events: none; cursor: default; }
     .kpi-chip.zero .chip-label,
     .kpi-chip.zero .chip-value { color: var(--text-dim); }
 
