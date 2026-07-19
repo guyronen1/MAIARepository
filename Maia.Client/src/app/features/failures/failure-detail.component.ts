@@ -8,6 +8,7 @@ import { NotificationService } from '../../core/services/notification.service';
 import { FailureStatus, FixExecution, Recommendation } from '../../core/models';
 import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
 import { confidenceBand } from '../../core/util/confidence.util';
+import { StatusBadgeComponent } from '../../shared/status-badge/status-badge.component';
 
 /**
  * Pure detail-content for a single failure. Input-driven — the host (currently
@@ -19,7 +20,7 @@ import { confidenceBand } from '../../core/util/confidence.util';
 @Component({
   selector: 'app-failure-detail',
   standalone: true,
-  imports: [DatePipe, PercentPipe, PluralizePipe],
+  imports: [DatePipe, PercentPipe, PluralizePipe, StatusBadgeComponent],
   template: `
     <div class="detail-root">
       @if (loading()) {
@@ -58,7 +59,7 @@ import { confidenceBand } from '../../core/util/confidence.util';
             <div class="card-header">
               <h3>Failure Details</h3>
               <div class="header-actions">
-                <span class="badge" [class]="'badge-' + failure()!.status.toLowerCase()">{{ statusLabel(failure()!.status) }}</span>
+                <app-status-badge [status]="failure()!.status" />
                 @if (canAct() && (failure()!.status === 'AwaitingManualAction' || failure()!.status === 'ManualRequired')) {
                   <!-- Exit ramp for the off-system manual flow. Visible when:
                          • Status = AwaitingManualAction → operator approved a
@@ -543,12 +544,6 @@ export class FailureDetailComponent implements OnDestroy {
 
   /** Inflight flag for the Mark Resolved button so we can disable + spinner. */
   markingResolved = signal(false);
-
-  /** Human-friendly status label — adds a space to the camel-cased enum
-   *  values so "AwaitingManualAction" reads as "Awaiting Manual Action". */
-  statusLabel(status: string): string {
-    return status.replace(/([A-Z])/g, ' $1').trim();
-  }
 
   /** Operator confirms the off-system work is done. Backend is idempotent
    *  (re-marking an already-Resolved failure returns 204), so a double-click

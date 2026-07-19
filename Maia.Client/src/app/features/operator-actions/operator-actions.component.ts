@@ -8,6 +8,7 @@ import { NotificationService } from '../../core/services/notification.service';
 import { OperatorActionEntry, PagedResult } from '../../core/models';
 import { FailureDetailComponent } from '../failures/failure-detail.component';
 import { DrawerComponent } from '../../shared/drawer/drawer.component';
+import { StatusBadgeComponent } from '../../shared/status-badge/status-badge.component';
 
 /**
  * Operator Actions — the DECISION HISTORY view: one row per Approve / Reject /
@@ -19,7 +20,7 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
 @Component({
   selector: 'app-operator-actions',
   standalone: true,
-  imports: [DatePipe, FormsModule, FailureDetailComponent, DrawerComponent],
+  imports: [DatePipe, FormsModule, FailureDetailComponent, DrawerComponent, StatusBadgeComponent],
   template: `
     <div class="page">
       <div class="page-header">
@@ -85,7 +86,7 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
                         <span class="badge badge-fixed">Executed</span>
                       }
                       @if (a.failureStatus; as st) {
-                        <span class="badge" [class]="'badge-' + st.toLowerCase()">{{ st }}</span>
+                        <app-status-badge [status]="st" />
                       }
                     </div>
                   </td>

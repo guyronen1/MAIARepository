@@ -11,6 +11,7 @@ import { FailuresService } from '../../core/services/failures.service';
 import { NotificationService } from '../../core/services/notification.service';
 import { JobFailure, PagedResult } from '../../core/models';
 import { severityTone, severityLabel } from '../../core/util/severity.util';
+import { StatusBadgeComponent } from '../../shared/status-badge/status-badge.component';
 import { FailureDetailComponent } from './failure-detail.component';
 import { DrawerComponent } from '../../shared/drawer/drawer.component';
 
@@ -60,7 +61,7 @@ const COL_DEFAULT_DIR: Record<string, SortDir> = {
 @Component({
   selector: 'app-failures-list',
   standalone: true,
-  imports: [DatePipe, FormsModule, FailureDetailComponent, DrawerComponent],
+  imports: [DatePipe, FormsModule, FailureDetailComponent, DrawerComponent, StatusBadgeComponent],
   template: `
     <div class="page failures-page" [class.drawer-open]="selectedId() !== null">
       <div class="page-header">
@@ -161,7 +162,7 @@ const COL_DEFAULT_DIR: Record<string, SortDir> = {
                   </td>
                   <td class="text-muted text-sm">{{ f.detectedAt | date:'dd/MM/yy HH:mm' }}</td>
                   <td>
-                    <span class="badge" [class]="'badge-' + f.status.toLowerCase()">{{ f.status }}</span>
+                    <app-status-badge [status]="f.status" />
                     @if (f.hasRecentFixFailure) {
                       <!-- Auto-fix or operator approval tried + failed today.
                            Distinct from a plain ManualRequired (operator hasn't

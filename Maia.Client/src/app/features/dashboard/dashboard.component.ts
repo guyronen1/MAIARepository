@@ -12,6 +12,7 @@ import { ResolutionMixChartComponent } from './resolution-mix-chart.component';
 import { FailureDetailComponent } from '../failures/failure-detail.component';
 import { DrawerComponent } from '../../shared/drawer/drawer.component';
 import { scanTypeLabelFromNames, scanTypeTitleFromSources } from '../../core/util/scan-type-label.util';
+import { StatusBadgeComponent } from '../../shared/status-badge/status-badge.component';
 
 type ChartRange = '24h' | '7d' | '30d';
 
@@ -25,6 +26,7 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
   imports: [
     DatePipe,
     RouterLink,
+    StatusBadgeComponent,
     ErrorsOverTimeChartComponent,
     FailuresByJobChartComponent,
     ResolutionMixChartComponent,
@@ -172,7 +174,7 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
                     <td class="truncate" style="max-width:120px" dir="auto">{{ f.stepName ?? '—' }}</td>
                     <td><span class="badge badge-type">{{ f.errorTypeCode ?? 'Unknown' }}</span></td>
                     <td class="text-muted">{{ f.detectedAt | date:'dd/MM HH:mm' }}</td>
-                    <td><span class="badge" [class]="'badge-' + f.status.toLowerCase()">{{ f.status }}</span></td>
+                    <td><app-status-badge [status]="f.status" /></td>
                   </tr>
                 }
               </tbody>
