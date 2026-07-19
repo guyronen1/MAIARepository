@@ -10,6 +10,7 @@ import { debounceTime, takeUntil } from 'rxjs/operators';
 import { FailuresService } from '../../core/services/failures.service';
 import { NotificationService } from '../../core/services/notification.service';
 import { JobFailure, PagedResult } from '../../core/models';
+import { severityTone, severityLabel } from '../../core/util/severity.util';
 import { FailureDetailComponent } from './failure-detail.component';
 import { DrawerComponent } from '../../shared/drawer/drawer.component';
 
@@ -28,12 +29,17 @@ const VIEW_LABELS: Record<string, string> = {
 const PAGE_SIZE = 50;
 
 type SortDir = 'asc' | 'desc';
-const SORT_DEFAULT = 'detected';
+// Default = severity (most-severe-first), then newest — operators triage by
+// urgency, not recency. A column's natural default direction is desc; for
+// severity, desc = most-severe-first (Critical→Low, unclassified last), the
+// same "desc = most prominent" convention as detected(newest).
+const SORT_DEFAULT = 'severity';
 const DIR_DEFAULT: SortDir = 'desc';
-/** Initial direction when a column is first selected (dates/ids newest-first;
- *  text A→Z; status grouped ascending). Also the whitelist of sortable keys. */
+/** Initial direction when a column is first selected (severity most-severe- /
+ *  dates+ids newest-first; text A→Z; status grouped ascending). Also the
+ *  whitelist of sortable keys. */
 const COL_DEFAULT_DIR: Record<string, SortDir> = {
-  id: 'desc', job: 'asc', errortype: 'asc', detected: 'desc', status: 'asc',
+  severity: 'desc', id: 'desc', job: 'asc', errortype: 'asc', detected: 'desc', status: 'asc',
 };
 
 /**
@@ -104,6 +110,9 @@ const COL_DEFAULT_DIR: Record<string, SortDir> = {
           <table class="data-table">
             <thead>
               <tr>
+                <th class="sortable" (click)="onSort('severity')" [attr.aria-sort]="ariaSort('severity')">
+                  Severity <span class="sort-ind">{{ sortInd('severity') }}</span>
+                </th>
                 <th class="sortable" (click)="onSort('id')" [attr.aria-sort]="ariaSort('id')">
                   # <span class="sort-ind">{{ sortInd('id') }}</span>
                 </th>
@@ -131,6 +140,12 @@ const COL_DEFAULT_DIR: Record<string, SortDir> = {
                     [attr.data-failure-id]="f.failureId"
                     (click)="openDrawer(f.failureId)"
                     (keydown.enter)="openDrawer(f.failureId); $event.preventDefault()">
+                  <td>
+                    <span class="sev" [title]="'Severity: ' + severityLabel(f.severity)">
+                      <span class="sev-dot sev-{{ severityTone(f.severity) }}"></span>
+                      <span [class.text-dim]="severityTone(f.severity) === 'none'">{{ severityLabel(f.severity) }}</span>
+                    </span>
+                  </td>
                   <td class="text-muted">{{ f.failureId }}</td>
                   <td><span class="job-pill" dir="auto">{{ f.monitoredJobName ?? f.jobTypeName }}</span></td>
                   <td class="truncate" style="max-width:160px" dir="auto">{{ f.stepName ?? '—' }}</td>
@@ -216,6 +231,17 @@ const COL_DEFAULT_DIR: Record<string, SortDir> = {
     th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
     th.sortable:hover { color: var(--text); }
     .sort-ind { display: inline-block; width: 8px; font-size: 10px; color: var(--primary); }
+
+    /* Leading severity signal — coloured dot + label, colour never the only cue
+       (label is always present). Tones from severity.util. */
+    .sev { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+    .sev-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--text-dim); }
+    .sev-dot.sev-critical { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-bg); }
+    .sev-dot.sev-high     { background: var(--danger);  }
+    .sev-dot.sev-medium   { background: var(--warning); }
+    .sev-dot.sev-low      { background: var(--info);    }
+    .sev-dot.sev-none     { background: var(--text-dim); }
+    .text-dim { color: var(--text-dim); }
 
     /* Secondary marker shown alongside the status badge when a fix attempt
        failed today. Tighter and slightly smaller than the status badge so
@@ -316,6 +342,10 @@ export class FailuresListComponent implements OnInit, OnDestroy, AfterViewChecke
   router         = inject(Router);
 
   @ViewChildren('row', { read: ElementRef }) rowRefs!: QueryList<ElementRef<HTMLTableRowElement>>;
+
+  /** Severity dot tone + label for the leading column (shared with recs). */
+  readonly severityTone  = severityTone;
+  readonly severityLabel = severityLabel;
 
   loading      = signal(false);
   paged        = signal<PagedResult<JobFailure> | null>(null);

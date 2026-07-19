@@ -166,6 +166,16 @@ public sealed class SqlJobRepository(IDbContextFactory<MaiaDbContext> factory) :
             "errortype" => asc ? query.OrderBy(j => j.ErrorType!.Code)     : query.OrderByDescending(j => j.ErrorType!.Code),
             "status"    => asc ? query.OrderBy(j => j.Status)              : query.OrderByDescending(j => j.Status),
             "detected"  => asc ? query.OrderBy(j => j.DetectedAt)          : query.OrderByDescending(j => j.DetectedAt),
+            // Severity importance = higher-is-more-severe (Critical=4 … Low=1),
+            // unclassified (no ErrorType) = 0 so it always lands last. desc =
+            // most-severe-first — the operator-queue default, matching the
+            // "detected desc = newest" convention (a column's natural default is
+            // desc). Secondary "then newest" so equal-severity rows read
+            // recency-first.
+            "severity"  => asc ? query.OrderBy(j => j.ErrorTypeId == null ? 0 : 4 - (int)j.ErrorType!.Severity)
+                                      .ThenByDescending(j => j.DetectedAt)
+                               : query.OrderByDescending(j => j.ErrorTypeId == null ? 0 : 4 - (int)j.ErrorType!.Severity)
+                                      .ThenByDescending(j => j.DetectedAt),
             _           => query.OrderByDescending(j => j.DetectedAt),
         };
         ordered = asc ? ordered.ThenBy(j => j.FailureId) : ordered.ThenByDescending(j => j.FailureId);

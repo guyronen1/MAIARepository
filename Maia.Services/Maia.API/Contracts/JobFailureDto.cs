@@ -12,6 +12,10 @@ public sealed record JobFailureDto(
     string   Status,
     string   JobTypeName,
     string?  ErrorTypeCode,
+    /// <summary>Severity of the matched <see cref="ErrorType"/> (Critical/High/
+    /// Medium/Low), or null for unclassified failures. Lets operator queues
+    /// sort/scan by urgency instead of only recency.</summary>
+    string?  Severity,
     string?  MonitoredJobName,
     /// <summary>True when this failure has at least one
     /// <see cref="FixExecutionLog"/> row with <c>Success=false</c> since
@@ -29,6 +33,7 @@ public sealed record JobFailureDto(
         f.Status.ToString(),
         f.JobType?.Name   ?? f.JobTypeId.ToString(),
         f.ErrorType?.Code,
+        f.ErrorType?.Severity.ToString(),
         f.MonitoredJob?.Name,
         hasRecentFixFailure);
 }

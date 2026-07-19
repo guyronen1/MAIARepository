@@ -13,6 +13,9 @@ export interface JobFailure {
   detectedAt:       string;
   status:           JobStatus;
   errorTypeCode:    string | null;
+  /** Severity of the matched error type (Critical/High/Medium/Low), or null
+   *  when unclassified. Drives the leading severity signal + default sort. */
+  severity:         string | null;
   monitoredJobName: string | null;
   /** True when this failure has a Success=false FixExecutionLog row since
    *  today-midnight. Drives the "Failed to Execute" marker in the failures

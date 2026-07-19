@@ -11,6 +11,7 @@ import { AuthService } from '../../core/services/auth.service';
 import { Recommendation, PagedResult } from '../../core/models';
 import { pluralize } from '../../core/pipes/pluralize.pipe';
 import { confidenceBand } from '../../core/util/confidence.util';
+import { severityTone, severityLabel } from '../../core/util/severity.util';
 import { FailureDetailComponent } from '../failures/failure-detail.component';
 import { DrawerComponent } from '../../shared/drawer/drawer.component';
 
@@ -89,7 +90,10 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
                   <td>
                     <div class="failure-ref" (click)="openFailure(r.failureId)">
                       <span class="failure-id">#{{ r.failureId }}</span>
-                      <span class="failure-type text-muted text-sm">{{ r.errorTypeCode }}</span>
+                      <span class="sev-inline" [title]="'Severity: ' + severityLabel(r.severity)">
+                        <span class="sev-dot sev-{{ severityTone(r.severity) }}"></span>
+                        <span class="failure-type text-muted text-sm">{{ r.errorTypeCode }}</span>
+                      </span>
                     </div>
                   </td>
                   <td><span class="badge" [class]="categoryBadge(r.fixCategory)">{{ r.fixCategory }}</span></td>
@@ -206,6 +210,14 @@ import { DrawerComponent } from '../../shared/drawer/drawer.component';
     .failure-ref { display:flex; flex-direction:column; gap:1px; cursor:pointer; &:hover .failure-id { color:var(--primary); } }
     .failure-id { font-size:13px; font-weight:600; }
     .failure-type { font-size:11px; }
+    /* Severity dot next to the error-type — colour + always-present label. */
+    .sev-inline { display:inline-flex; align-items:center; gap:5px; }
+    .sev-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; background:var(--text-dim); }
+    .sev-dot.sev-critical { background:var(--danger); box-shadow:0 0 0 3px var(--danger-bg); }
+    .sev-dot.sev-high     { background:var(--danger);  }
+    .sev-dot.sev-medium   { background:var(--warning); }
+    .sev-dot.sev-low      { background:var(--info);    }
+    .sev-dot.sev-none     { background:var(--text-dim); }
     .rec-action-cell { max-width: 280px; font-size: 12px; line-height: 1.5; }
     .row-executed td { opacity: 0.65; }
     .pagination { display:flex; align-items:center; justify-content:center; gap:16px; padding:12px; border-top:1px solid var(--border); }
@@ -389,6 +401,9 @@ export class RecommendationsComponent implements OnInit {
 
   /** Value-encoded confidence band (red/amber/green) for the shared bar fill. */
   readonly confBand = confidenceBand;
+  /** Severity dot tone + label, shared with the Failures list. */
+  readonly severityTone  = severityTone;
+  readonly severityLabel = severityLabel;
 
   categoryBadge(cat: string): string {
     const map: Record<string, string> = {

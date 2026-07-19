@@ -32,8 +32,8 @@ public class FailuresSortTests : IAsyncLifetime
         _db.JobTypes.Add(new JobType { JobTypeId = JobTypeId, Name = "JT" });
         _db.MonitoredJobs.Add(new MonitoredJob { MonitoredJobId = 401, Name = "Alpha", JobTypeId = JobTypeId });
         _db.MonitoredJobs.Add(new MonitoredJob { MonitoredJobId = 402, Name = "Bravo", JobTypeId = JobTypeId });
-        _db.ErrorTypes.Add(new ErrorType { ErrorTypeId = 41, Code = "Timeout",    DisplayName = "Timeout",    Severity = Severity.Medium });
-        _db.ErrorTypes.Add(new ErrorType { ErrorTypeId = 42, Code = "FileLocked", DisplayName = "File locked", Severity = Severity.Medium });
+        _db.ErrorTypes.Add(new ErrorType { ErrorTypeId = 41, Code = "Timeout",    DisplayName = "Timeout",    Severity = Severity.High });
+        _db.ErrorTypes.Add(new ErrorType { ErrorTypeId = 42, Code = "FileLocked", DisplayName = "File locked", Severity = Severity.Low  });
 
         // F1 oldest/Alpha/Timeout, F2 newest/Bravo/FileLocked, F3 mid/Alpha/FileLocked.
         AddFailure(1, T.AddHours(1), 401, 41, JobStatus.Failed);
@@ -79,6 +79,18 @@ public class FailuresSortTests : IAsyncLifetime
     public async Task SortByErrorType_Ascending() =>
         // FileLocked (F2, F3) before Timeout (F1); tie broken by FailureId asc.
         Assert.Equal(new[] { 2, 3, 1 }, await IdsAsync("errortype", "asc"));
+
+    [Fact]
+    public async Task SortBySeverity_Descending_IsMostSevereFirst_ThenNewest() =>
+        // desc = most-severe-first (the queue default). F1 High (ET41) leads;
+        // F2/F3 Low (ET42) follow, equal-severity tie broken by newest-first
+        // (F2 @ T+3 before F3 @ T+2).
+        Assert.Equal(new[] { 1, 2, 3 }, await IdsAsync("severity", "desc"));
+
+    [Fact]
+    public async Task SortBySeverity_Ascending_IsLeastSevereFirst() =>
+        // asc = least-severe-first. Low (F2, F3 newest-first) before High (F1).
+        Assert.Equal(new[] { 2, 3, 1 }, await IdsAsync("severity", "asc"));
 
     private void AddFailure(int id, DateTime detectedAt, int jobId, int errorTypeId, JobStatus status) =>
         _db.JobFailures.Add(new JobFailure {

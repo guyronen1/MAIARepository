@@ -4,6 +4,9 @@ export interface Recommendation {
   recommendationId:         number;
   failureId:                number;
   errorTypeCode:            string | null;
+  /** Severity of the recommendation's error type (Critical/High/Medium/Low),
+   *  or null. Surfaces urgency alongside confidence in the queue. */
+  severity:                 string | null;
   errorTypeId:              number;
   jobTypeId:                number | null;
   suggestedAction:          string;

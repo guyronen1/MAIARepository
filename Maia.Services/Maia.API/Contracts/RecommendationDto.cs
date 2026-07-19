@@ -15,6 +15,10 @@ public sealed record RecommendationDto(
     bool     IsExecuted,
     DateTime RecommendedAt,
     string?  ErrorTypeCode,
+    /// <summary>Severity of the recommendation's <see cref="ErrorType"/>
+    /// (Critical/High/Medium/Low), or null if unresolved. Lets the
+    /// Recommendations queue surface urgency alongside confidence.</summary>
+    string?  Severity,
     int      ErrorTypeId,
     int?     JobTypeId,
     int?     FixPolicyRuleId,
@@ -39,6 +43,7 @@ public sealed record RecommendationDto(
         r.IsExecuted,
         r.RecommendedAt,
         r.ErrorType?.Code,
+        r.ErrorType?.Severity.ToString(),
         r.ErrorTypeId,
         r.Failure?.JobTypeId,
         fixPolicyRuleId,
