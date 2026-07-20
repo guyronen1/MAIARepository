@@ -71,7 +71,7 @@ const COLORS = {
     </div>
   `,
   styles: [`
-    .chart-card { padding: 10px 12px; display: flex; flex-direction: column; }
+    .chart-card { padding: 10px 12px; }
     .chart-header {
       display: flex; justify-content: space-between; align-items: center;
       margin-bottom: 6px;
@@ -87,14 +87,16 @@ const COLORS = {
     }
     @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
     .chart-empty {
-      height: 150px;
+      height: 200px;
       display: flex; align-items: center; justify-content: center;
       color: var(--text-muted); text-align: center;
     }
 
-    /* flex:1 fills the card's remaining height so the donut centres within
-       whatever the row height is (the grid stretches all three cards equal). */
-    .donut-block { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
+    /* CONSTANT 200px body in every state (skeleton / donut / empty) — matches
+       the sibling charts and, crucially, never changes height between loading
+       and loaded, so toggling the range doesn't resize the grid row and jolt
+       all three cards. Content centres within it. */
+    .donut-block { height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
     .donut-wrap  { position: relative; height: 132px; width: 100%; }
     .donut-center {
       position: absolute; inset: 0;
@@ -203,20 +205,31 @@ export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {
   ngOnDestroy(): void { this.chart?.destroy(); }
 
   private fetch(range: Range): void {
-    this.loading.set(true);
-    this.chart?.destroy();
-    this.chart = undefined;
+    // Only flash the shimmer skeleton on the very FIRST load. On a range change
+    // we keep the current donut on screen (with its previous numbers) and swap
+    // in the rebuilt chart when the new data lands — no skeleton flash, no
+    // layout change, so the card doesn't look like it's reloading.
+    const firstLoad = this.data().length === 0;
+    if (firstLoad) {
+      this.loading.set(true);
+      this.chart?.destroy();
+      this.chart = undefined;
+    }
 
     this.svc.getResolutionMix(range).subscribe({
       next: rows => {
         this.data.set(rows);
         this.loading.set(false);
+        this.chart?.destroy();       // swap: tear down the old chart, rebuild below
+        this.chart = undefined;
         this.pendingRender = true;
         queueMicrotask(() => this.renderIfReady());
       },
       error: () => {
         this.data.set([]);
         this.loading.set(false);
+        this.chart?.destroy();
+        this.chart = undefined;
       }
     });
   }
