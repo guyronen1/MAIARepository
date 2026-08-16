@@ -10,6 +10,11 @@
     <ProjectReference Include="..\Maia.Core\Maia.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <!-- Expose internals to the test project so pure helpers (e.g. DatabaseScanStrategy's
+         SQL-identifier quoting) can be unit-tested directly without a live database. -->
+    <InternalsVisibleTo Include="Maia.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.0">
       <PrivateAssets>all</PrivateAssets>

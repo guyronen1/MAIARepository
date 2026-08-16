@@ -492,7 +492,7 @@ public sealed class DatabaseScanStrategy(
     ///   "j.FilePath"     → "j.[FilePath]"
     /// Only the column part is bracketed so the alias resolves naturally.
     /// </summary>
-    private static string QuoteColumnRef(string columnRef)
+    internal static string QuoteColumnRef(string columnRef)
     {
         var dot = columnRef.LastIndexOf('.');
         return dot < 0
@@ -526,19 +526,19 @@ public sealed class DatabaseScanStrategy(
     /// <c>]]</c> so a column/table name containing <c>]</c> cannot break out of the
     /// quoting. Admin-scoped config, but an unsanitized identifier is still worth
     /// escaping (defense-in-depth; the identifier is the one thing not parameterised).</summary>
-    private static string Bracket(string identifier) => "[" + identifier.Replace("]", "]]") + "]";
+    internal static string Bracket(string identifier) => "[" + identifier.Replace("]", "]]") + "]";
 
     /// <summary>
     /// Converts "dbo.Files" → "[dbo].[Files]", or "Files" → "[Files]".
     /// Prevents the bracketing bug where [dbo.Files] is treated as a literal name.
     /// </summary>
-    private static string QuoteTable(string sourceTable)
+    internal static string QuoteTable(string sourceTable)
     {
         var parts = sourceTable.Split('.');
         return string.Join(".", parts.Select(p => Bracket(p.Trim('[', ']'))));
     }
 
-    private static (string Clause, List<(string Name, object Value)> Params) BuildFilterClause(ScanCheckRule rule)
+    internal static (string Clause, List<(string Name, object Value)> Params) BuildFilterClause(ScanCheckRule rule)
     {
         var p = new List<(string, object)>();
         if (rule.CheckType == CheckType.ValueEquals)
