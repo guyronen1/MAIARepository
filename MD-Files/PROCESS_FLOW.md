@@ -244,12 +244,12 @@ Program.cs
 │   ├── Scoped: IFixEngine              → DefaultFixEngine
 │   ├── Scoped: IFixHandler × 4 + IFixActionExecutor × 5
 │   │           (incl. SqlScriptExecutor for raw-SQL fixes)
-│   ├── Scoped: IScanStrategy × 3       (FileSystem, Database, ApiEndpoint — no execute injection)
-│   ├── Scoped: ILogParser, ILogReader
+│   ├── Scoped: IScanStrategy × 4       (FileSystem, Database, ApiEndpoint, FileContent — no execute injection)
+│   ├── Scoped: ILogParser
 │   └── Hosted: MonitoringWorker, ScanHistoryRetentionWorker
 │
 ├── AddApplicationServices()             Maia.API/Extensions
-│   ├── IClassifyJobsUseCase, IGenerateSuggestionsUseCase
+│   ├── IClassifyJobsUseCase, IReclassifyOrphanedFailuresUseCase, IGenerateSuggestionsUseCase
 │   ├── IExecuteFixesUseCase, IDirectoryPipelineUseCase
 │   └── IScanHistoryRetentionService
 │
@@ -263,6 +263,9 @@ Program.cs
     "CleanupIntervalHours": 6,       // ScanHistoryRetentionWorker schedule
     "CleanupBatchSize":     5000,    // DELETE TOP (N) per round
     "InterBatchDelayMs":    200      // pause between rounds to release locks
+  },
+  "Scan": {
+    "OrphanReclassifyMinutes": 10    // orphaned-unclassified sweep: age gate + cadence (min 1)
   }
 }
 ```

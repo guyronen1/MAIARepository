@@ -61,9 +61,10 @@ Maia.Core/
 │   ├── IPlaceholderResolver  centralised payload {token} substitution
 │   ├── IScanStrategy        FileSystem / Database / ApiEndpoint / FileContent strategies
 │   ├── IScanHistoryRetentionService  shared by retention worker + admin endpoint
-│   ├── ILogParser / ILogReader
+│   ├── ILogParser
 │   └── UseCases/
 │       ├── IClassifyJobsUseCase
+│       ├── IReclassifyOrphanedFailuresUseCase  orphaned-unclassified safety-net sweep
 │       ├── IGenerateSuggestionsUseCase
 │       ├── IExecuteFixesUseCase
 │       └── IDirectoryPipelineUseCase
@@ -119,7 +120,7 @@ Maia.Infrastructure/
 │   │                                Writes one ScanRunHistory row per scan completion (finally block).
 │   └── ScanHistoryRetentionWorker   BackgroundService — runs on startup + every CleanupIntervalHours.
 │                                    Thin scheduler around IScanHistoryRetentionService.
-├── Parsing/           SimpleLogParser, FileLogReader
+├── Parsing/           SimpleLogParser
 └── Extensions/        ServiceCollectionExtensions  AddMaiaAI(connectionString)
                        Registers both BackgroundServices.
 
@@ -131,7 +132,10 @@ Maia.API/
 ├── Controllers/
 │   ├── DataController             GET failures, recommendations, monitored-jobs, scan-runs,
 │   │                              operator-actions (read-only)
-│   ├── ConfigController           CRUD for monitored jobs, rules, fix policies; GET fix-policy-rules/{id}
+│   ├── Config/                    ConfigController split per entity (all keep [Route("api/config")]):
+│   │      ConfigControllerBase (shared audit helpers), ErrorTypes / MonitoredJobs /
+│   │      ScanSources / ScanRules / FixPolicy / ClassificationRules ConfigController;
+│   │      ConfigContracts.cs (Upsert* request records)
 │   ├── ClassificationController   POST /classify
 │   ├── FixController              POST /execute-fixes  (manual global drain)
 │   ├── PipelineController         POST /run-pipeline
