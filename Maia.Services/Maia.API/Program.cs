@@ -6,6 +6,7 @@ using Maia.Core.Interfaces;
 using Maia.Infrastructure.Extensions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc.Authorization;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -38,7 +39,19 @@ builder.Services.AddCors(options =>
     });
 });
 
-builder.Services.AddControllers()
+builder.Services.AddControllers(mvcOptions =>
+{
+    // Default-CLOSED for authentication: any controller action missing an explicit
+    // [Authorize]/[AllowAnonymous] still requires a logged-in user. This is a global
+    // MVC filter rather than AuthorizationOptions.FallbackPolicy specifically so it
+    // only ever applies to controller actions — Swagger's UI/JSON middleware, health
+    // checks, and any other non-MVC middleware are structurally untouched, with no
+    // per-path exemption needed (a FallbackPolicy-based version of this requirement
+    // was tried and also caught Swagger, since FallbackPolicy applies to ANY request
+    // without a matched, annotated endpoint — not just controller actions).
+    mvcOptions.Filters.Add(new AuthorizeFilter(
+        new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build()));
+})
     .AddJsonOptions(opts =>
         opts.JsonSerializerOptions.ReferenceHandler =
             System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles);
@@ -59,10 +72,11 @@ builder.Services.AddApplicationServices();
 
 // ── Authentication: server-side opaque-token sessions in an httpOnly cookie ──
 // The handler populates the principal from a valid cookie but never rejects —
-// authentication only. Enforcement is LIVE at the authorization layer below: the
-// default fallback policy (RequireAuthenticatedUser) rejects anonymous requests, plus
-// per-endpoint role policies (RequireOperator / RequireAdmin). Anonymous endpoints
-// opt out via [AllowAnonymous] (login, health checks).
+// authentication only. Enforcement is LIVE at the authorization layer: the global
+// MVC AuthorizeFilter (see AddControllers above, RequireAuthenticatedUser) rejects
+// anonymous requests to controller actions, plus per-endpoint role policies
+// (RequireOperator / RequireAdmin). Anonymous actions opt out via [AllowAnonymous]
+// (login, etc.); non-MVC middleware like Swagger and health checks are untouched.
 var authOptions = builder.Configuration.GetSection("Auth").Get<AuthOptions>() ?? new AuthOptions();
 builder.Services.AddSingleton(authOptions);
 builder.Services.AddHttpContextAccessor();
@@ -80,15 +94,13 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy("RequireOperator", p => p.RequireRole("Operator", "Administrator"));
     options.AddPolicy("RequireAdmin",    p => p.RequireRole("Administrator"));
 
-    // Default-CLOSED for authentication: any endpoint missing an explicit
-    // [Authorize]/[AllowAnonymous] still requires a logged-in user. This is
-    // default-AUTHENTICATED, NOT default-admin — a write that forgets its
-    // RequireAdmin would fall through to "any authenticated user" (privilege
-    // escalation, not a lockout). The compensating control is the exhaustive
-    // (endpoint × verb × role) authorization matrix test, which is the cutover gate.
-    options.FallbackPolicy = new AuthorizationPolicyBuilder()
-        .RequireAuthenticatedUser()
-        .Build();
+    // Default-CLOSED enforcement for controller actions lives on the global MVC
+    // AuthorizeFilter (see AddControllers above), not a FallbackPolicy here — see
+    // that call site for why. This is default-AUTHENTICATED, NOT default-admin — a
+    // write that forgets its RequireAdmin would fall through to "any authenticated
+    // user" (privilege escalation, not a lockout). The compensating control is the
+    // exhaustive (endpoint × verb × role) authorization matrix test, which is the
+    // cutover gate.
 });
 
 builder.Services.AddHealthChecks();
@@ -109,14 +121,21 @@ if (app.Environment.IsDevelopment() || app.Configuration.GetValue<bool>("EnableS
 
 app.UseExceptionHandler();
 app.UseCors("AllowLocalhost");
-app.UseHttpsRedirection();
+// Skipped in Development: the Angular dev server (CookieSecure=false, http://localhost:4200)
+// talks to the API over plain http on :5095. A same-request http->https redirect breaks CORS
+// preflight (browsers refuse to follow a redirect for an OPTIONS preflight), so forcing https
+// here would make cross-origin login fail before it reaches the app.
+if (!app.Environment.IsDevelopment())
+    app.UseHttpsRedirection();
 app.UseAuthentication();
 // Forces a password rotation before any other /api/* call (after auth, before authz).
 app.UseMiddleware<MustChangePasswordMiddleware>();
 app.UseAuthorization();
 app.MapControllers();
 
-// K8s liveness/readiness — anonymous so they answer under the fallback policy.
+// K8s liveness/readiness — anonymous, and not MVC controllers so the global
+// AuthorizeFilter above doesn't apply to them anyway; .AllowAnonymous() kept for
+// documentation/clarity.
 app.MapHealthChecks("/health/live").AllowAnonymous();
 app.MapHealthChecks("/health/ready").AllowAnonymous();
 
