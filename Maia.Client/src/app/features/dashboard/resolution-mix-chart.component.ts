@@ -122,8 +122,8 @@ const COLORS = {
 
     /* Donut left, grouped legend right. Fixed body height so toggling the range
        never changes the card height (no grid-row jolt). */
-    .outcomes-body { display: flex; align-items: center; gap: 14px; height: 156px; }
-    .donut-wrap  { position: relative; width: 140px; height: 140px; flex-shrink: 0; }
+    .outcomes-body { display: flex; align-items: center; gap: 12px; height: 156px; }
+    .donut-wrap  { position: relative; width: 122px; height: 122px; flex-shrink: 0; }
     .donut-center {
       position: absolute; inset: 0;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -161,13 +161,15 @@ const COLORS = {
     .dot-manual { background: rgba(220, 38, 38, 0.9); }
 
     .outcomes-foot {
-      display: flex; justify-content: space-between; align-items: center;
+      display: flex; align-items: center; flex-wrap: wrap; gap: 2px 10px;
       margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-light);
       font-size: 11px;
     }
     .foot-link { color: var(--text-muted); text-decoration: none; b { color: var(--text); }
       &:hover { color: var(--text); } }
-    .foot-note { color: var(--text-dim); }
+    /* margin-inline-start:auto pushes the note right; it wraps to its own line
+       when the card is too narrow (no collision with the link). */
+    .foot-note { color: var(--text-dim); margin-inline-start: auto; }
   `]
 })
 export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {

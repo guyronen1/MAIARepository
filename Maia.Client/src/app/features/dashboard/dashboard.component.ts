@@ -422,7 +422,7 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
        the bar + pie narrower. min-width:0 lets each Chart.js canvas shrink with
        the grid instead of forcing the column wider. */
     .analytics-row {
-      display: grid; grid-template-columns: 1.7fr 1fr 1fr; gap: 16px;
+      display: grid; grid-template-columns: 1.5fr 1fr 1.35fr; gap: 16px;
       > * { min-width: 0; }
     }
 
