@@ -172,9 +172,28 @@ public sealed class SqlJobRepository(IDbContextFactory<MaiaDbContext> factory) :
             // "detected desc = newest" convention (a column's natural default is
             // desc). Secondary "then newest" so equal-severity rows read
             // recency-first.
-            "severity"  => asc ? query.OrderBy(j => j.ErrorTypeId == null ? 0 : 4 - (int)j.ErrorType!.Severity)
+            // Ranked via nested ternaries (not "4 - (int)Severity") — Severity is
+            // persisted as nvarchar via HasConversion<string>(), and EF Core can't
+            // push an int cast + subtraction through that converter into SQL; it
+            // ends up emitting a raw subtract against the string column ("the data
+            // types nvarchar and nvarchar are incompatible in the subtract
+            // operator"). A switch EXPRESSION isn't usable here either — C# forbids
+            // them inside expression trees (CS8514). Nested ternaries comparing the
+            // enum value directly translate to a CASE WHEN with plain
+            // string-equality branches, which is valid SQL.
+            "severity"  => asc ? query.OrderBy(j => j.ErrorTypeId == null ? 0
+                                          : j.ErrorType!.Severity == Severity.Critical ? 4
+                                          : j.ErrorType!.Severity == Severity.High     ? 3
+                                          : j.ErrorType!.Severity == Severity.Medium   ? 2
+                                          : j.ErrorType!.Severity == Severity.Low      ? 1
+                                          : 0)
                                       .ThenByDescending(j => j.DetectedAt)
-                               : query.OrderByDescending(j => j.ErrorTypeId == null ? 0 : 4 - (int)j.ErrorType!.Severity)
+                               : query.OrderByDescending(j => j.ErrorTypeId == null ? 0
+                                          : j.ErrorType!.Severity == Severity.Critical ? 4
+                                          : j.ErrorType!.Severity == Severity.High     ? 3
+                                          : j.ErrorType!.Severity == Severity.Medium   ? 2
+                                          : j.ErrorType!.Severity == Severity.Low      ? 1
+                                          : 0)
                                       .ThenByDescending(j => j.DetectedAt),
             _           => query.OrderByDescending(j => j.DetectedAt),
         };
