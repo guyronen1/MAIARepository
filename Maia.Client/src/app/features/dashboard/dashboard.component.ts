@@ -13,6 +13,7 @@ import { FailureDetailComponent } from '../failures/failure-detail.component';
 import { DrawerComponent } from '../../shared/drawer/drawer.component';
 import { scanTypeLabelFromNames, scanTypeTitleFromSources } from '../../core/util/scan-type-label.util';
 import { StatusBadgeComponent } from '../../shared/status-badge/status-badge.component';
+import { severityTone, severityLabel } from '../../core/util/severity.util';
 
 type ChartRange = '24h' | '7d' | '30d';
 
@@ -154,23 +155,38 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
         <!-- Recent Failures -->
         <div class="card">
           <div class="card-header">
-            <h3>Recent Failures</h3>
-            <button class="btn btn-ghost btn-sm" (click)="router.navigate(['/failures'])">View All</button>
+            <h3>Needs Attention</h3>
+            <div class="panel-actions">
+              <!-- Operator picks the order: most-severe-first, or newest-first. -->
+              <div class="sort-toggle" role="group" aria-label="Sort open failures">
+                <button class="seg" [class.active]="panelSort() === 'severity'"
+                        (click)="setPanelSort('severity')" title="Most severe first">Severity</button>
+                <button class="seg" [class.active]="panelSort() === 'detected'"
+                        (click)="setPanelSort('detected')" title="Newest first">Recent</button>
+              </div>
+              <a class="btn btn-ghost btn-sm" [routerLink]="['/failures']"
+                 [queryParams]="{ view: 'open', sort: panelSort() }">View all →</a>
+            </div>
           </div>
           @if (loadingFailures()) {
             <div class="loading-overlay"><span class="spinner"></span> Loading…</div>
           } @else if (recentFailures()!.length === 0) {
-            <div class="empty-state"><span class="empty-icon">✓</span><p>No failures found</p></div>
+            <!-- Open-only panel, so "empty" is the good case — reassure, don't alarm. -->
+            <div class="empty-state all-clear"><span class="empty-icon">✓</span><p>All clear — no open failures</p></div>
           } @else {
             <table class="data-table">
               <thead>
-                <tr><th>Job</th><th>Step</th><th>Error Type</th><th>Detected</th><th>Status</th></tr>
+                <tr><th class="sev-col" title="Severity"></th><th>Job</th><th>Step</th><th>Error Type</th><th>Detected</th><th>Status</th></tr>
               </thead>
               <tbody>
                 @for (f of recentFailures()!; track f.failureId) {
                   <tr class="clickable"
                       (click)="selectedFailureId.set(f.failureId)"
                       [title]="f.errorMessage ?? ''">
+                    <td class="sev-col">
+                      <span class="sev-dot sev-{{ severityTone(f.severity) }}"
+                            [title]="'Severity: ' + severityLabel(f.severity)"></span>
+                    </td>
                     <td dir="auto">{{ f.monitoredJobName ?? '—' }}</td>
                     <td class="truncate" style="max-width:120px" dir="auto">{{ f.stepName ?? '—' }}</td>
                     <td><span class="badge badge-type">{{ f.errorTypeCode ?? 'Unknown' }}</span></td>
@@ -410,6 +426,26 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
 
     .row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 
+    /* "Needs Attention" panel — sort toggle + severity dots. */
+    .panel-actions { display: flex; align-items: center; gap: 8px; }
+    .sort-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+    .sort-toggle .seg {
+      font: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
+      background: var(--surface); color: var(--text-muted); border: none;
+      padding: 3px 9px;
+      &:hover { background: var(--surface-2); color: var(--text); }
+      &.active { background: var(--primary); color: #fff; }
+      & + .seg { border-inline-start: 1px solid var(--border); }
+    }
+    .sev-col { width: 22px; text-align: center; }
+    .sev-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--text-dim); }
+    .sev-dot.sev-critical { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-bg); }
+    .sev-dot.sev-high     { background: var(--danger);  }
+    .sev-dot.sev-medium   { background: var(--warning); }
+    .sev-dot.sev-low      { background: var(--info);    }
+    .sev-dot.sev-none     { background: var(--text-dim); }
+    .empty-state.all-clear { color: var(--success); .empty-icon { opacity: 0.9; } }
+
     /* Phase 2 analytics rows. Row 1 splits at 60/40 (Errors Over Time wider
        since it carries the range toggle + multi-series legend). Row 2 hosts
        the full-width Resolution Mix.
@@ -565,6 +601,17 @@ export class DashboardComponent implements OnInit, OnDestroy {
    *  card updates both. Resolution Mix on row 2 has its own fixed 7-day
    *  window and ignores this signal. */
   chartRange = signal<ChartRange>('24h');
+
+  /** "Needs Attention" panel sort — severity (most-severe-first) or detected
+   *  (newest-first). Drives the toggle + the server-side fetch order. */
+  panelSort = signal<'severity' | 'detected'>('severity');
+  setPanelSort(sort: 'severity' | 'detected'): void {
+    this.panelSort.set(sort);
+    this.statusSvc.setFailuresSort(sort);
+  }
+  /** Severity dot tone + label for the panel's leading indicator. */
+  readonly severityTone  = severityTone;
+  readonly severityLabel = severityLabel;
 
   // Raw PolledData<T> from the service — each slice is independent and tracks
   // its own isStale / lastUpdatedAt. The component-facing getters below unwrap

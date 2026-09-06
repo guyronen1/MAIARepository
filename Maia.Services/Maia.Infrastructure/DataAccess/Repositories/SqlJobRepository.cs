@@ -120,6 +120,12 @@ public sealed class SqlJobRepository(IDbContextFactory<MaiaDbContext> factory) :
         query = (view ?? string.Empty).ToLowerInvariant() switch
         {
             "active"          => query.Where(j => j.Status == JobStatus.Failed),
+            // All still-open work: Failed (awaiting triage/decision) +
+            // ManualRequired + AwaitingManualAction (operator on the hook).
+            // Excludes Resolved. Backs the dashboard "Needs Attention" panel.
+            "open"            => query.Where(j => j.Status == JobStatus.Failed
+                                              || j.Status == JobStatus.ManualRequired
+                                              || j.Status == JobStatus.AwaitingManualAction),
             "unclassified"    => query.Where(j => j.Status == JobStatus.Failed && j.ErrorTypeId == null),
             "awaiting-action" => query.Where(j => j.Status == JobStatus.Failed && j.ErrorTypeId != null),
             "resolved"        => query.Where(j => j.Status == JobStatus.Resolved),

@@ -45,8 +45,16 @@ export class WorkerStatusService {
 
   private readonly statusUrl         = `${environment.apiUrl}/data/worker-status`;
   private readonly statsUrl          = `${environment.apiUrl}/data/dashboard-stats`;
-  private readonly failuresUrl       = `${environment.apiUrl}/data/failures?page=1&pageSize=10`;
   private readonly monitoredJobsUrl  = `${environment.apiUrl}/data/monitored-jobs`;
+
+  /** The dashboard "Needs Attention" panel shows OPEN failures only (Resolved
+   *  excluded), sorted by the operator's chosen order — severity (most-severe
+   *  first) or detected (newest first). */
+  private failuresSort: 'severity' | 'detected' = 'severity';
+  private failuresUrl(): string {
+    return `${environment.apiUrl}/data/failures`
+         + `?view=open&sort=${this.failuresSort}&dir=desc&page=1&pageSize=10`;
+  }
   private readonly intervalMs        = environment.dashboardRefreshIntervalMs ?? 5000;
 
   private static readonly EMPTY = <T>(): PolledData<T> => ({
@@ -62,7 +70,8 @@ export class WorkerStatusService {
   public status$:         Observable<PolledData<WorkerStatus>>   = this.statusSubject.asObservable();
   /** Latest aggregate KPI counts. */
   public stats$:          Observable<PolledData<DashboardStats>> = this.statsSubject.asObservable();
-  /** Top-10 most-recent failures (no view filter). */
+  /** Top-10 OPEN failures for the "Needs Attention" panel, in the chosen sort
+   *  order (severity or detected). Resolved excluded. */
   public recentFailures$: Observable<PolledData<JobFailure[]>>   = this.recentFailuresSubject.asObservable();
   /** All active monitored jobs with rules + lease state. */
   public monitoredJobs$:  Observable<PolledData<MonitoredJob[]>> = this.monitoredJobsSubject.asObservable();
@@ -91,9 +100,21 @@ export class WorkerStatusService {
     this.sub = timer(0, this.intervalMs).subscribe(() => {
       this.fetchInto(this.statusUrl,        this.statusSubject,         this.pendingStatus);
       this.fetchInto(this.statsUrl,         this.statsSubject,          this.pendingStats);
-      this.fetchPaged(this.failuresUrl,     this.recentFailuresSubject, this.pendingFailures);
+      this.fetchPaged(this.failuresUrl(),   this.recentFailuresSubject, this.pendingFailures);
       this.fetchInto(this.monitoredJobsUrl, this.monitoredJobsSubject,  this.pendingMonitoredJobs);
     });
+  }
+
+  /** Current "Needs Attention" sort order (for the panel's toggle state). */
+  get openFailuresSort(): 'severity' | 'detected' { return this.failuresSort; }
+
+  /** Switch the open-failures sort (severity ↔ detected). Refetches the panel
+   *  immediately so the toggle feels instant, independent of the 5s tick. */
+  setFailuresSort(sort: 'severity' | 'detected'): void {
+    if (sort === this.failuresSort) return;
+    this.failuresSort = sort;
+    this.pendingFailures.v = false;   // clear the gate so the refetch can fire
+    this.fetchPaged(this.failuresUrl(), this.recentFailuresSubject, this.pendingFailures);
   }
 
   /** Decrement refcount; tear down timer + abort in-flight requests at 0. */

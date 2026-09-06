@@ -14,7 +14,7 @@ describe('WorkerStatusService', () => {
   const api = environment.apiUrl;
   const statusUrl = `${api}/data/worker-status`;
   const statsUrl  = `${api}/data/dashboard-stats`;
-  const failsUrl  = `${api}/data/failures?page=1&pageSize=10`;
+  const failsUrl  = `${api}/data/failures?view=open&sort=severity&dir=desc&page=1&pageSize=10`;
   const jobsUrl   = `${api}/data/monitored-jobs`;
 
   let svc: WorkerStatusService;
