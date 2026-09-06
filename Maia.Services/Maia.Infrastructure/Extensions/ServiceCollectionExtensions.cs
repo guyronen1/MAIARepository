@@ -28,8 +28,30 @@ public static class ServiceCollectionExtensions
         string connectionString)
     {
         // ── Database ────────────────────────────────────────────────────────
+        // Retry is deliberate: a transient stall should self-heal rather than blank
+        // the dashboard with a 500 from GlobalExceptionHandler.
+        //
+        // Timeout stays at the 30s default ON PURPOSE. The dashboard polls every 5s,
+        // so a long ceiling just queues doomed work — and combined with retry, a
+        // genuinely stuck query would hang the caller for minutes. Fail fast, let the
+        // retry cover the transient case. If a query needs more than 30s against
+        // MAIA's own DB, that is a query bug (see MD-Files/DECISIONS.md →
+        // "Dashboard timeout storm"), not a knob to turn up.
+        //
+        // Retry is safe here *because* no code path opens an explicit transaction
+        // (every repository is one autocommit statement per CreateDbContextAsync).
+        // SqlServerRetryingExecutionStrategy throws on user-initiated transactions,
+        // so if a BeginTransaction is ever added it must be wrapped in
+        // db.Database.CreateExecutionStrategy().ExecuteAsync(...).
         services.AddDbContextFactory<MaiaDbContext>(opts =>
-            opts.UseSqlServer(connectionString));
+            opts.UseSqlServer(connectionString, sql =>
+            {
+                sql.EnableRetryOnFailure(
+                    maxRetryCount:      3,
+                    maxRetryDelay:      TimeSpan.FromSeconds(5),
+                    errorNumbersToAdd:  null);   // -2 (timeout) is already transient
+                sql.CommandTimeout(30);
+            }));
 
         // ── Repositories ────────────────────────────────────────────────────
         services.AddScoped<IJobRepository,                SqlJobRepository>();

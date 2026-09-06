@@ -296,58 +296,99 @@ public class DataController(
             })
             .ToListAsync(ct);
 
-        // Per-job latest-scan summary for the dashboard's Monitored Jobs panel.
-        // Correlated subquery uses IX_ScanRunHistory_Job_StartedAt for a seek + top-1.
-        // Thin payload: only id + lastScan; name/scanType already live in the static
-        // MonitoredJobDto the panel uses on initial load.
-        var jobs = await db.MonitoredJobs
+        // Per-job + per-source latest-scan summary for the dashboard's Monitored Jobs panel.
+        //
+        // Deliberately a shell query plus bounded TOP-1 seeks, NOT one composed LINQ
+        // projection. EF translates a correlated FirstOrDefault() nested inside a
+        // collection projection into ROW_NUMBER() OVER (...) across the WHOLE of
+        // ScanRunHistory — once per partition key, so twice here — and filters row <= 1
+        // only afterwards. At ~22k rows that measured ~9s on an idle instance and blew
+        // past the 60s command timeout under normal 5s dashboard polling. Each query
+        // below is instead a seek + TOP-1 on IX_ScanRunHistory_Job_StartedAt /
+        // IX_ScanRunHistory_Source_StartedAt. Round-trip count is bounded by active
+        // jobs + active sources (small by nature).
+        // See MD-Files/DECISIONS.md → "Dashboard timeout storm".
+        var jobShells = await db.MonitoredJobs
             .Where(m => m.IsActive)
             .Select(m => new
             {
-                monitoredJobId = m.MonitoredJobId,
-                // Job-level rollup (most recent run across all sources) — drives the
-                // compact row's badge/duration/counts.
-                lastScan = db.ScanRunHistory
-                    .Where(h => h.MonitoredJobId == m.MonitoredJobId)
-                    .OrderByDescending(h => h.StartedAt)
-                    .Select(h => new
-                    {
-                        completedAt      = h.CompletedAt,
-                        durationMs       = h.DurationMs,
-                        outcome          = h.Outcome.ToString(),
-                        failuresDetected = h.FailuresDetected,
-                        classifications  = h.Classifications,
-                        recommendations  = h.Recommendations,
-                    })
-                    .FirstOrDefault(),
-                // Tier 2.5 (d2e): per-source last-scan breakdown for the drill-down.
-                // Worker writes one ScanRunHistory row per source per tick, so the
-                // latest row per ScanSourceId is that source's last scan.
-                sources = m.ScanSources
+                m.MonitoredJobId,
+                // Tier 2.5 (d2e): per-source breakdown for the drill-down. Worker writes
+                // one ScanRunHistory row per source per tick, so the latest row per
+                // ScanSourceId is that source's last scan.
+                Sources = m.ScanSources
                     .Where(s => s.IsActive)
                     .OrderBy(s => s.ScanSourceId)
                     .Select(s => new
                     {
-                        scanSourceId = s.ScanSourceId,
-                        name         = s.Name,
-                        scanTypeName = s.ScanTypeDefinition != null ? s.ScanTypeDefinition.Name : "Unknown",
-                        lastScan = db.ScanRunHistory
-                            .Where(h => h.ScanSourceId == s.ScanSourceId)
-                            .OrderByDescending(h => h.StartedAt)
-                            .Select(h => new
-                            {
-                                completedAt      = h.CompletedAt,
-                                durationMs       = h.DurationMs,
-                                outcome          = h.Outcome.ToString(),
-                                failuresDetected = h.FailuresDetected,
-                                classifications  = h.Classifications,
-                                recommendations  = h.Recommendations,
-                            })
-                            .FirstOrDefault(),
+                        s.ScanSourceId,
+                        s.Name,
+                        ScanTypeName = s.ScanTypeDefinition != null ? s.ScanTypeDefinition.Name : "Unknown",
                     })
                     .ToList(),
             })
             .ToListAsync(ct);
+
+        var jobs = new List<object>(jobShells.Count);
+        foreach (var j in jobShells)
+        {
+            // Job-level rollup (most recent run across all sources) — drives the
+            // compact row's badge/duration/counts.
+            var jobLast = await db.ScanRunHistory
+                .Where(h => h.MonitoredJobId == j.MonitoredJobId)
+                .OrderByDescending(h => h.StartedAt)
+                .Select(h => new
+                {
+                    h.CompletedAt, h.DurationMs, h.Outcome,
+                    h.FailuresDetected, h.Classifications, h.Recommendations,
+                })
+                .FirstOrDefaultAsync(ct);
+
+            var sources = new List<object>(j.Sources.Count);
+            foreach (var s in j.Sources)
+            {
+                var srcLast = await db.ScanRunHistory
+                    .Where(h => h.ScanSourceId == s.ScanSourceId)
+                    .OrderByDescending(h => h.StartedAt)
+                    .Select(h => new
+                    {
+                        h.CompletedAt, h.DurationMs, h.Outcome,
+                        h.FailuresDetected, h.Classifications, h.Recommendations,
+                    })
+                    .FirstOrDefaultAsync(ct);
+
+                sources.Add(new
+                {
+                    scanSourceId = s.ScanSourceId,
+                    name         = s.Name,
+                    scanTypeName = s.ScanTypeName,
+                    lastScan     = srcLast is null ? null : (object)new
+                    {
+                        completedAt      = srcLast.CompletedAt,
+                        durationMs       = srcLast.DurationMs,
+                        outcome          = srcLast.Outcome.ToString(),
+                        failuresDetected = srcLast.FailuresDetected,
+                        classifications  = srcLast.Classifications,
+                        recommendations  = srcLast.Recommendations,
+                    },
+                });
+            }
+
+            jobs.Add(new
+            {
+                monitoredJobId = j.MonitoredJobId,
+                lastScan       = jobLast is null ? null : (object)new
+                {
+                    completedAt      = jobLast.CompletedAt,
+                    durationMs       = jobLast.DurationMs,
+                    outcome          = jobLast.Outcome.ToString(),
+                    failuresDetected = jobLast.FailuresDetected,
+                    classifications  = jobLast.Classifications,
+                    recommendations  = jobLast.Recommendations,
+                },
+                sources,
+            });
+        }
 
         var activeScans = rows
             .Where(r => r.LeasedBy != null && r.LeasedUntil.HasValue && r.LeasedUntil > nowLocal)

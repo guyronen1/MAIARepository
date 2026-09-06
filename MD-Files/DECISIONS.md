@@ -227,3 +227,72 @@ A design-token/layout evolution (no framework change, no visual-identity change)
 - **Resolution Mix → donut (P2.4).** Snapshot donut (Auto-Healed green / Operator-Approved blue / Manual-Required amber) with a centre hero "% auto-healed of N resolved". **Still Active is excluded from the ring** (unresolved ≠ a resolution outcome) — muted line below. Follows the shared 24h/7d/30d toggle like the other two charts; **`GetResolutionMix` backend window generalized** (was hard-forced to 7d — the donut sums buckets so only the window changed). Segment borders read `--surface` (both themes). The 100%-stacked-area trend stays deferred until ≥ a week of populated days.
 - **One primary button per view (P0.4) + a11y (P2.1).** Repeated `.btn-primary`s (per-card Scan, per-row Configure, failures Refresh) demoted to ghost; the header action is each view's lone primary. Removed forced `text-transform:uppercase` on `.data-table th` + `.form-group label` (RTL-safe; Hebrew has no uppercase); `--text-dim` bumped to WCAG-AA in both themes; added a `.btn:focus-visible` ring. **Dark-mode dropdown fix:** the global `select option { background:#fff }` left light `--text` unreadable on dark → now `var(--surface)`/`var(--text)`.
 
+
+---
+
+## Dashboard timeout storm — one pathological EF query, amplified by a starved LocalDB instance (2026-09-06)
+
+134 `Execution Timeout Expired` events on 2026-09-06 (650 raw log lines — each exception logs message + inner + stack), all funnelling `GlobalExceptionHandler → HTTP 500`. The opening assumption was that they were "spread across many different queries, therefore server-level blocking". **That was wrong: 134/134 were the same `GetWorkerStatus` query** (see "THE actual cause" below). The other screens were slow because that one query, polled every 5s app-wide, starved everything else.
+
+Three hypotheses were investigated up front; **all three were wrong**, and the aggregate-vs-per-query distinction is what misled the triage. Recorded here because each cost real time.
+
+**Ruled out — reader/writer lock blocking.** `READ_COMMITTED_SNAPSHOT` was *already ON* for `MaiaDb_Test`. `sys.dm_os_wait_stats` shows **zero `LCK_*` waits** in the top 15 by wait time. A full audit of the worker + all four scan strategies found **zero explicit transactions anywhere in the solution** — every repository is one autocommit statement per `CreateDbContextAsync`, and `SqlMonitoredJobLeaseRepository.ClaimAsync` releases its `UPDLOCK` X-locks as soon as the `OUTPUT` set is drained, well before `Parallel.ForEachAsync` starts. The lease is an optimistic *row-value* claim, not a held lock. **Do not re-open this line of enquiry without new `LCK_*` evidence.**
+
+**Ruled out — the "runaway" `LogFileErrorTest` scan.** 937 runs on 2026-09-06, but **avg 34 ms / max 384 ms** — ~32 seconds of total work across the whole day. It is not worth throttling. The genuinely expensive scans are the `Database`-type sources (`Nsg-Events` max 29.9 s, `B2B_DB_FilesProcess` max 19.9 s, `DBHealthMonitor` max 19.9 s) — and those durations are themselves *symptoms* of the starvation below, not causes (`B2B_Test` is an 8 MB database).
+
+**The amplifiers (real, worth keeping fixed, but secondary to the query):** these turned a 9s query into a 60s+ timeout and made the whole instance fragile.
+1. The dev host runs at ~782 MB free of 15.8 GB (many VS Code / Chrome / agent processes), so SQL Server's dynamic memory manager collapsed its **commit target to 364 MB**.
+2. `max degree of parallelism = 0` with `cost threshold for parallelism = 5` (the ancient default) on 4 CPUs meant nearly every query got a parallel plan — and **a parallel plan reserves its memory grant × DOP**.
+3. Result: `RESOURCE_SEMAPHORE` waits with **max 31.6 s — precisely the 30 s ADO.NET command-timeout boundary** — plus `THREADPOOL` (max 17.9 s) and `SOS_SCHEDULER_YIELD` at 99.99 % signal wait (pure runnable-queue thrash).
+4. `AUTO_CLOSE` was **ON** for `MaiaDb_Test` *and* `MaiaDB` (LocalDB/Express default). The error log showed the DB starting up 27× in one day — sometimes 3× in 6 seconds. **Every auto-close flushes that database's entire plan cache**, so every EF query recompiled; the cache held only 5 plans / 0 MB on a server that had run thousands of queries that day. Compilation is CPU-hungry and itself needs a memory grant, feeding straight back into (3).
+5. **Amplifier:** `DefaultConnection` (MaiaDb_Test) and `B2BTest` (B2B_Test) point at the **same LocalDB instance**. The four `Database` scan sources and the dashboard's 7 concurrent polled endpoints contend for one 364 MB pool, 4 schedulers, and one worker-thread budget.
+
+**Applied (all online, no restart):** `AUTO_CLOSE OFF` on `MaiaDb_Test` + `MaiaDB`; `max degree of parallelism = 1`; `cost threshold for parallelism = 50`; `optimize for ad hoc workloads = 1`. LocalDB is Express Edition — capped at 4 cores / 1410 MB buffer pool — so MAXDOP 1 forfeits nothing.
+
+**Applied (code, `ServiceCollectionExtensions.cs`):** `EnableRetryOnFailure(3, 5s)` + `CommandTimeout(60)`. Safe **only because** no code path opens an explicit transaction — `SqlServerRetryingExecutionStrategy` throws on user-initiated transactions. **If a `BeginTransaction` is ever added, it must be wrapped in `db.Database.CreateExecutionStrategy().ExecuteAsync(...)`.** Requires an API restart to take effect.
+
+### THE actual cause: `GetWorkerStatus` made EF emit `ROW_NUMBER()` over all of `ScanRunHistory`
+
+**Every one of the 134 timeout events on 2026-09-06 was this single query** (`FROM [MonitoredJobs] AS [m]` — 134/134). The earlier assumption that "many different queries time out, so it must be server-level" was wrong; it is one pathological query whose 9–60s runtime saturated the connection, the memory grant, and the scheduler, making *every other* screen (failures list, failure drawer) slow as collateral damage. `WorkerStatusService` polls it every 5s app-wide, so the blast radius is the whole UI.
+
+**The trap:** the old code *looked* like a correlated TOP-1 seek, and the comment at `DataController.cs:300` asserted it was one. It is not. EF Core translates a correlated `FirstOrDefault()` **nested inside a collection projection** (`sources = m.ScanSources...Select(...).ToList()`) into `ROW_NUMBER() OVER (PARTITION BY ...)` across the **entire unfiltered table**, applying `WHERE [row] <= 1` only afterwards — twice here, once per partition key — then LEFT JOINing both derived tables. Confirmed by pulling the generated SQL straight out of the Serilog file.
+
+**Correction to an earlier entry in this investigation:** a benchmark that appeared to show the correlated form was 38× *faster* than `ROW_NUMBER()` was measuring **hand-written T-SQL that EF never actually emits**. The comparison was real but irrelevant — EF was already producing the slow shape. Verify against the SQL in the log, not against the LINQ's apparent intent.
+
+Measured on the real 21,918-row table (`ScanRunHistory` is ~22k rows, **not** the 2k previously assumed):
+
+| shape | per endpoint call |
+|---|---|
+| EF's actual old output (`ROW_NUMBER()` ×2 + LEFT JOINs), idle instance | **8,980 ms** (60s+ under load → timeout) |
+| new shell query + bounded TOP-1 seeks | **0.9 ms** |
+
+**The fix** (`DataController.GetWorkerStatus`): one cheap shell query for jobs + their active sources (small tables, no `ScanRunHistory`), then one `TOP-1` seek per active job and per active source against `IX_ScanRunHistory_Job_StartedAt` / `IX_ScanRunHistory_Source_StartedAt`. Round-trip count is bounded by active jobs + sources, which are small by nature. The JSON contract is unchanged (same lowercase anonymous-type members).
+
+### The precise rule (established empirically via `ToQueryString()`, EF Core 8 + SQL Server)
+
+Probed each shape and read the emitted SQL rather than reasoning about it:
+
+| shape (correlated against a big table, inside a `.Select(...)` projection) | emits |
+|---|---|
+| `.OrderByDescending(...).Select(...).FirstOrDefault()` **with** a sibling collection projection | `ROW_NUMBER()` over the whole table — **dangerous** |
+| `.OrderByDescending(...).Select(...).FirstOrDefault()` **without** any sibling collection | `ROW_NUMBER()` over the whole table — **dangerous** |
+| `.Any(...)` / `.Count(...)` / `.Max(...)` inside a projection | ordinary correlated subquery / `EXISTS` — **safe** |
+| standalone top-level `.Where(...).OrderByDescending(...).FirstOrDefaultAsync(ct)` | `SELECT TOP(1)` + index seek — **safe, this is the fix pattern** |
+
+So the trap is **narrower and broader** than first assumed: it does **not** need a nested collection projection (that only doubled it here), but it is **specific to row-returning single-result operators** — `FirstOrDefault` / `First` / `Take(1)` / `Single`. Correlated *aggregates* are fine.
+
+**Rule of thumb:** materialize the small parent set first, then issue bounded `TOP-1` seeks (or stitch in memory over an already-materialized list — e.g. the policy-snapshot resolution in `DataController` does this correctly with LINQ-to-Objects after `ToListAsync`). Never leave a row-returning `FirstOrDefault()` correlated against `ScanRunHistory` / `FixExecutionLog` / `AuditLog` inside a projection. When in doubt, print `query.ToQueryString()` and grep it for `ROW_NUMBER` — do not judge by the LINQ's apparent intent.
+
+### Repo audited for this pattern (2026-09-06) — two instances knowingly accepted
+
+Swept `Maia.API` / `Maia.Infrastructure` / `Maia.Application` for every single-result operator (`First` / `FirstOrDefault` / `Single` / `SingleOrDefault` / `Take(n)`), both no-arg and predicate forms. **No remaining instance correlates against a high-row table.** Every predicate-form hit turned out to be an in-memory collection (DI `IEnumerable`s of strategies/handlers/executors, an already-loaded navigation, or a `string[]` of log lines) — not an expression tree.
+
+Two genuine in-projection instances remain and are **deliberately left alone**, because the correlated tables are trivially small and rewriting them would add risk for no measurable gain:
+- `DataController.GetWorkerStatus` — the `ScanTypeName` lookup correlates against `ScanSources` (**14 rows**).
+- `SqlRecommendationRepository.GetPagedAsync` — the `Override` / `Default` policy snapshot correlates against `FixPolicyRules` (**32 rows**), and is applied *after* `.Skip().Take(pageSize)`, so the outer set is one page.
+
+Both fall outside the rule above (which is scoped to the big tables). If either table ever grows past a few thousand rows, revisit them first.
+
+### Residual / environmental (not fixed in code)
+- **Host memory pressure is the upstream root cause.** Until the box has real headroom, SQL's commit target stays low and the query-memory pool with it (observed semaphore target: 8 MB at idle). Freeing RAM, or moving dev off LocalDB to a SQL Express *service* instance with a `min server memory` floor, is the durable environmental fix. `min server memory` was deliberately **not** raised here — reserving 512 MB+ on a box with 782 MB free risks pushing the host into swapping, which would be a net loss.
+- `DatabaseScanStrategy.QueryMatchingRowsAsync` / `QueryFilteredMaxAsync` set no `CommandTimeout`, silently inheriting ADO.NET's 30 s rather than the 60 s `SqlQueryRunner` treats as standard. Harmless today (arguably safer), but inconsistent.
