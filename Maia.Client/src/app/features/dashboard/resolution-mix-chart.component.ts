@@ -224,24 +224,29 @@ export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {
   ngOnDestroy(): void { this.chart?.destroy(); }
 
   private fetch(range: Range): void {
-    // Skeleton only on the very first load; a range change keeps the current
-    // donut on screen and swaps in the rebuilt chart when new data lands — no
-    // flash, no layout shift.
+    // Skeleton only on the very first load. On a range change the existing
+    // donut is UPDATED IN PLACE (Chart.js morphs the segments) rather than
+    // destroyed + rebuilt — no canvas clear, no grow-from-zero re-animation,
+    // so toggling the range doesn't flicker.
     const firstLoad = this.data() === null;
-    if (firstLoad) {
-      this.loading.set(true);
-      this.chart?.destroy();
-      this.chart = undefined;
-    }
+    if (firstLoad) this.loading.set(true);
 
     this.svc.getFailureOutcomes(range).subscribe({
       next: res => {
         this.data.set(res);
         this.loading.set(false);
-        this.chart?.destroy();
-        this.chart = undefined;
-        this.pendingRender = true;
-        queueMicrotask(() => this.renderIfReady());
+        if ((res.totalDetected ?? 0) === 0) {
+          // Nothing to plot — tear down any existing chart (empty state shows).
+          this.chart?.destroy();
+          this.chart = undefined;
+          return;
+        }
+        if (this.chart) {
+          this.updateChart();          // in-place morph — no flicker
+        } else {
+          this.pendingRender = true;   // first build (or coming back from empty)
+          queueMicrotask(() => this.renderIfReady());
+        }
       },
       error: () => {
         this.data.set(null);
@@ -250,6 +255,18 @@ export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {
         this.chart = undefined;
       }
     });
+  }
+
+  /** Push new counts into the live chart so it animates the transition instead
+   *  of rebuilding (the source of the range-toggle flicker). */
+  private updateChart(): void {
+    const d = this.data();
+    if (!d || !this.chart) return;
+    this.chart.data.datasets[0].data = [
+      d.closed.autoHealed, d.closed.operatorApproved, d.closed.fixedByHand, d.closed.operatorRejected,
+      d.needsYou.awaitingDecision, d.needsYou.manualRequired,
+    ];
+    this.chart.update();
   }
 
   private renderIfReady(): void {
