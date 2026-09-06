@@ -90,7 +90,13 @@ const COLORS = {
         <!-- Reconciles the windowed cohort with the live queue: failures from
              before this window that are still open aren't in the ring above. -->
         <div class="outcomes-foot">
-          <a class="foot-link" routerLink="/failures" title="All failures — including older still-open ones not in this window">
+          <!-- Open failures only (Resolved excluded), oldest-first so the
+               older-than-window ones surface at the top. There's no
+               "detected-before-date" filter, so this lands on ALL open, not
+               only the older N — close enough, and never shows resolved. -->
+          <a class="foot-link" [routerLink]="['/failures']"
+             [queryParams]="{ view: 'open', sort: 'detected', dir: 'asc' }"
+             title="Open failures (Resolved excluded), oldest first">
             Older than this window and still open: <b>{{ data()!.olderOpen }}</b> →
           </a>
           <span class="foot-note">not counted above</span>
