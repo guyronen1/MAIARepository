@@ -130,8 +130,12 @@ const COLORS = {
        never changes the card height (no grid-row jolt). */
     .outcomes-body { display: flex; align-items: center; gap: 12px; height: 156px; }
     .donut-wrap  { position: relative; width: 122px; height: 122px; flex-shrink: 0; }
+    /* Canvas (and the tooltip Chart.js draws on it) must sit ABOVE the centre
+       overlay, or a tooltip near the hole gets covered by the big % text. The
+       centre text still shows through the transparent donut hole. */
+    .donut-wrap canvas { position: relative; z-index: 2; }
     .donut-center {
-      position: absolute; inset: 0;
+      position: absolute; inset: 0; z-index: 1;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
       pointer-events: none;
     }
