@@ -1,2 +1,2 @@
-echo "Rerun file :"
+echo "Rerun Job :"
 pause
