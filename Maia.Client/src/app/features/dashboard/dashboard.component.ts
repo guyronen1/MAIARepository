@@ -2,7 +2,7 @@ import { Component, OnDestroy, OnInit, computed, effect, inject, signal } from '
 import { DatePipe } from '@angular/common';
 import { Router, RouterLink } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { DashboardStats } from '../../core/services/failures.service';
+import { DashboardStats, FailuresService } from '../../core/services/failures.service';
 import { ScanService } from '../../core/services/scan.service';
 import { PolledData, WorkerStatusService } from '../../core/services/worker-status.service';
 import { JobFailure, JobLastScanRow, MonitoredJob, ScanResult, SourceLastScanRow, WorkerStatus } from '../../core/models';
@@ -144,7 +144,7 @@ const FAIL_OUTCOMES = new Set(['Failed', 'Timeout', 'Stolen']);
       <div class="analytics-row">
         <app-errors-over-time-chart
             [range]="chartRange()"
-            (rangeChange)="chartRange.set($event)"></app-errors-over-time-chart>
+            (rangeChange)="onChartRangeChange($event)"></app-errors-over-time-chart>
         <app-failures-by-job-chart
             [range]="chartRange()"></app-failures-by-job-chart>
         <app-resolution-mix-chart
@@ -593,6 +593,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
   router = inject(Router);
   private scanSvc   = inject(ScanService);
   private statusSvc = inject(WorkerStatusService);
+  private failuresSvc = inject(FailuresService);
 
   lastScan = signal<ScanResult | null>(null);
 
@@ -601,6 +602,13 @@ export class DashboardComponent implements OnInit, OnDestroy {
    *  card updates both. Resolution Mix on row 2 has its own fixed 7-day
    *  window and ignores this signal. */
   chartRange = signal<ChartRange>('24h');
+  /** True once the operator manually picks a range — after that the initial
+   *  auto-fallback (empty-24h → 7d) never overrides their choice. */
+  private userPickedRange = false;
+  onChartRangeChange(range: ChartRange): void {
+    this.userPickedRange = true;
+    this.chartRange.set(range);
+  }
 
   /** "Needs Attention" panel sort — severity (most-severe-first) or detected
    *  (newest-first). Drives the toggle + the server-side fetch order. */
@@ -814,6 +822,19 @@ export class DashboardComponent implements OnInit, OnDestroy {
     // already polling. The dashboard-snapshot endpoint feeds all four panels
     // (stats / worker-status / recent failures / monitored jobs) atomically.
     this.statusSvc.start();
+
+    // One-time initial default: on a quiet day the 24h window is empty and all
+    // three charts blank out. Probe 24h once; if nothing was detected, start on
+    // 7d. Guarded so it never overrides a range the operator has already picked
+    // (only applies while still on the untouched 24h default).
+    this.failuresSvc.getFailuresOverTime('24h').subscribe({
+      next: res => {
+        if (res.buckets.length === 0 && !this.userPickedRange && this.chartRange() === '24h') {
+          this.chartRange.set('7d');
+        }
+      },
+      error: () => { /* leave on 24h; charts handle their own empty/stale state */ },
+    });
   }
 
   ngOnDestroy() {
