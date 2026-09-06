@@ -2,70 +2,98 @@ import {
   AfterViewInit, Component, ElementRef, OnDestroy, ViewChild,
   computed, effect, inject, input, signal, untracked,
 } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import { ArcElement, Chart, DoughnutController, Tooltip } from 'chart.js';
-import { FailuresService, ResolutionMixItem } from '../../core/services/failures.service';
+import { FailuresService, FailureOutcomes } from '../../core/services/failures.service';
 import { ThemeService } from '../../core/services/theme.service';
 
 Chart.register(ArcElement, DoughnutController, Tooltip);
 
 type Range = '24h' | '7d' | '30d';
 
-// Ring colours match the operator's reading model: green = "MAIA handled it
-// autonomously", blue = "operator decided + MAIA executed", amber = "needs you".
-// rgba @ 0.85 for the muted ops-dashboard tone. "Still Active" is deliberately
-// NOT in the ring — it's unresolved, not a resolution outcome — so it shows as
-// a muted line below.
+// Ring palette — CLOSED group in cool/neutral tones, NEEDS-YOU in amber/red.
+// "Fixed by hand" teal is deliberately distinct from the "Auto-healed" green
+// so the two don't blur together in the ring.
 const COLORS = {
-  autoHealed:       'rgba(22, 163, 74, 0.85)',  // --success @ 0.85
-  operatorApproved: 'rgba(37, 99, 235, 0.85)',  // --info @ 0.85
-  manualRequired:   'rgba(217, 119, 6, 0.85)',  // --warning @ 0.85
+  autoHealed:       'rgba(22, 163, 74, 0.9)',   // --success green
+  operatorApproved: 'rgba(37, 99, 235, 0.9)',   // --info blue
+  fixedByHand:      'rgba(20, 184, 166, 0.9)',   // teal
+  operatorRejected: 'rgba(148, 163, 184, 0.9)',  // slate
+  awaitingDecision: 'rgba(217, 119, 6, 0.9)',    // --warning amber
+  manualRequired:   'rgba(220, 38, 38, 0.9)',    // --danger red
 };
 
 @Component({
   selector: 'app-resolution-mix-chart',
   standalone: true,
+  imports: [RouterLink],
   template: `
     <div class="card chart-card">
       <div class="chart-header">
-        <h3>Resolution Mix</h3>
-        <span class="text-muted text-sm">{{ rangeLabel() }}</span>
+        <h3>Failure Outcomes</h3>
+        @if (data(); as d) {
+          <span class="text-muted text-sm">{{ d.totalDetected }} detected in {{ rangeLabel() }} · state now</span>
+        } @else {
+          <span class="text-muted text-sm">{{ rangeLabel() }}</span>
+        }
       </div>
 
       @if (loading()) {
         <div class="chart-skeleton" aria-hidden="true"></div>
-      } @else if (isEmpty()) {
-        <div class="chart-empty">
-          <p class="text-muted">No failures detected in this range</p>
-        </div>
+      } @else if (!data() || data()!.totalDetected === 0) {
+        <div class="chart-empty"><p class="text-muted">No failures detected in this range</p></div>
       } @else {
-        <div class="donut-block">
-          @if (resolvedTotal() > 0) {
-            <!-- Donut + hero metric: what share of resolved failures MAIA
-                 auto-healed vs needed a human. Center reads "% auto-healed". -->
-            <div class="donut-wrap">
-              <canvas #canvas></canvas>
-              <div class="donut-center" aria-hidden="true">
-                <div class="donut-pct">{{ autoHealPct() }}%</div>
-                <div class="donut-cap">auto-healed</div>
-                <div class="donut-of">of {{ resolvedTotal() }} resolved</div>
-              </div>
+        <div class="outcomes-body">
+          <!-- Donut + hero: what share of everything detected MAIA auto-healed,
+               and how much still needs a human. -->
+          <div class="donut-wrap">
+            <canvas #canvas></canvas>
+            <div class="donut-center" aria-hidden="true">
+              <div class="donut-pct">{{ data()!.autoHealPct }}%</div>
+              <div class="donut-cap">auto-healed</div>
+              <div class="donut-of">{{ data()!.closed.autoHealed }} of {{ data()!.totalDetected }}</div>
+              @if (data()!.needsYou.total > 0) {
+                <div class="donut-need">{{ data()!.needsYou.total }} need you</div>
+              }
             </div>
-            <div class="donut-legend">
-              <span class="lg"><span class="lg-dot dot-auto"></span>Auto-Healed <b>{{ totals().autoHealed }}</b></span>
-              <span class="lg"><span class="lg-dot dot-op"></span>Operator-Approved <b>{{ totals().operatorApproved }}</b></span>
-              <span class="lg"><span class="lg-dot dot-man"></span>Manual-Required <b>{{ totals().manualRequired }}</b></span>
-            </div>
-          } @else {
-            <div class="chart-empty"><p class="text-muted">No resolved failures yet in this window</p></div>
-          }
+          </div>
 
-          <!-- Still Active is unresolved — kept off the ring, shown muted here. -->
-          @if (totals().stillActive > 0) {
-            <div class="still-active text-muted text-sm">
-              <span class="lg-dot dot-still"></span>Still Active <b>{{ totals().stillActive }}</b>
-              <span class="still-note">— unresolved, not part of the mix</span>
+          <div class="outcomes-legend">
+            <div class="lg-group">
+              <div class="lg-head closed">
+                <span>✓ CLOSED</span>
+                <span class="lg-sub">{{ data()!.closed.total }} · {{ pct(data()!.closed.total) }}%</span>
+              </div>
+              <div class="lg-row"><span class="lg-dot dot-auto"></span><span class="lg-label">Auto-healed</span><span class="lg-num">{{ data()!.closed.autoHealed }}</span></div>
+              <div class="lg-row"><span class="lg-dot dot-op"></span><span class="lg-label">Operator-approved</span><span class="lg-num">{{ data()!.closed.operatorApproved }}</span></div>
+              <div class="lg-row"><span class="lg-dot dot-hand"></span><span class="lg-label">Fixed by hand</span><span class="lg-num">{{ data()!.closed.fixedByHand }}</span></div>
+              <div class="lg-row"><span class="lg-dot dot-rej"></span><span class="lg-label">Operator-rejected</span><span class="lg-num">{{ data()!.closed.operatorRejected }}</span></div>
             </div>
-          }
+
+            <div class="lg-group">
+              <div class="lg-head needs">
+                <span>⚠ STILL NEEDS YOU</span>
+                <span class="lg-sub">{{ data()!.needsYou.total }} · {{ pct(data()!.needsYou.total) }}%</span>
+              </div>
+              <a class="lg-row link" routerLink="/failures" [queryParams]="{ view: 'active' }" title="Detected in window, still awaiting an operator decision">
+                <span class="lg-dot dot-await"></span><span class="lg-label">Awaiting decision</span>
+                <span class="lg-num">{{ data()!.needsYou.awaitingDecision }}</span><span class="lg-arrow">→</span>
+              </a>
+              <a class="lg-row link" routerLink="/failures" [queryParams]="{ view: 'manual-required' }" title="Needs off-system / manual intervention">
+                <span class="lg-dot dot-manual"></span><span class="lg-label">Manual required</span>
+                <span class="lg-num">{{ data()!.needsYou.manualRequired }}</span><span class="lg-arrow">→</span>
+              </a>
+            </div>
+          </div>
+        </div>
+
+        <!-- Reconciles the windowed cohort with the live queue: failures from
+             before this window that are still open aren't in the ring above. -->
+        <div class="outcomes-foot">
+          <a class="foot-link" routerLink="/failures" title="All failures — including older still-open ones not in this window">
+            Older than this window and still open: <b>{{ data()!.olderOpen }}</b> →
+          </a>
+          <span class="foot-note">not counted above</span>
         </div>
       }
     </div>
@@ -78,7 +106,7 @@ const COLORS = {
       h3 { font-size: 13px; font-weight: 600; color: var(--text); margin: 0; }
     }
     .chart-skeleton {
-      height: 200px;
+      height: 182px;
       border-radius: var(--radius-sm);
       background: linear-gradient(90deg,
         var(--surface-2) 0%, var(--surface-3) 50%, var(--surface-2) 100%);
@@ -87,45 +115,59 @@ const COLORS = {
     }
     @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
     .chart-empty {
-      height: 200px;
+      height: 182px;
       display: flex; align-items: center; justify-content: center;
       color: var(--text-muted); text-align: center;
     }
 
-    /* CONSTANT 200px body in every state (skeleton / donut / empty) — matches
-       the sibling charts and, crucially, never changes height between loading
-       and loaded, so toggling the range doesn't resize the grid row and jolt
-       all three cards. Content centres within it. */
-    .donut-block { height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
-    .donut-wrap  { position: relative; height: 132px; width: 100%; }
+    /* Donut left, grouped legend right. Fixed body height so toggling the range
+       never changes the card height (no grid-row jolt). */
+    .outcomes-body { display: flex; align-items: center; gap: 14px; height: 156px; }
+    .donut-wrap  { position: relative; width: 140px; height: 140px; flex-shrink: 0; }
     .donut-center {
       position: absolute; inset: 0;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
       pointer-events: none;
     }
-    .donut-pct { font-size: 26px; font-weight: 800; color: var(--text); line-height: 1; }
-    .donut-cap { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-    .donut-of  { font-size: 10px; color: var(--text-dim); margin-top: 1px; }
+    .donut-pct  { font-size: 24px; font-weight: 800; color: var(--success); line-height: 1; }
+    .donut-cap  { font-size: 10px; color: var(--text-muted); margin-top: 1px; }
+    .donut-of   { font-size: 10px; color: var(--text-dim); }
+    .donut-need { font-size: 10px; font-weight: 700; color: var(--warning); margin-top: 3px; }
 
-    .donut-legend {
-      display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px;
-      margin-top: 2px;
+    .outcomes-legend { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+    .lg-group { display: flex; flex-direction: column; gap: 2px; }
+    .lg-head {
+      display: flex; justify-content: space-between; align-items: baseline;
+      font-size: 10px; font-weight: 700; letter-spacing: 0.04em; margin-bottom: 1px;
+      &.closed { color: var(--success); }
+      &.needs  { color: var(--warning); }
+      .lg-sub { color: var(--text-muted); font-weight: 600; }
     }
-    .lg { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-muted);
-          b { color: var(--text); font-weight: 700; } }
+    .lg-row {
+      display: flex; align-items: center; gap: 7px; font-size: 11px;
+      color: var(--text); text-decoration: none;
+    }
+    .lg-row.link { cursor: pointer; border-radius: 4px; padding: 1px 4px; margin: 0 -4px;
+      &:hover { background: var(--surface-2); } }
     .lg-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
-    .dot-auto  { background: var(--success); }
-    .dot-op    { background: var(--info);    }
-    .dot-man   { background: var(--warning); }
-    .dot-still { background: var(--text-dim); }
+    .lg-label { flex: 1; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lg-num { font-weight: 700; color: var(--text); }
+    .lg-arrow { color: var(--text-dim); font-size: 10px; }
+    .dot-auto   { background: rgba(22, 163, 74, 0.9); }
+    .dot-op     { background: rgba(37, 99, 235, 0.9); }
+    .dot-hand   { background: rgba(20, 184, 166, 0.9); }
+    .dot-rej    { background: rgba(148, 163, 184, 0.9); }
+    .dot-await  { background: rgba(217, 119, 6, 0.9); }
+    .dot-manual { background: rgba(220, 38, 38, 0.9); }
 
-    .still-active {
-      display: flex; align-items: center; gap: 5px;
-      margin-top: 4px; padding-top: 6px;
-      border-top: 1px solid var(--border-light); width: 100%; justify-content: center;
-      b { color: var(--text-muted); font-weight: 700; }
+    .outcomes-foot {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-light);
+      font-size: 11px;
     }
-    .still-note { color: var(--text-dim); }
+    .foot-link { color: var(--text-muted); text-decoration: none; b { color: var(--text); }
+      &:hover { color: var(--text); } }
+    .foot-note { color: var(--text-dim); }
   `]
 })
 export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {
@@ -134,25 +176,22 @@ export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {
 
   @ViewChild('canvas') canvasRef?: ElementRef<HTMLCanvasElement>;
 
-  /** Time range driven by the dashboard parent — same 24h/7d/30d toggle as
-   *  Errors Over Time + Failures by Job. */
+  /** 24h/7d/30d toggle, driven by the dashboard parent. */
   range = input.required<Range>();
 
   constructor() {
-    // Re-fetch whenever the parent changes the range (fires once on init too,
-    // before AfterViewInit; renderIfReady waits for the canvas @if branch).
+    // Re-fetch on range change (also fires once on init, before AfterViewInit).
     effect(() => {
       const r = this.range();
       this.fetch(r);
     });
 
-    // Rebuild with the theme-matched segment border on theme flip (data read
-    // untracked so this fires on theme change only).
+    // Rebuild with the theme-matched segment border on theme flip.
     effect(() => {
       this.theme.resolved();
       if (!this.chart) return;
       const canvas = this.canvasRef?.nativeElement;
-      if (canvas && untracked(() => this.resolvedTotal()) > 0) {
+      if (canvas && untracked(() => this.data())?.totalDetected) {
         this.chart.destroy();
         this.buildChart(canvas);
       }
@@ -160,73 +199,50 @@ export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {
   }
 
   loading = signal(true);
-  data    = signal<ResolutionMixItem[]>([]);
+  data    = signal<FailureOutcomes | null>(null);
 
   rangeLabel = computed(() => {
     switch (this.range()) {
-      case '7d':  return 'Last 7 days';
-      case '30d': return 'Last 30 days';
-      default:    return 'Last 24 hours';
+      case '7d':  return 'last 7 days';
+      case '30d': return 'last 30 days';
+      default:    return 'last 24 hours';
     }
   });
 
-  /** Window totals across the gap-filled day rows. */
-  totals = computed(() => this.data().reduce((a, r) => ({
-    autoHealed:       a.autoHealed       + r.autoHealed,
-    operatorApproved: a.operatorApproved + r.operatorApproved,
-    manualRequired:   a.manualRequired   + r.manualRequired,
-    stillActive:      a.stillActive      + r.stillActive,
-  }), { autoHealed: 0, operatorApproved: 0, manualRequired: 0, stillActive: 0 }));
-
-  /** Resolved = the three ring outcomes (Still Active excluded). */
-  resolvedTotal = computed(() => {
-    const t = this.totals();
-    return t.autoHealed + t.operatorApproved + t.manualRequired;
-  });
-  autoHealPct = computed(() => {
-    const n = this.resolvedTotal();
-    return n ? Math.round((this.totals().autoHealed / n) * 100) : 0;
-  });
-
-  /** Empty only when there's literally nothing — no resolutions AND nothing
-   *  still active — across the whole window. */
-  isEmpty = () => {
-    const t = this.totals();
-    return t.autoHealed + t.operatorApproved + t.manualRequired + t.stillActive === 0;
-  };
+  /** Share of the total as an integer percent. */
+  pct(n: number): number {
+    const total = this.data()?.totalDetected ?? 0;
+    return total > 0 ? Math.round((n / total) * 100) : 0;
+  }
 
   private chart?: Chart;
   private pendingRender = false;
 
-  ngAfterViewInit(): void {
-    // No-op — fetch runs from the range effect; renderIfReady waits for the
-    // canvas @if branch to render.
-  }
+  ngAfterViewInit(): void { /* fetch runs from the range effect */ }
   ngOnDestroy(): void { this.chart?.destroy(); }
 
   private fetch(range: Range): void {
-    // Only flash the shimmer skeleton on the very FIRST load. On a range change
-    // we keep the current donut on screen (with its previous numbers) and swap
-    // in the rebuilt chart when the new data lands — no skeleton flash, no
-    // layout change, so the card doesn't look like it's reloading.
-    const firstLoad = this.data().length === 0;
+    // Skeleton only on the very first load; a range change keeps the current
+    // donut on screen and swaps in the rebuilt chart when new data lands — no
+    // flash, no layout shift.
+    const firstLoad = this.data() === null;
     if (firstLoad) {
       this.loading.set(true);
       this.chart?.destroy();
       this.chart = undefined;
     }
 
-    this.svc.getResolutionMix(range).subscribe({
-      next: rows => {
-        this.data.set(rows);
+    this.svc.getFailureOutcomes(range).subscribe({
+      next: res => {
+        this.data.set(res);
         this.loading.set(false);
-        this.chart?.destroy();       // swap: tear down the old chart, rebuild below
+        this.chart?.destroy();
         this.chart = undefined;
         this.pendingRender = true;
         queueMicrotask(() => this.renderIfReady());
       },
       error: () => {
-        this.data.set([]);
+        this.data.set(null);
         this.loading.set(false);
         this.chart?.destroy();
         this.chart = undefined;
@@ -236,11 +252,8 @@ export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {
 
   private renderIfReady(): void {
     if (!this.pendingRender) return;
-    // The canvas only exists when resolvedTotal > 0 (template @if). If the view
-    // hasn't caught up, retry once next frame; if there's nothing to plot
-    // (only still-active, or empty), just clear the pending flag.
     const canvas = this.canvasRef?.nativeElement;
-    if (canvas && this.resolvedTotal() > 0) {
+    if (canvas && (this.data()?.totalDetected ?? 0) > 0) {
       this.buildChart(canvas);
       this.pendingRender = false;
       return;
@@ -248,14 +261,14 @@ export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {
     requestAnimationFrame(() => {
       if (!this.pendingRender) return;
       const c2 = this.canvasRef?.nativeElement;
-      if (c2 && this.resolvedTotal() > 0) this.buildChart(c2);
+      if (c2 && (this.data()?.totalDetected ?? 0) > 0) this.buildChart(c2);
       this.pendingRender = false;
     });
   }
 
   private buildChart(canvas: HTMLCanvasElement): void {
-    const t = this.totals();
-    // Segment separators match the card background in both themes.
+    const d = this.data();
+    if (!d) return;
     const surface = (typeof document !== 'undefined'
       ? getComputedStyle(document.documentElement).getPropertyValue('--surface').trim()
       : '') || '#ffffff';
@@ -263,10 +276,17 @@ export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {
     this.chart = new Chart(canvas, {
       type: 'doughnut',
       data: {
-        labels: ['Auto-Healed', 'Operator-Approved', 'Manual-Required'],
+        labels: ['Auto-healed', 'Operator-approved', 'Fixed by hand', 'Operator-rejected',
+                 'Awaiting decision', 'Manual required'],
         datasets: [{
-          data: [t.autoHealed, t.operatorApproved, t.manualRequired],
-          backgroundColor: [COLORS.autoHealed, COLORS.operatorApproved, COLORS.manualRequired],
+          data: [
+            d.closed.autoHealed, d.closed.operatorApproved, d.closed.fixedByHand, d.closed.operatorRejected,
+            d.needsYou.awaitingDecision, d.needsYou.manualRequired,
+          ],
+          backgroundColor: [
+            COLORS.autoHealed, COLORS.operatorApproved, COLORS.fixedByHand, COLORS.operatorRejected,
+            COLORS.awaitingDecision, COLORS.manualRequired,
+          ],
           borderColor: surface,
           borderWidth: 2,
           hoverOffset: 4,
@@ -275,17 +295,15 @@ export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        cutout: '68%',
+        cutout: '70%',
         animation: { duration: 250, easing: 'easeOutQuad' },
         plugins: {
-          legend: { display: false },   // custom HTML legend below (carries counts)
+          legend: { display: false },
           tooltip: {
             callbacks: {
               label: ctx => {
                 const val = (ctx.parsed as number) ?? 0;
-                const n = t.autoHealed + t.operatorApproved + t.manualRequired;
-                const pct = n ? Math.round((val / n) * 100) : 0;
-                return ` ${ctx.label}: ${val} (${pct}%)`;
+                return ` ${ctx.label}: ${val} (${this.pct(val)}%)`;
               },
             },
           },

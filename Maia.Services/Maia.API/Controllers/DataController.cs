@@ -569,12 +569,20 @@ public class DataController(
     }
 
     /// <summary>
-    /// Resolution-mix breakdown bucketed by JobFailure.DetectedAt over a rolling
-    /// 24h / 7d / 30d window (shares the dashboard range toggle). Single
-    /// timestamp source keeps the semantic clear: "of failures detected in the
-    /// window, here's the outcome composition". Includes in-progress failures
-    /// via the stillActive count. Returns day-buckets; the donut consumer sums
-    /// them (day granularity retained for a future trend view).
+    /// "Failure Outcomes" — of failures DETECTED in the rolling 24h/7d/30d
+    /// window, their disposition as of NOW, as a mutually-exclusive partition
+    /// (the six buckets sum to totalDetected). Two groups: CLOSED (Status=
+    /// Resolved, split by HOW) and STILL-NEEDS-YOU (open). Priority per failure
+    /// (first match wins) so nothing is double-counted:
+    ///   auto-healed → operator-approved → operator-rejected → fixed-by-hand
+    ///   (Failed) awaiting-decision → (ManualRequired|AwaitingManualAction) manual.
+    /// "Operator-rejected" = Resolved after the operator declined the AI
+    /// suggestion (a rejected rec + no automated success log) — there is no
+    /// native closed-by-rejection state (reject routes to ManualRequired), so
+    /// this is the honest closed reading of "AI declined, closed by hand".
+    /// <c>olderOpen</c> = failures detected BEFORE the window that are still
+    /// open — surfaced so the window's cohort view reconciles with the live
+    /// (all-time) KPI queue without silently dropping stale open work.
     /// </summary>
     [HttpGet("analytics/resolution-mix")]
     public async Task<IActionResult> GetResolutionMix(
@@ -594,55 +602,64 @@ public class DataController(
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
 
-        // Per-failure classification: project the AutoHeal / Operator flags
-        // into a flat per-failure row, then group + count in memory. We can't
-        // express `.Count(f => db.FixExecutionLogs.Any(...))` inside `.GroupBy`
-        // — SQL Server rejects "aggregate over subquery". Per-row .Any() in
-        // the SELECT translates to correlated subqueries (fine), and the
-        // 7-day window keeps the in-memory grouping cheap.
-        //
-        // Caveat (inherited from dashboard-stats): a failure with BOTH a
-        // successful AutoHeal log and a successful OperatorApproved log would
-        // be counted in both columns. Idempotent suggestion generation makes
-        // this rare in practice; documenting for parity with that endpoint.
-        var raw = await db.JobFailures
+        // Flat per-failure projection (correlated .Any() subqueries translate
+        // fine; the window keeps the in-memory classification cheap). We can't
+        // express these counts inside a GROUP BY (SQL Server rejects aggregate-
+        // over-subquery), so we classify in memory below.
+        var rows = await db.JobFailures
             .Where(f => f.DetectedAt >= windowStart)
             .Select(f => new
             {
-                Day         = new DateTime(f.DetectedAt.Year, f.DetectedAt.Month, f.DetectedAt.Day),
                 f.Status,
                 HasAutoHeal = db.FixExecutionLogs.Any(x =>
                     x.FailureId == f.FailureId && x.Success && x.TriggerType == TriggerType.AutoHeal),
                 HasOperator = db.FixExecutionLogs.Any(x =>
                     x.FailureId == f.FailureId && x.Success && x.TriggerType == TriggerType.OperatorApproved),
+                HasRejected = db.AIRecommendations.Any(r =>
+                    r.FailureId == f.FailureId && r.OperatorApproved == false),
             })
             .ToListAsync(ct);
 
-        var grouped = raw
-            .GroupBy(f => f.Day)
-            .ToDictionary(g => g.Key, g => new
+        int autoHealed = 0, operatorApproved = 0, operatorRejected = 0, fixedByHand = 0,
+            awaitingDecision = 0, manualRequired = 0;
+
+        foreach (var f in rows)
+        {
+            if (f.Status == JobStatus.Resolved)
             {
-                autoHealed       = g.Count(f => f.HasAutoHeal),
-                operatorApproved = g.Count(f => f.HasOperator),
-                manualRequired   = g.Count(f => f.Status == JobStatus.ManualRequired),
-                // "Still Active" uses the same predicate as the Active Failures
-                // KPI on the dashboard (Status=Failed) so the two surfaces agree.
-                stillActive      = g.Count(f => f.Status == JobStatus.Failed),
-            });
+                if      (f.HasAutoHeal) autoHealed++;
+                else if (f.HasOperator) operatorApproved++;
+                else if (f.HasRejected) operatorRejected++;   // declined AI, closed by hand
+                else                    fixedByHand++;         // Mark Resolved, no rejection
+            }
+            else if (f.Status == JobStatus.Failed)
+            {
+                awaitingDecision++;
+            }
+            else   // ManualRequired or AwaitingManualAction — both "on the operator"
+            {
+                manualRequired++;
+            }
+        }
 
-        // Gap-fill day buckets from the window's first day through today,
-        // oldest first. The donut sums these; day granularity is retained for
-        // a future trend view.
-        var firstDay = windowStart.Date;
-        var dayCount = (int)(DateTime.Today - firstDay).TotalDays + 1;
-        var result = Enumerable.Range(0, dayCount)
-            .Select(offset => firstDay.AddDays(offset))
-            .Select(d => grouped.TryGetValue(d, out var r)
-                ? new { bucketDay = d.ToString("yyyy-MM-dd"), r.autoHealed, r.operatorApproved, r.manualRequired, r.stillActive }
-                : new { bucketDay = d.ToString("yyyy-MM-dd"), autoHealed = 0, operatorApproved = 0, manualRequired = 0, stillActive = 0 })
-            .ToList();
+        var closedTotal = autoHealed + operatorApproved + operatorRejected + fixedByHand;
+        var needsTotal  = awaitingDecision + manualRequired;
+        var total       = closedTotal + needsTotal;
 
-        return Ok(result);
+        // Failures detected BEFORE the window that are still open (not Resolved)
+        // — the "older than this window and still open" footer count.
+        var olderOpen = await db.JobFailures.CountAsync(
+            f => f.DetectedAt < windowStart && f.Status != JobStatus.Resolved, ct);
+
+        return Ok(new
+        {
+            window        = range,
+            totalDetected = total,
+            autoHealPct   = total > 0 ? (int)Math.Round(autoHealed * 100.0 / total) : 0,
+            closed        = new { total = closedTotal, autoHealed, operatorApproved, fixedByHand, operatorRejected },
+            needsYou      = new { total = needsTotal, awaitingDecision, manualRequired },
+            olderOpen,
+        });
     }
 
     /// <summary>

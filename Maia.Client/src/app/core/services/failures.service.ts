@@ -82,10 +82,11 @@ export class FailuresService {
       { params: new HttpParams().set('range', range).set('limit', limit) });
   }
 
-  /** Resolution breakdown day-buckets within the chosen range. Shares the
-   *  24h/7d/30d toggle with the other dashboard charts. */
-  getResolutionMix(range: '24h' | '7d' | '30d' = '7d'): Observable<ResolutionMixItem[]> {
-    return this.http.get<ResolutionMixItem[]>(
+  /** Failure Outcomes — disposition (as of now) of failures detected in the
+   *  chosen 24h/7d/30d window, as a mutually-exclusive partition. Shares the
+   *  range toggle with the other dashboard charts. */
+  getFailureOutcomes(range: '24h' | '7d' | '30d' = '7d'): Observable<FailureOutcomes> {
+    return this.http.get<FailureOutcomes>(
       `${this.base}/analytics/resolution-mix`,
       { params: new HttpParams().set('range', range) });
   }
@@ -97,13 +98,26 @@ export interface FailuresByJobItem {
   failureCount:   number;
 }
 
-export interface ResolutionMixItem {
-  /** YYYY-MM-DD, server-local midnight day key. */
-  bucketDay:        string;
-  autoHealed:       number;
-  operatorApproved: number;
-  manualRequired:   number;
-  stillActive:      number;
+/** Disposition of failures detected in the window, as of now. The six leaf
+ *  counts are mutually exclusive and sum to totalDetected (closed + needsYou).
+ *  olderOpen = detected before the window but still open (not counted above). */
+export interface FailureOutcomes {
+  window:        '24h' | '7d' | '30d';
+  totalDetected: number;
+  autoHealPct:   number;
+  closed: {
+    total:            number;
+    autoHealed:       number;
+    operatorApproved: number;
+    fixedByHand:      number;
+    operatorRejected: number;
+  };
+  needsYou: {
+    total:            number;
+    awaitingDecision: number;
+    manualRequired:   number;
+  };
+  olderOpen: number;
 }
 
 export interface FailuresOverTimeBucket {
