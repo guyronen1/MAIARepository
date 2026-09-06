@@ -1,6 +1,6 @@
 import {
   AfterViewInit, Component, ElementRef, OnDestroy, ViewChild,
-  computed, effect, inject, input, signal, untracked,
+  computed, effect, inject, input, signal,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { ArcElement, Chart, DoughnutController, Tooltip } from 'chart.js';
@@ -198,15 +198,17 @@ export class ResolutionMixChartComponent implements AfterViewInit, OnDestroy {
       this.fetch(r);
     });
 
-    // Rebuild with the theme-matched segment border on theme flip.
+    // On theme flip only the segment border (= --surface) changes. Update it
+    // IN PLACE — destroying + rebuilding the chart here dropped the tooltip's
+    // event handlers, so hovering stopped showing tooltips after a theme switch.
     effect(() => {
       this.theme.resolved();
       if (!this.chart) return;
-      const canvas = this.canvasRef?.nativeElement;
-      if (canvas && untracked(() => this.data())?.totalDetected) {
-        this.chart.destroy();
-        this.buildChart(canvas);
-      }
+      const surface = (typeof document !== 'undefined'
+        ? getComputedStyle(document.documentElement).getPropertyValue('--surface').trim()
+        : '') || '#ffffff';
+      this.chart.data.datasets[0].borderColor = surface;
+      this.chart.update();
     });
   }
 
