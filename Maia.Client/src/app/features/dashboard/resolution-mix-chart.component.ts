@@ -75,11 +75,19 @@ const COLORS = {
                 <span>⚠ STILL NEEDS YOU</span>
                 <span class="lg-sub">{{ data()!.needsYou.total }} · {{ pct(data()!.needsYou.total) }}%</span>
               </div>
-              <a class="lg-row link" routerLink="/failures" [queryParams]="{ view: 'active' }" title="Detected in window, still awaiting an operator decision">
+              <!-- The chart bucket is windowed; the failures list isn't, so we
+                   sort newest-first so the recent items the chart highlights
+                   surface at the top instead of being buried under old ones by
+                   the list's default severity sort. -->
+              <a class="lg-row link" routerLink="/failures"
+                 [queryParams]="{ view: 'active', sort: 'detected', dir: 'desc' }"
+                 title="Failed failures awaiting an operator decision (newest first)">
                 <span class="lg-dot dot-await"></span><span class="lg-label">Awaiting decision</span>
                 <span class="lg-num">{{ data()!.needsYou.awaitingDecision }}</span><span class="lg-arrow">→</span>
               </a>
-              <a class="lg-row link" routerLink="/failures" [queryParams]="{ view: 'manual-required' }" title="Needs off-system / manual intervention">
+              <a class="lg-row link" routerLink="/failures"
+                 [queryParams]="{ view: 'manual-required', sort: 'detected', dir: 'desc' }"
+                 title="Needs manual intervention (newest first)">
                 <span class="lg-dot dot-manual"></span><span class="lg-label">Manual required</span>
                 <span class="lg-num">{{ data()!.needsYou.manualRequired }}</span><span class="lg-arrow">→</span>
               </a>
