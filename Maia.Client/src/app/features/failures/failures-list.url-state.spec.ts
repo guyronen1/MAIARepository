@@ -76,8 +76,8 @@ describe('FailuresListComponent — URL state round-trip', () => {
 
     expect(component.view()).toBeNull();
     expect(component.page()).toBe(1);
-    expect(component.sort()).toBe('severity');   // SORT_DEFAULT
-    expect(component.dir()).toBe('desc');         // DIR_DEFAULT (severity desc = most-severe-first)
+    expect(component.sort()).toBe('detected');   // SORT_DEFAULT (newest-first)
+    expect(component.dir()).toBe('desc');         // DIR_DEFAULT
   });
 
   // ── Outbound: patchUrl strips defaults ──────────────────────────────────

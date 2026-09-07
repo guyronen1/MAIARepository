@@ -30,11 +30,12 @@ const VIEW_LABELS: Record<string, string> = {
 const PAGE_SIZE = 50;
 
 type SortDir = 'asc' | 'desc';
-// Default = severity (most-severe-first), then newest — operators triage by
-// urgency, not recency. A column's natural default direction is desc; for
-// severity, desc = most-severe-first (Critical→Low, unclassified last), the
-// same "desc = most prominent" convention as detected(newest).
-const SORT_DEFAULT = 'severity';
+// Default = detected (newest-first). The page shows ALL statuses by default,
+// so a severity default surfaced resolved-Critical rows above active work,
+// which read as noise on a triage list. Newest-first is the intuitive default;
+// severity stays a click-to-sort column. (The dashboard "Needs Attention" panel
+// is open-only and keeps severity as ITS default — separate surface.)
+const SORT_DEFAULT = 'detected';
 const DIR_DEFAULT: SortDir = 'desc';
 /** Initial direction when a column is first selected (severity most-severe- /
  *  dates+ids newest-first; text A→Z; status grouped ascending). Also the
