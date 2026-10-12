@@ -20,6 +20,7 @@ public class ScanSourcesConfigController(
     IDbContextFactory<MaiaDbContext>      dbFactory,
     IAuditRepository                      audit,
     IScanWatermarkSeeder                  seeder,
+    IConfiguration                        config,
     ICurrentUserAccessor                  currentUser,
     ILogger<ScanSourcesConfigController>  logger)
     : ConfigControllerBase(audit, currentUser, logger)
@@ -29,6 +30,8 @@ public class ScanSourcesConfigController(
     /// Returns a 400 IActionResult on the first violation, else null.
     ///   • LogFolderRequired / ConnectionNameRequired / LogSourceUrlRequired — the
     ///     config field the source's type needs.
+    ///   • ConnectionNameUnknown — the key isn't in ConnectionStrings (every scan of
+    ///     the source would fail). The drawer's dropdown is the primary guard.
     ///   • IncludeSubfoldersInvalidForType — recursion only applies to file types.
     ///   • SourceNameRequired / SourceNameDuplicate — name present + unique among the
     ///     job's ACTIVE sources (case-insensitive via the DB's CI collation).
@@ -54,6 +57,9 @@ public class ScanSourcesConfigController(
             return BadRequest(new { error = "LogFolderRequired", message = $"{scanType} sources require a Log Folder." });
         if (scanType == ScanType.Database && string.IsNullOrWhiteSpace(req.ConnectionName))
             return BadRequest(new { error = "ConnectionNameRequired", message = "Database sources require a Connection Name." });
+        if (scanType == ScanType.Database && string.IsNullOrWhiteSpace(config.GetConnectionString(req.ConnectionName!.Trim())))
+            return BadRequest(new { error = "ConnectionNameUnknown",
+                message = $"Connection '{req.ConnectionName}' is not configured in appsettings ConnectionStrings." });
         if (scanType == ScanType.ApiEndpoint && string.IsNullOrWhiteSpace(req.LogSourceUrl))
             return BadRequest(new { error = "LogSourceUrlRequired", message = "ApiEndpoint sources require a URL." });
         if (req.IncludeSubfolders && !isFileBased)

@@ -5,6 +5,7 @@ import { ConfigService, UpsertScanSourceRequest, CreateScanSourceResponse } from
 import { NotificationService } from '../../../../core/services/notification.service';
 import { ScanSource } from '../../../../core/models';
 import { DrawerComponent } from '../../../../shared/drawer/drawer.component';
+import { FolderPickerComponent } from '../../../../shared/folder-picker/folder-picker.component';
 
 const SCAN_TYPES = [
   { id: 1, name: 'FileSystem' }, { id: 2, name: 'Database' },
@@ -20,7 +21,7 @@ const SCAN_TYPES = [
 @Component({
   selector: 'app-scan-source-drawer',
   standalone: true,
-  imports: [FormsModule, DrawerComponent],
+  imports: [FormsModule, DrawerComponent, FolderPickerComponent],
   template: `
     <app-drawer [open]="isOpen()" [ariaLabel]="'Scan source'" (close)="isOpen.set(false)">
       <ng-container drawer-title>{{ editingId() ? 'Edit' : 'New' }} Scan Source</ng-container>
@@ -44,7 +45,10 @@ const SCAN_TYPES = [
         @if (isFileBased(form.scanTypeId)) {
           <div class="form-group span2">
             <label>Folder to Scan *</label>
-            <input [(ngModel)]="form.logFolder" placeholder="C:\\logs\\app" />
+            <div class="input-group">
+              <input [(ngModel)]="form.logFolder" placeholder="C:\\logs\\app" dir="auto" />
+              <button type="button" class="btn btn-ghost btn-sm" (click)="browse('logFolder')" title="Browse folders on the MAIA server">📁 Browse…</button>
+            </div>
           </div>
           @if (form.scanTypeId === 1) {
             <div class="form-group span2">
@@ -53,7 +57,10 @@ const SCAN_TYPES = [
             </div>
             <div class="form-group span2">
               <label>Input Folder</label>
-              <input [(ngModel)]="form.inputFolder" placeholder="Optional — base for relative input paths" />
+              <div class="input-group">
+                <input [(ngModel)]="form.inputFolder" placeholder="Optional — base for relative input paths" dir="auto" />
+                <button type="button" class="btn btn-ghost btn-sm" (click)="browse('inputFolder')" title="Browse folders on the MAIA server">📁 Browse…</button>
+              </div>
             </div>
           }
           <div class="form-group span2">
@@ -73,7 +80,22 @@ const SCAN_TYPES = [
         @if (form.scanTypeId === 2) {
           <div class="form-group span2">
             <label>Connection Name *</label>
-            <input [(ngModel)]="form.connectionName" placeholder="appsettings connection key" />
+            @if (connectionNames(); as names) {
+              <select [(ngModel)]="form.connectionName">
+                <option [ngValue]="null" disabled>Select a connection…</option>
+                @if (isStaleConnection(names)) {
+                  <option [ngValue]="form.connectionName">{{ form.connectionName }} (not configured)</option>
+                }
+                @for (n of names; track n) { <option [ngValue]="n">{{ n }}</option> }
+              </select>
+              @if (isStaleConnection(names)) {
+                <div class="soft-warn">⚠ '{{ form.connectionName }}' is not in the API's ConnectionStrings — pick a configured connection.</div>
+              }
+            } @else {
+              <!-- Lookup failed / nothing configured: never strand the drawer on an empty select. -->
+              <input [(ngModel)]="form.connectionName" placeholder="appsettings connection key" />
+              <span class="field-hint">{{ connectionsLoading() ? 'Loading configured connections…' : 'Could not load the configured connections — type the appsettings key.' }}</span>
+            }
           </div>
         }
         @if (form.scanTypeId === 3) {
@@ -96,6 +118,8 @@ const SCAN_TYPES = [
         </button>
       </div>
     </app-drawer>
+    <app-folder-picker [open]="pickerField() !== null" [initialPath]="pickerInitialPath()"
+                       (picked)="onFolderPicked($event)" (cancelled)="pickerField.set(null)" />
   `,
   styles: [`
     .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; max-width: 560px; }
@@ -105,6 +129,8 @@ const SCAN_TYPES = [
     .form-group input:not([type="checkbox"]), .form-group select, .form-group textarea {
       padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; background: var(--surface); color: var(--text);
     }
+    .input-group { display: flex; gap: 6px; align-items: center; }
+    .input-group input { flex: 1; min-width: 0; }
     .form-group input[disabled] { background: var(--surface-2, #f8fafc); color: var(--text-muted); }
     .toggle-label { flex-direction: row; align-items: center; gap: 8px; cursor: pointer; }
     .toggle-label input[type="checkbox"] { width: 16px; height: 16px; margin: 0; flex: none; }
@@ -149,6 +175,14 @@ export class ScanSourceDrawerComponent {
   editingId = signal<number | null>(null);
   form: UpsertScanSourceRequest = this.blank();
 
+  /** ConnectionStrings keys for the Database dropdown; null = not loaded / failed /
+   *  empty (falls back to the free-text input). Loaded once per drawer lifetime. */
+  connectionNames    = signal<string[] | null>(null);
+  connectionsLoading = signal(false);
+  /** Which folder field the server-side picker is filling; null = picker closed. */
+  pickerField        = signal<'logFolder' | 'inputFolder' | null>(null);
+  pickerInitialPath  = signal<string | null>(null);
+
   isFileBased(scanTypeId: number): boolean { return scanTypeId === 1 || scanTypeId === 4; }
   scanTypeName(id: number): string { return this.scanTypes.find(t => t.id === id)?.name ?? String(id); }
 
@@ -161,11 +195,39 @@ export class ScanSourceDrawerComponent {
           connectionName: s.connectionName, logSourceUrl: s.logSourceUrl, isActive: s.isActive,
           seedWatermarkFromNow: true }
       : this.blank();
+    this.pickerField.set(null);
+    this.loadConnectionNames();
     this.isOpen.set(true);
+  }
+
+  /** A saved connection key the API no longer has — kept visible, flagged. */
+  isStaleConnection(names: string[]): boolean {
+    return !!this.form.connectionName && !names.includes(this.form.connectionName);
+  }
+
+  browse(field: 'logFolder' | 'inputFolder') {
+    this.pickerInitialPath.set(this.form[field]);
+    this.pickerField.set(field);
+  }
+
+  onFolderPicked(path: string) {
+    const field = this.pickerField();
+    if (field) this.form[field] = path;
+    this.pickerField.set(null);
+  }
+
+  private loadConnectionNames() {
+    if (this.connectionNames() !== null || this.connectionsLoading()) return;
+    this.connectionsLoading.set(true);
+    this.svc.getConnectionNames().subscribe({
+      next:  names => { this.connectionNames.set(names.length ? names : null); this.connectionsLoading.set(false); },
+      error: ()    => this.connectionsLoading.set(false),
+    });
   }
 
   save() {
     if (!this.form.name?.trim()) { this.error.set('Name is required.'); return; }
+    if (this.form.scanTypeId === 2 && !this.form.connectionName?.trim()) { this.error.set('Connection is required.'); return; }
     this.saving.set(true);
     this.error.set(null);
     const id = this.editingId();

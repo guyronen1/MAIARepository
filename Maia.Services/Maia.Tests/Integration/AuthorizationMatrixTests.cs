@@ -97,6 +97,8 @@ public sealed class AuthorizationMatrixTests : IAsyncLifetime
         new("POST", "/api/config/classification-rules", Tier.Admin),
         new("PUT", "/api/config/classification-rules/1", Tier.Admin),
         new("DELETE", "/api/config/classification-rules/1", Tier.Admin),
+        new("GET", "/api/config/connection-names", Tier.Admin),
+        new("GET", "/api/config/browse-folders", Tier.Admin),
 
         // ── Admin tier: maintenance + user management ──
         new("POST", "/api/admin/scan-history/cleanup", Tier.Admin),

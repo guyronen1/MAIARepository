@@ -87,6 +87,13 @@ Optional — enable Swagger in Production (without switching environment) by add
 ```
 (Note: every republish regenerates `web.config`, so this must be re-added each time.)
 
+Scan-source **Browse…** picker (Admin) lists folders **as the IIS app-pool identity
+sees them** — a folder the identity can't read shows "no access", and mapped drive
+letters of an interactive user don't exist for it (use UNC paths). On production, set
+`FolderBrowser:Roots` in `appsettings.Production.json` to the log/input folders MAIA
+should be able to see, e.g. `"FolderBrowser": { "Roots": [ "D:\\Logs", "\\\\fileserver\\b2b" ] }`;
+left empty, the picker can browse every ready drive on the server.
+
 ---
 
 ## Deploy: SPA (Maia.Client)

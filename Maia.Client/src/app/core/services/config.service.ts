@@ -71,6 +71,13 @@ export interface UpsertScanSourceRequest {
  *  not run) — the entity IS saved; surface them, don't treat them as errors. */
 export interface CreateScanSourceResponse { scanSourceId: number; warnings?: string[] | null; }
 export interface CreateScanRuleResponse   { checkRuleId: number;  warnings?: string[] | null; }
+/** Server-side folder browser (GET /config/browse-folders). `path` null = roots view;
+ *  `parent` null = Up leads back to the roots. Directories only. */
+export interface FolderEntry   { name: string; fullPath: string; }
+export interface FolderListing {
+  path: string | null; parent: string | null;
+  folders: FolderEntry[]; roots: FolderEntry[]; truncated: boolean;
+}
 export interface UpsertScanRuleRequest {
   checkType: string; sourceTable: string | null; targetField: string;
   minValue: number | null; maxValue: number | null; expectedValue: string | null;
@@ -161,6 +168,13 @@ export class ConfigService {
 
   // ── Lookups ────────────────────────────────────────────────────────────────
   getJobTypes():   Observable<JobType[]>   { return this.http.get<JobType[]>(`${this.base}/job-types`); }
+  /** ConnectionStrings keys from the API's appsettings (names only, never values). Admin. */
+  getConnectionNames(): Observable<string[]> { return this.http.get<string[]>(`${this.base}/connection-names`); }
+  /** Sub-folders of `path` on the MAIA server; omit `path` for the roots. Admin. */
+  browseFolders(path?: string | null): Observable<FolderListing> {
+    const params = path ? new HttpParams().set('path', path) : undefined;
+    return this.http.get<FolderListing>(`${this.base}/browse-folders`, { params });
+  }
   getErrorTypes(includeInactive = false): Observable<ErrorType[]> {
     const params = includeInactive ? new HttpParams().set('includeInactive', 'true') : undefined;
     return this.http.get<ErrorType[]>(`${this.base}/error-types`, { params });

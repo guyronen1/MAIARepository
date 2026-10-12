@@ -8,6 +8,7 @@ using Maia.Infrastructure.Fix;
 using Maia.Infrastructure.Scanning;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;
@@ -48,8 +49,16 @@ public class ScanSourceCrudTests : IAsyncLifetime
         _audit = new CapturingAudit();
         var factory     = new TestDbContextFactory(options);
         var currentUser = Mock.Of<ICurrentUserAccessor>();
+        // Every connection name the tests use must exist — unknown keys are a 400.
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:DefaultConnection"] = "Server=x;",
+            ["ConnectionStrings:C"]                 = "Server=x;",
+            ["ConnectionStrings:ConnA"]             = "Server=x;",
+            ["ConnectionStrings:ConnB"]             = "Server=x;",
+        }).Build();
         _ctrl = new ScanSourcesConfigController(
-            factory, _audit, Mock.Of<IScanWatermarkSeeder>(), currentUser,
+            factory, _audit, Mock.Of<IScanWatermarkSeeder>(), config, currentUser,
             NullLogger<ScanSourcesConfigController>.Instance);
         _rules = new ScanRulesConfigController(
             factory,
@@ -94,6 +103,17 @@ public class ScanSourceCrudTests : IAsyncLifetime
 
     [Fact] public async Task DbSource_NoConnectionName_400()
         => Assert.Equal("ConnectionNameRequired", ErrorOf(await _ctrl.CreateScanSource(JobId, Req("db", DbType), default)));
+
+    [Fact] public async Task DbSource_UnknownConnectionName_400()
+        => Assert.Equal("ConnectionNameUnknown", ErrorOf(await _ctrl.CreateScanSource(JobId, Req("db", DbType, connectionName: "Nope"), default)));
+
+    [Fact]
+    public async Task UpdateDbSource_ToUnknownConnectionName_400()
+    {
+        var id = await CreateOkAsync(Req("db", DbType, connectionName: "C"));
+        Assert.Equal("ConnectionNameUnknown",
+            ErrorOf(await _ctrl.UpdateScanSource(id, Req("db", DbType, connectionName: "Gone"), default)));
+    }
 
     [Fact] public async Task ApiSource_NoUrl_400()
         => Assert.Equal("LogSourceUrlRequired", ErrorOf(await _ctrl.CreateScanSource(JobId, Req("api", ApiType), default)));

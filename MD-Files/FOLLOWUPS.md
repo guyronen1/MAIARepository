@@ -153,3 +153,23 @@ Context: `ScanCheckRule.DetailColumns` appends source-row values to `JobFailure.
 - **`{col:Name}` fix-payload placeholders.** Detail values exist only inside the message text today. A fix (e.g. a SqlScript or ApiCall) that wants the row's `Details` or `UpdateDate` can't reach them. Would need the values persisted structurally (a `JobFailureDetails` child table or a JSON column on `JobFailures`) and a new token family in `IPlaceholderResolver`. Keep the SqlScript write-guard semantics: these are NOT row identifiers and must not satisfy the `{sourceId}`/`{referenceId}` WHERE requirement.
 - **Structured rendering in the drawer.** The drawer shows the raw `<pre>`; a key/value table for the detail lines (parse on `\n` + first `: `) would read better for long values. Cosmetic; only worth it once operators use ≥3 detail columns routinely.
 - **Per-column "show in list" toggle.** Today the failures-list cell collapses the whole message to one ellipsized line. If an operator wants e.g. `Details` visible in the list without opening the drawer, that needs a column-level flag or a dedicated list column — decide after seeing real usage.
+
+## Scan-source folder picker follow-ons (opened 2026-10-12, not started)
+
+Context: the scan-source `📁 Browse…` picker is a **server-side** folder browser (`GET /api/config/browse-folders`, `FolderPickerComponent`). See `DECISIONS.md` → "Scan-source pickers" for why it isn't a native Windows dialog. A UNC share works today if the operator types `\\server\share` and presses Go. Two convenience additions were requested and deliberately parked:
+
+- **List a server's shares when the path is `\\server`.** Today `\\server` alone returns `FolderNotFound`, because Windows doesn't enumerate shares as directories, so the operator has to know the share name. Fix: when the path is a bare `\\server`, call `NetShareEnum` (P/Invoke `netapi32.dll`, level 1, keep disk shares `STYPE_DISKTREE`, skip hidden `$` shares unless asked) and return the shares as `folders`.
+  - Run it as the API identity. On IIS that's the machine account `DOMAIN\HOST$` unless the app pool runs as a domain service account, so the list shows what the *scanner* can reach.
+  - Bound it with a timeout, because an unreachable server can block for ~20s+.
+  - When `FolderBrowser:Roots` is set, only allow it if some root sits on that server.
+  - Windows-only API, so guard with `OperatingSystem.IsWindows()`.
+- **Quick-pick "Used by other sources" locations.** Show the distinct `LogFolder` / `InputFolder` values of existing active FS / FileContent sources as one-click chips next to the roots, so common shares (e.g. the B2B share) don't need retyping.
+  - Read-only query: Admin, `AsNoTracking`, distinct paths only.
+  - Respect `FolderBrowser:Roots` filtering.
+  - Optionally mark chips whose folder no longer exists.
+
+**Acceptance:**
+1. Typing `\\fileserver` lists its disk shares, clicking one navigates into it, and a hidden `$` share is not listed.
+2. An unreachable `\\nohost` returns an error within the timeout and doesn't hang the request.
+3. With `FolderBrowser:Roots` set, a server that no root sits on is rejected with `PathOutsideRoots`.
+4. Quick-pick chips show the existing source folders (deduplicated, case-insensitive), and clicking one opens it.
