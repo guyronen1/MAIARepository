@@ -95,7 +95,8 @@ public class DatabaseScanStrategySqlQueryTests
         => cols.ToDictionary(c => c.Name, c => c.Value, StringComparer.OrdinalIgnoreCase);
 
     private static ScanCheckRule SqlRule(int id, string query, string targetField,
-        string? sourceIdColumn = null, string? desc = null, string? watermarkColumn = null)
+        string? sourceIdColumn = null, string? desc = null, string? watermarkColumn = null,
+        string? detailColumns = null)
         => new()
         {
             CheckRuleId     = id,
@@ -106,6 +107,7 @@ public class DatabaseScanStrategySqlQueryTests
             TargetField     = targetField,
             SourceIdColumn  = sourceIdColumn,
             WatermarkColumn = watermarkColumn,
+            DetailColumns   = detailColumns,
             Description     = desc,
             IsActive        = true,
         };
@@ -138,6 +140,46 @@ public class DatabaseScanStrategySqlQueryTests
         Assert.All(h.Saved, f => Assert.Equal("db://TestDb/query", f.SourceLogPath));
         Assert.Contains("Stuck orders: [IsStuck] = 1", h.Saved[0].ErrorMessage);
         Assert.Contains("OrderId=ORD-1", h.Saved[0].ErrorMessage);
+    }
+
+    [Fact] // DetailColumns: present column → "Col: value" line; absent → visible marker; DateTime → ISO; NULL → "NULL"
+    public async Task DetailColumns_AppendedAfterMessage_MissingColumnRendersMarker()
+    {
+        var when = new DateTime(2026, 10, 12, 9, 14, 33, 123);
+        var runner = new FakeSqlRunner(new[]
+        {
+            Row(("EventId", 4711), ("Status", 8), ("Details", "Timeout expired."), ("UpdateDate", when), ("Note", null)),
+        });
+        var h = new Harness();
+        var strat = h.Build(runner);
+        var (job, source) = JobAndSource(SqlRule(11,
+            "SELECT * FROM Events WHERE Status = 8", "Status",
+            sourceIdColumn: "EventId", desc: "Stuck events",
+            detailColumns: "Details, UpdateDate, Note, Missing"));
+
+        await strat.ScanAsync(job, source);
+
+        var msg = Assert.Single(h.Saved).ErrorMessage!;
+        var lines = msg.Split('\n');
+        Assert.Equal("Stuck events: [Status] = 8 (EventId=4711)", lines[0]);   // head unchanged
+        Assert.Equal("Details: Timeout expired.", lines[1]);
+        Assert.Equal("UpdateDate: 2026-10-12 09:14:33.1230000", lines[2]);     // Canonical() ISO form
+        Assert.Equal("Note: NULL", lines[3]);
+        Assert.Equal($"Missing: {DatabaseScanStrategy.DetailColumnMissing}", lines[4]);
+        Assert.Equal(5, lines.Length);
+    }
+
+    [Fact] // no DetailColumns configured → message is single-line, exactly as before
+    public async Task NoDetailColumns_MessageHasNoExtraLines()
+    {
+        var runner = new FakeSqlRunner(new[] { Row(("OrderId", "ORD-1"), ("IsStuck", 1)) });
+        var h = new Harness();
+        var strat = h.Build(runner);
+        var (job, source) = JobAndSource(SqlRule(12, "SELECT 1", "IsStuck", sourceIdColumn: "OrderId", desc: "Stuck"));
+
+        await strat.ScanAsync(job, source);
+
+        Assert.DoesNotContain('\n', Assert.Single(h.Saved).ErrorMessage!);
     }
 
     [Fact]

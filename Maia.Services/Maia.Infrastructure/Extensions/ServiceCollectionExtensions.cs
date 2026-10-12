@@ -118,6 +118,10 @@ public static class ServiceCollectionExtensions
         // SqlConnection used only by DatabaseScanStrategy's SqlQuery branch.
         services.AddScoped<ISqlQueryRunner, SqlQueryRunner>();
 
+        // "Start scanning from now" - seeds watermark rows at save time from the
+        // config controllers (insert-only; see IScanWatermarkSeeder).
+        services.AddScoped<IScanWatermarkSeeder, ScanWatermarkSeeder>();
+
         // Save-time guard for SqlScript fix payloads (layer-1 write block). Stateless.
         services.AddSingleton<ISqlFixScopeValidator, SqlFixScopeValidator>();
 

@@ -577,10 +577,14 @@ export class JobConfigComponent implements OnInit {
     this.svc.deleteScanRule(rule.checkRuleId).subscribe({ next: () => this.reload() });
   }
 
-  ruleDetail(r: { checkType: string; expectedValue: string | null; minValue: number | null; maxValue: number | null; extractorLocator: string | null; extractorPredicateType: string | null; extractorPredicateValue: string | null }): string {
+  ruleDetail(r: { checkType: string; expectedValue: string | null; minValue: number | null; maxValue: number | null; extractorLocator: string | null; extractorPredicateType: string | null; extractorPredicateValue: string | null; conditions?: unknown[] }): string {
+    // Composite rule: surface the AND'd condition count so the row reads as
+    // "= 5 · +2 conditions" rather than looking like a plain single-column check.
+    const n = r.conditions?.length ?? 0;
+    const suffix = n > 0 ? ` · +${n} condition${n > 1 ? 's' : ''}` : '';
     switch (r.checkType) {
-      case 'ValueEquals':  return '= ' + (r.expectedValue ?? '');
-      case 'ColumnRange':  return `${r.minValue ?? '−∞'} – ${r.maxValue ?? '+∞'}`;
+      case 'ValueEquals':  return '= ' + (r.expectedValue ?? '') + suffix;
+      case 'ColumnRange':  return `${r.minValue ?? '−∞'} – ${r.maxValue ?? '+∞'}` + suffix;
       case 'FileContent':  return r.extractorPredicateType
         ? `${r.extractorLocator} ${r.extractorPredicateType} ${r.extractorPredicateValue}`
         : (r.extractorLocator ?? 'filename match');

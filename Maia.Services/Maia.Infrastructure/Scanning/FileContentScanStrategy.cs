@@ -42,6 +42,8 @@ public sealed class FileContentScanStrategy(
             throw new InvalidOperationException(
                 $"Source '{source.Name}' (job '{job.Name}') has no LogFolder configured for FileContent scan.");
 
+        // Conditions (ScanCheckRule.Conditions) are eager-loaded by the repository but NOT
+        // yet evaluated for FileContent rules — Phase 2 of composite scan rules.
         var rules = source.ScanCheckRules
             .Where(r => r.IsActive && r.CheckType == CheckType.FileContent)
             .ToList();

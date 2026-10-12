@@ -19,6 +19,7 @@ public class ScanRulesConfigController(
     IDbContextFactory<MaiaDbContext>    dbFactory,
     IEnumerable<IFileContentExtractor>  extractors,
     IAuditRepository                    audit,
+    IScanWatermarkSeeder                seeder,
     ICurrentUserAccessor                currentUser,
     ILogger<ScanRulesConfigController>  logger)
     : ConfigControllerBase(audit, currentUser, logger)
@@ -119,17 +120,139 @@ public class ScanRulesConfigController(
         // filter). The range/equality predicate and file-path fields don't apply —
         // null them so stale UI values can't leak onto a SqlQuery rule.
         //
-        // WatermarkColumn and SourceIdColumn ARE kept: SqlQuery now does incremental
-        // watermarking + per-SourceId dedup in-memory (parity with ValueEquals). Both
-        // are optional and name result-set columns; we can't validate their presence
-        // here (the result shape is only known at scan time — a missing column then
-        // fails the scan with a clear message).
+        // WatermarkColumn, SourceIdColumn, ReferenceIdColumn and DetailColumns ARE
+        // kept: SqlQuery does incremental watermarking + per-SourceId dedup in-memory
+        // (parity with ValueEquals), and reads detail columns BY NAME from the result
+        // set. All are optional and name result-set columns; we can't validate their
+        // presence here (the result shape is only known at scan time — a missing
+        // watermark/target column fails the scan with a clear message; a missing
+        // detail column renders a visible "(column not in result set)" marker).
         rule.MinValue         = null;
         rule.MaxValue         = null;
         rule.ExpectedValue    = null;
         rule.FilePathColumn   = null;
         rule.InputPathPattern = null;
         return null;
+    }
+
+    /// <summary>
+    /// Composite scan rule (Phase 1 — DB table rules): validates and normalises the
+    /// request's extra AND'd conditions. Mirrors
+    /// <c>FixPolicyConfigController.ValidateCompositePayload</c>: parse → per-item
+    /// checks naming the offending order → stable sort → re-pack to 1..N. Returns a
+    /// 400 on inconsistent config, else null with <paramref name="normalised"/> set
+    /// (empty when the request carries no conditions).
+    ///   • ConditionsNotSupported — parent isn't a Database ValueEquals/ColumnRange rule
+    ///   • ConditionKindMismatch  — a condition's Kind isn't ValueEquals/ColumnRange
+    ///   • ConditionIncomplete    — missing column, ExpectedValue (ValueEquals) or bounds (ColumnRange)
+    /// </summary>
+    private IActionResult? ApplyAndValidateConditions(
+        UpsertScanCheckRuleRequest req, CheckType checkType, out List<ScanCheckRuleCondition> normalised)
+    {
+        normalised = [];
+        if (req.Conditions is not { Count: > 0 }) return null;
+
+        if (checkType is not (CheckType.ValueEquals or CheckType.ColumnRange))
+            return BadRequest(new { error = "ConditionsNotSupported",
+                message = checkType == CheckType.SqlQuery
+                    ? "SqlQuery rules cannot have conditions — put the compound logic in the query's WHERE/JOIN."
+                    : $"Conditions are supported on Database ValueEquals / ColumnRange rules only in this version (rule is {checkType})." });
+
+        var parsed = new List<ScanCheckRuleCondition>(req.Conditions.Count);
+        foreach (var c in req.Conditions)
+        {
+            if (!Enum.TryParse<CheckType>(c.Kind, ignoreCase: true, out var kind)
+                || kind is not (CheckType.ValueEquals or CheckType.ColumnRange))
+                return BadRequest(new { error = "ConditionKindMismatch",
+                    message = $"Condition at order {c.ConditionOrder} has Kind '{c.Kind}'; a Database rule accepts ValueEquals or ColumnRange." });
+
+            if (string.IsNullOrWhiteSpace(c.TargetField))
+                return BadRequest(new { error = "ConditionIncomplete",
+                    message = $"Condition at order {c.ConditionOrder} has no column (TargetField)." });
+
+            if (kind == CheckType.ValueEquals && string.IsNullOrWhiteSpace(c.ExpectedValue))
+                return BadRequest(new { error = "ConditionIncomplete",
+                    message = $"Condition at order {c.ConditionOrder} ({c.TargetField}) is ValueEquals but has no ExpectedValue." });
+
+            if (kind == CheckType.ColumnRange && !c.MinValue.HasValue && !c.MaxValue.HasValue)
+                return BadRequest(new { error = "ConditionIncomplete",
+                    message = $"Condition at order {c.ConditionOrder} ({c.TargetField}) is ColumnRange but has neither MinValue nor MaxValue." });
+
+            // Null the fields the kind doesn't use so stale UI values can't leak.
+            parsed.Add(new ScanCheckRuleCondition
+            {
+                ConditionOrder = c.ConditionOrder,
+                Kind           = kind,
+                TargetField    = c.TargetField.Trim(),
+                ExpectedValue  = kind == CheckType.ValueEquals ? c.ExpectedValue : null,
+                MinValue       = kind == CheckType.ColumnRange ? c.MinValue : null,
+                MaxValue       = kind == CheckType.ColumnRange ? c.MaxValue : null,
+                PredicateType  = null,
+                Description    = string.IsNullOrWhiteSpace(c.Description) ? null : c.Description,
+            });
+        }
+
+        // Re-pack orders to 1..N (stable on the operator's input order) so the UI never
+        // has to renumber after a delete and the unique (CheckRuleId, ConditionOrder)
+        // index can't trip. Duplicate input orders are tolerated, like fix-policy steps.
+        var order = 0;
+        foreach (var c in parsed.OrderBy(c => c.ConditionOrder).ToList())
+            c.ConditionOrder = ++order;
+        normalised = parsed.OrderBy(c => c.ConditionOrder).ToList();
+        return null;
+    }
+
+    /// <summary>Compact one-line summary of a rule's conditions for audit text —
+    /// <c>"(none)"</c> or e.g. <c>"1:ValueEquals Region=EU AND 2:ColumnRange Amount[10, 100]"</c>.
+    /// The " AND " joiner states the semantics; order shows reorders in a diff.</summary>
+    internal static string SummariseConditions(IEnumerable<ScanCheckRuleCondition> conditions)
+    {
+        var ordered = conditions.OrderBy(c => c.ConditionOrder).ToList();
+        return ordered.Count == 0
+            ? "(none)"
+            : string.Join(" AND ", ordered.Select(c => c.Kind == CheckType.ValueEquals
+                ? $"{c.ConditionOrder}:ValueEquals {c.TargetField}={c.ExpectedValue}"
+                : $"{c.ConditionOrder}:{c.Kind} {c.TargetField}[{c.MinValue?.ToString() ?? "−∞"}, {c.MaxValue?.ToString() ?? "+∞"}]"));
+    }
+
+    /// <summary>
+    /// Normalises and validates <see cref="UpsertScanCheckRuleRequest.DetailColumns"/>:
+    /// trims each comma-separated token, drops blanks, and rejects tokens that can't be
+    /// a plain (optionally alias-qualified) column name — brackets, semicolons, or
+    /// embedded whitespace. The scan strategy brackets every identifier so these aren't
+    /// an injection risk; this is purely so a typo surfaces as a 400 at save time
+    /// rather than as a failed scan run later. Returns the normalised CSV or null.
+    /// </summary>
+    private static IActionResult? NormalizeDetailColumns(string? raw, out string? normalized)
+    {
+        normalized = null;
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+
+        var tokens = raw.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var bad = tokens.FirstOrDefault(t => t.IndexOfAny(['[', ']', ';']) >= 0 || t.Any(char.IsWhiteSpace));
+        if (bad is not null)
+            return new BadRequestObjectResult(new { error = "InvalidDetailColumns",
+                message = $"Detail Columns entry '{bad}' is not a plain column name. Use comma-separated column names (optionally alias.Column), without brackets, spaces or semicolons." });
+
+        normalized = tokens.Length == 0 ? null : string.Join(", ", tokens);
+        return null;
+    }
+
+    /// <summary>
+    /// "Start scanning from now": after a successful create, seed the rule's DB
+    /// watermark at the current MAX (see <see cref="IScanWatermarkSeeder"/>). Runs
+    /// AFTER SaveChanges and never fails the request: a seed failure is returned as a
+    /// warning (the rule stays saved; its first scan processes full history, i.e.
+    /// today's behaviour). Returns the audit note + the warning (if any).
+    /// </summary>
+    private async Task<(string AuditNote, string[]? Warnings)> SeedRuleIfRequestedAsync(
+        UpsertScanCheckRuleRequest req, ScanCheckRule rule, ScanSource source, CancellationToken ct)
+    {
+        if (!req.SeedWatermarkFromNow) return (string.Empty, null);
+        var r = await seeder.SeedRuleFromNowAsync(rule, source, ct);
+        if (!r.Applicable) return (string.Empty, null);
+        var note = $", SeedWatermarkFromNow=true ({(r.Warning is null ? r.Detail : "failed: " + r.Warning)})";
+        return (note, r.Warning is null ? null : [r.Warning]);
     }
 
     [Authorize(Policy = "RequireAdmin")]
@@ -145,20 +268,20 @@ public class ScanRulesConfigController(
         // job-scoped, so attach to the job's single active source. With 0 or >1
         // sources it's ambiguous → 400 directing to the per-source endpoint. Removed
         // once the new config UI (phase d2) posts to /scan-sources/{id}/scan-rules.
-        var activeSourceIds = await db.ScanSources
+        var activeSources = await db.ScanSources
             .Where(s => s.MonitoredJobId == jobId && s.IsActive)
-            .Select(s => s.ScanSourceId)
             .ToListAsync(ct);
-        if (activeSourceIds.Count != 1)
+        if (activeSources.Count != 1)
             return BadRequest(new { error = "AmbiguousSourceForRule",
-                message = activeSourceIds.Count == 0
+                message = activeSources.Count == 0
                     ? "This job has no active scan source. Add a source first, then add rules to it."
                     : "This job has multiple sources. Add the rule to a specific source via /config/scan-sources/{id}/scan-rules." });
 
+        if (NormalizeDetailColumns(req.DetailColumns, out var detailColumns) is { } dcError) return dcError;
         var rule = new ScanCheckRule
         {
             MonitoredJobId   = jobId,
-            ScanSourceId     = activeSourceIds[0],
+            ScanSourceId     = activeSources[0].ScanSourceId,
             CheckType        = checkType,
             SourceTable      = req.SourceTable,
             TargetField      = req.TargetField,
@@ -169,6 +292,7 @@ public class ScanRulesConfigController(
             SourceIdColumn   = req.SourceIdColumn,
             ReferenceIdColumn = req.ReferenceIdColumn,
             FilePathColumn   = req.FilePathColumn,
+            DetailColumns    = detailColumns,
             InputPathPattern = req.InputPathPattern,
             Severity         = Enum.Parse<Severity>(req.Severity),
             Description      = req.Description,
@@ -176,19 +300,25 @@ public class ScanRulesConfigController(
         };
         if (ApplyAndValidateFileContent(req, rule, checkType) is { } fcError) return fcError;
         if (ApplyAndValidateSqlQuery(req, rule, checkType) is { } sqError) return sqError;
+        if (ApplyAndValidateConditions(req, checkType, out var conditions) is { } condError) return condError;
 
+        // Conditions ride along on the header insert — one SaveChanges, EF fixes up CheckRuleId.
+        rule.Conditions = conditions;
         db.ScanCheckRules.Add(rule);
         await db.SaveChangesAsync(ct);
+
+        var (seedNote, warnings) = await SeedRuleIfRequestedAsync(req, rule, activeSources[0], ct);
+        var condNote = conditions.Count > 0 ? $", {conditions.Count} condition(s): {SummariseConditions(conditions)}" : string.Empty;
 
         await WriteAuditAsync(
             entityType: "ScanCheckRule",
             entityId:   rule.CheckRuleId.ToString(),
             eventType:  "ScanRuleCreated",
             actor:      Actor,
-            detail:     $"Created ScanCheckRule for MonitoredJob {jobId} (CheckType={rule.CheckType}, TargetField='{rule.TargetField}', Severity={rule.Severity})",
+            detail:     $"Created ScanCheckRule for MonitoredJob {jobId} (CheckType={rule.CheckType}, TargetField='{rule.TargetField}', Severity={rule.Severity}{condNote}{seedNote})",
             ct: ct);
 
-        return Ok(new { rule.CheckRuleId });
+        return Ok(new { rule.CheckRuleId, warnings });
     }
 
     [Authorize(Policy = "RequireAdmin")]
@@ -196,9 +326,13 @@ public class ScanRulesConfigController(
     public async Task<IActionResult> UpdateScanRule(int id, [FromBody] UpsertScanCheckRuleRequest req, CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var rule = await db.ScanCheckRules.FindAsync([id], ct);
+        // Include Conditions: replace-all persistence below removes the existing rows.
+        var rule = await db.ScanCheckRules
+            .Include(r => r.Conditions)
+            .FirstOrDefaultAsync(r => r.CheckRuleId == id, ct);
         if (rule is null) return NotFound();
 
+        var beforeConditions       = SummariseConditions(rule.Conditions);
         var beforeCheckType        = rule.CheckType;
         var beforeSourceTable      = rule.SourceTable;
         var beforeTargetField      = rule.TargetField;
@@ -209,6 +343,7 @@ public class ScanRulesConfigController(
         var beforeSourceId         = rule.SourceIdColumn;
         var beforeReferenceId      = rule.ReferenceIdColumn;
         var beforeFilePathColumn   = rule.FilePathColumn;
+        var beforeDetailColumns    = rule.DetailColumns;
         var beforeInputPathPattern = rule.InputPathPattern;
         var beforeExtractorType    = rule.ExtractorType;
         var beforeExtractorLocator = rule.ExtractorLocator;
@@ -220,6 +355,7 @@ public class ScanRulesConfigController(
         var beforeIsActive         = rule.IsActive;
 
         var checkType = Enum.Parse<CheckType>(req.CheckType);
+        if (NormalizeDetailColumns(req.DetailColumns, out var detailColumns) is { } dcError) return dcError;
         rule.CheckType        = checkType;
         rule.SourceTable      = req.SourceTable;
         rule.TargetField      = req.TargetField;
@@ -230,12 +366,20 @@ public class ScanRulesConfigController(
         rule.SourceIdColumn   = req.SourceIdColumn;
         rule.ReferenceIdColumn = req.ReferenceIdColumn;
         rule.FilePathColumn   = req.FilePathColumn;
+        rule.DetailColumns    = detailColumns;
         rule.InputPathPattern = req.InputPathPattern;
         rule.Severity         = Enum.Parse<Severity>(req.Severity);
         rule.Description      = req.Description;
         rule.IsActive         = req.IsActive;
         if (ApplyAndValidateFileContent(req, rule, checkType) is { } fcError) return fcError;
         if (ApplyAndValidateSqlQuery(req, rule, checkType) is { } sqError) return sqError;
+        if (ApplyAndValidateConditions(req, checkType, out var conditions) is { } condError) return condError;
+
+        // Conditions: replace-all (same as FixPolicyRuleSteps). Diffing per-condition
+        // would be cleaner but the audit summary below already shows before → after,
+        // and a null/empty request clears existing conditions by design.
+        db.ScanCheckRuleConditions.RemoveRange(rule.Conditions);
+        rule.Conditions = conditions;
 
         await db.SaveChangesAsync(ct);
 
@@ -250,6 +394,7 @@ public class ScanRulesConfigController(
             ("SourceIdColumn",   beforeSourceId,         rule.SourceIdColumn),
             ("ReferenceIdColumn", beforeReferenceId,     rule.ReferenceIdColumn),
             ("FilePathColumn",   beforeFilePathColumn,   rule.FilePathColumn),
+            ("DetailColumns",    beforeDetailColumns,    rule.DetailColumns),
             ("InputPathPattern", beforeInputPathPattern, rule.InputPathPattern),
             ("ExtractorType",    beforeExtractorType,    rule.ExtractorType),
             ("ExtractorLocator", beforeExtractorLocator, rule.ExtractorLocator),
@@ -258,16 +403,28 @@ public class ScanRulesConfigController(
             ("ExtractorPredicateValue", beforePredicateValue, rule.ExtractorPredicateValue),
             ("Severity",         beforeSeverity,         rule.Severity),
             ("Description",      beforeDescription,      rule.Description),
-            ("IsActive",         beforeIsActive,         rule.IsActive));
+            ("IsActive",         beforeIsActive,         rule.IsActive),
+            ("Conditions",       beforeConditions,       SummariseConditions(rule.Conditions)));
+        // "Start scanning from now" on edit: insert-only, so it only acts where no
+        // watermark exists yet (e.g. a WatermarkColumn was just added, or a file-based
+        // rule's source has unseen files). Returns 200 + warnings when it ran.
+        var (seedNote, warnings) = (string.Empty, (string[]?)null);
+        if (req.SeedWatermarkFromNow)
+        {
+            var source = await db.ScanSources.FindAsync([rule.ScanSourceId], ct);
+            if (source is not null)
+                (seedNote, warnings) = await SeedRuleIfRequestedAsync(req, rule, source, ct);
+        }
+
         await WriteAuditAsync(
             entityType: "ScanCheckRule",
             entityId:   id.ToString(),
             eventType:  "ScanRuleUpdated",
             actor:      Actor,
-            detail:     diff.Length > 0 ? diff : "No changes",
+            detail:     (diff.Length > 0 ? diff : "No changes") + seedNote,
             ct: ct);
 
-        return NoContent();
+        return seedNote.Length > 0 ? Ok(new { warnings }) : NoContent();
     }
 
     [Authorize(Policy = "RequireAdmin")]
@@ -307,6 +464,7 @@ public class ScanRulesConfigController(
         if (source is null) return NotFound();
 
         var checkType = Enum.Parse<CheckType>(req.CheckType);
+        if (NormalizeDetailColumns(req.DetailColumns, out var detailColumns) is { } dcError) return dcError;
         var rule = new ScanCheckRule
         {
             MonitoredJobId   = source.MonitoredJobId,
@@ -321,6 +479,7 @@ public class ScanRulesConfigController(
             SourceIdColumn    = req.SourceIdColumn,
             ReferenceIdColumn = req.ReferenceIdColumn,
             FilePathColumn    = req.FilePathColumn,
+            DetailColumns     = detailColumns,
             InputPathPattern  = req.InputPathPattern,
             Severity          = Enum.Parse<Severity>(req.Severity),
             Description       = req.Description,
@@ -328,12 +487,17 @@ public class ScanRulesConfigController(
         };
         if (ApplyAndValidateFileContent(req, rule, checkType) is { } fcError) return fcError;
         if (ApplyAndValidateSqlQuery(req, rule, checkType) is { } sqError) return sqError;
+        if (ApplyAndValidateConditions(req, checkType, out var conditions) is { } condError) return condError;
 
+        rule.Conditions = conditions;
         db.ScanCheckRules.Add(rule);
         await db.SaveChangesAsync(ct);
 
+        var (seedNote, warnings) = await SeedRuleIfRequestedAsync(req, rule, source, ct);
+        var condNote = conditions.Count > 0 ? $", {conditions.Count} condition(s): {SummariseConditions(conditions)}" : string.Empty;
+
         await WriteAuditAsync("ScanCheckRule", rule.CheckRuleId.ToString(), "ScanRuleCreated", Actor,
-            $"Created ScanCheckRule for ScanSource {sourceId} (CheckType={rule.CheckType}, TargetField='{rule.TargetField}', Severity={rule.Severity})", ct);
-        return Ok(new { rule.CheckRuleId });
+            $"Created ScanCheckRule for ScanSource {sourceId} (CheckType={rule.CheckType}, TargetField='{rule.TargetField}', Severity={rule.Severity}{condNote}{seedNote})", ct);
+        return Ok(new { rule.CheckRuleId, warnings });
     }
 }

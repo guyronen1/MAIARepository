@@ -76,6 +76,19 @@ public class ScanCheckRule
     public string? FilePathColumn { get; set; }
 
     /// <summary>
+    /// Database scans only. Comma-separated list of extra source-row columns whose
+    /// values are appended to JobFailure.ErrorMessage, one "Column: value" line per
+    /// column after the rule's synthetic message (e.g. "UpdateDate, Details" to surface
+    /// the row's original error text). Supports the "alias.Column" form for table rules
+    /// whose SourceTable carries a JOIN. For SqlQuery rules the columns must appear in
+    /// the SELECT — a missing one renders "(column not in result set)" rather than
+    /// vanishing silently, so a typo is self-diagnosing. Values are capped at 2000 chars.
+    /// Because the classifier matches on ErrorMessage, classification patterns can
+    /// match these values too.
+    /// </summary>
+    public string? DetailColumns { get; set; }
+
+    /// <summary>
     /// FileSystem scans only. Regex with capture group #1 = input file path
     /// extracted from the error line. Compiled with 50ms timeout. NULL =
     /// FS scan leaves JobFailure.SourceFilePath null for this rule.
@@ -117,6 +130,16 @@ public class ScanCheckRule
     /// <summary>Right-hand operand for ExtractorPredicateType. Case-insensitive
     /// for Equals/Contains. NULL when no predicate is configured.</summary>
     public string? ExtractorPredicateValue { get; set; }
+
+    /// <summary>
+    /// Additional checks AND'd onto this rule's own check (which is condition #0).
+    /// Empty = legacy single-check behaviour, byte-identical SQL and message. Phase 1
+    /// evaluates conditions for Database table rules (ValueEquals / ColumnRange) only;
+    /// FileContent / FS conditions are stored but not yet evaluated (Phase 2). Must be
+    /// eager-loaded by <c>IMonitoredJobRepository</c> — a missing Include silently makes
+    /// the rule fire on the parent check alone.
+    /// </summary>
+    public List<ScanCheckRuleCondition> Conditions { get; set; } = [];
 
     public Severity Severity    { get; set; } = Severity.Medium;
     public string?  Description { get; set; }

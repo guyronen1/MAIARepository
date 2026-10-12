@@ -51,6 +51,8 @@ public sealed class FileSystemScanStrategy(
                 job.Name, source.Name);
         }
 
+        // Conditions (ScanCheckRule.Conditions) are eager-loaded by the repository but NOT
+        // yet evaluated for ErrorKeyword rules — Phase 2 of composite scan rules.
         var keywordRules = source.ScanCheckRules
             .Where(r => r.IsActive && r.CheckType == CheckType.ErrorKeyword)
             .ToList();

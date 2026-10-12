@@ -792,6 +792,10 @@ namespace Infrastructure.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<string>("DetailColumns")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
                     b.Property<string>("ExpectedValue")
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
@@ -875,6 +879,59 @@ namespace Infrastructure.Migrations
                     b.HasIndex("ScanSourceId");
 
                     b.ToTable("ScanCheckRules", (string)null);
+                });
+
+            modelBuilder.Entity("Maia.Core.Entities.ScanCheckRuleCondition", b =>
+                {
+                    b.Property<int>("ConditionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ConditionId"));
+
+                    b.Property<int>("CheckRuleId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ConditionOrder")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("ExpectedValue")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<decimal?>("MaxValue")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal?>("MinValue")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<string>("PredicateType")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("TargetField")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.HasKey("ConditionId");
+
+                    b.HasIndex("CheckRuleId", "ConditionOrder")
+                        .IsUnique()
+                        .HasDatabaseName("UX_ScanCheckRuleConditions_CheckRuleId_ConditionOrder");
+
+                    b.ToTable("ScanCheckRuleConditions", (string)null);
                 });
 
             modelBuilder.Entity("Maia.Core.Entities.ScanContentWatermark", b =>
@@ -1477,6 +1534,17 @@ namespace Infrastructure.Migrations
                     b.Navigation("ScanSource");
                 });
 
+            modelBuilder.Entity("Maia.Core.Entities.ScanCheckRuleCondition", b =>
+                {
+                    b.HasOne("Maia.Core.Entities.ScanCheckRule", "CheckRule")
+                        .WithMany("Conditions")
+                        .HasForeignKey("CheckRuleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("CheckRule");
+                });
+
             modelBuilder.Entity("Maia.Core.Entities.ScanContentWatermark", b =>
                 {
                     b.HasOne("Maia.Core.Entities.MonitoredJob", "MonitoredJob")
@@ -1648,6 +1716,11 @@ namespace Infrastructure.Migrations
             modelBuilder.Entity("Maia.Core.Entities.Role", b =>
                 {
                     b.Navigation("Users");
+                });
+
+            modelBuilder.Entity("Maia.Core.Entities.ScanCheckRule", b =>
+                {
+                    b.Navigation("Conditions");
                 });
 
             modelBuilder.Entity("Maia.Core.Entities.ScanSource", b =>

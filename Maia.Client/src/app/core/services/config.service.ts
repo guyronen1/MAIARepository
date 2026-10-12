@@ -62,7 +62,15 @@ export interface UpsertScanSourceRequest {
   includeSubfolders: boolean;
   connectionName: string | null; logSourceUrl: string | null;
   isActive: boolean;
+  /** FileSystem / FileContent: seed file watermarks at the current
+   *  position so the first scan skips existing content. UI default = true;
+   *  the backend treats a missing flag as false (full-history first scan). */
+  seedWatermarkFromNow?: boolean;
 }
+/** Create responses carry non-blocking warnings (e.g. the watermark seed could
+ *  not run) — the entity IS saved; surface them, don't treat them as errors. */
+export interface CreateScanSourceResponse { scanSourceId: number; warnings?: string[] | null; }
+export interface CreateScanRuleResponse   { checkRuleId: number;  warnings?: string[] | null; }
 export interface UpsertScanRuleRequest {
   checkType: string; sourceTable: string | null; targetField: string;
   minValue: number | null; maxValue: number | null; expectedValue: string | null;
@@ -73,6 +81,9 @@ export interface UpsertScanRuleRequest {
   severity: string; description: string | null; isActive: boolean;
   /** DB scans only — column on the source row holding the input file path. */
   filePathColumn:   string | null;
+  /** DB scans only — comma-separated columns appended to the failure's error
+   *  message as "Column: value" lines. SqlQuery rules must SELECT them. */
+  detailColumns:    string | null;
   /** FS scans only — regex (capture group #1 = input file path). */
   inputPathPattern: string | null;
   // ── FileContent scans only ──
@@ -86,6 +97,28 @@ export interface UpsertScanRuleRequest {
   extractorPredicateType:  string | null;
   /** Right-hand operand for the predicate. */
   extractorPredicateValue: string | null;
+  /** DB rules with a watermarkColumn (or any file-based rule, which seeds its
+   *  source's file positions): seed the watermark at the
+   *  current MAX so the first scan only reports rows that arrive after save.
+   *  UI default = true; backend treats a missing flag as false. */
+  seedWatermarkFromNow?: boolean;
+  /** Composite scan rule — extra checks AND'd onto the rule's own check, on the
+   *  SAME source row. Phase 1: Database ValueEquals / ColumnRange rules only
+   *  (400 ConditionsNotSupported otherwise). Replace-all on PUT; omitted/empty
+   *  clears existing conditions. Orders are re-packed to 1..N server-side. */
+  conditions?: ScanRuleConditionDto[];
+}
+/** Write shape of one composite-scan-rule condition (no id — replaced wholesale). */
+export interface ScanRuleConditionDto {
+  conditionOrder: number;
+  /** 'ValueEquals' | 'ColumnRange' (Phase 1). */
+  kind:           string;
+  /** Column on the source row. */
+  targetField:    string;
+  expectedValue:  string | null;
+  minValue:       number | null;
+  maxValue:       number | null;
+  description:    string | null;
 }
 export interface UpsertClassificationRuleRequest {
   jobTypeId: number; errorTypeId: number; pattern: string;
@@ -162,27 +195,29 @@ export class ConfigService {
   }
 
   // ── Scan Sources (Tier 2.5) ────────────────────────────────────────────────
-  createScanSource(jobId: number, req: UpsertScanSourceRequest): Observable<{ scanSourceId: number }> {
-    return this.http.post<{ scanSourceId: number }>(`${this.base}/monitored-jobs/${jobId}/scan-sources`, req);
+  createScanSource(jobId: number, req: UpsertScanSourceRequest): Observable<CreateScanSourceResponse> {
+    return this.http.post<CreateScanSourceResponse>(`${this.base}/monitored-jobs/${jobId}/scan-sources`, req);
   }
-  updateScanSource(id: number, req: UpsertScanSourceRequest): Observable<void> {
-    return this.http.put<void>(`${this.base}/scan-sources/${id}`, req);
+  /** 204 normally; 200 + { warnings } when seedWatermarkFromNow ran. */
+  updateScanSource(id: number, req: UpsertScanSourceRequest): Observable<{ warnings?: string[] | null } | null> {
+    return this.http.put<{ warnings?: string[] | null } | null>(`${this.base}/scan-sources/${id}`, req);
   }
   deleteScanSource(id: number): Observable<void> {
     return this.http.delete<void>(`${this.base}/scan-sources/${id}`);
   }
   /** Source-scoped rule create — the canonical add-rule path now that the worker
    *  scans per source. */
-  createScanRuleForSource(sourceId: number, req: UpsertScanRuleRequest): Observable<{ checkRuleId: number }> {
-    return this.http.post<{ checkRuleId: number }>(`${this.base}/scan-sources/${sourceId}/scan-rules`, req);
+  createScanRuleForSource(sourceId: number, req: UpsertScanRuleRequest): Observable<CreateScanRuleResponse> {
+    return this.http.post<CreateScanRuleResponse>(`${this.base}/scan-sources/${sourceId}/scan-rules`, req);
   }
 
   // ── Scan Check Rules ───────────────────────────────────────────────────────
-  createScanRule(jobId: number, req: UpsertScanRuleRequest): Observable<{ checkRuleId: number }> {
-    return this.http.post<{ checkRuleId: number }>(`${this.base}/monitored-jobs/${jobId}/scan-rules`, req);
+  createScanRule(jobId: number, req: UpsertScanRuleRequest): Observable<CreateScanRuleResponse> {
+    return this.http.post<CreateScanRuleResponse>(`${this.base}/monitored-jobs/${jobId}/scan-rules`, req);
   }
-  updateScanRule(id: number, req: UpsertScanRuleRequest): Observable<void> {
-    return this.http.put<void>(`${this.base}/scan-rules/${id}`, req);
+  /** 204 normally; 200 + { warnings } when seedWatermarkFromNow ran. */
+  updateScanRule(id: number, req: UpsertScanRuleRequest): Observable<{ warnings?: string[] | null } | null> {
+    return this.http.put<{ warnings?: string[] | null } | null>(`${this.base}/scan-rules/${id}`, req);
   }
   deleteScanRule(id: number): Observable<void> {
     return this.http.delete<void>(`${this.base}/scan-rules/${id}`);

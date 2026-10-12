@@ -19,6 +19,7 @@ namespace Maia.API.Controllers;
 public class ScanSourcesConfigController(
     IDbContextFactory<MaiaDbContext>      dbFactory,
     IAuditRepository                      audit,
+    IScanWatermarkSeeder                  seeder,
     ICurrentUserAccessor                  currentUser,
     ILogger<ScanSourcesConfigController>  logger)
     : ConfigControllerBase(audit, currentUser, logger)
@@ -106,9 +107,25 @@ public class ScanSourcesConfigController(
         db.ScanSources.Add(source);
         await db.SaveChangesAsync(ct);
 
+        // "Start scanning from now": seed file watermarks at the current position so
+        // the first scan skips existing content. After SaveChanges, never fails the
+        // request - a seed failure is a warning (the source stays saved and its first
+        // scan processes full history, i.e. today's behaviour).
+        var seedNote = string.Empty; string[]? warnings = null;
+        if (req.SeedWatermarkFromNow)
+        {
+            var typeName = await db.ScanTypes.Where(t => t.ScanTypeId == source.ScanTypeId).Select(t => t.Name).FirstAsync(ct);
+            var r = await seeder.SeedSourceFromNowAsync(source, Enum.Parse<ScanType>(typeName), ct);
+            if (r.Applicable)
+            {
+                seedNote = $", SeedWatermarkFromNow=true ({(r.Warning is null ? r.Detail : "failed: " + r.Warning)})";
+                if (r.Warning is not null) warnings = [r.Warning];
+            }
+        }
+
         await WriteAuditAsync("ScanSource", source.ScanSourceId.ToString(), "ScanSourceCreated", Actor,
-            $"Created ScanSource '{source.Name}' for MonitoredJob {jobId} (ScanTypeId={source.ScanTypeId})", ct);
-        return Ok(new { source.ScanSourceId });
+            $"Created ScanSource '{source.Name}' for MonitoredJob {jobId} (ScanTypeId={source.ScanTypeId}{seedNote})", ct);
+        return Ok(new { source.ScanSourceId, warnings });
     }
 
     [Authorize(Policy = "RequireAdmin")]
@@ -153,9 +170,23 @@ public class ScanSourcesConfigController(
             ("ConnectionName",    beforeConn,     source.ConnectionName),
             ("LogSourceUrl",      beforeUrl,      source.LogSourceUrl),
             ("IsActive",          beforeActive,   source.IsActive));
+        // "Start scanning from now" on edit — insert-only, so only files without a
+        // watermark row (appeared since create) get one. Returns 200 + warnings when run.
+        var seedNote = string.Empty; string[]? warnings = null;
+        if (req.SeedWatermarkFromNow)
+        {
+            var typeName = await db.ScanTypes.Where(t => t.ScanTypeId == source.ScanTypeId).Select(t => t.Name).FirstAsync(ct);
+            var r = await seeder.SeedSourceFromNowAsync(source, Enum.Parse<ScanType>(typeName), ct);
+            if (r.Applicable)
+            {
+                seedNote = $", SeedWatermarkFromNow=true ({(r.Warning is null ? r.Detail : "failed: " + r.Warning)})";
+                if (r.Warning is not null) warnings = [r.Warning];
+            }
+        }
+
         await WriteAuditAsync("ScanSource", id.ToString(), "ScanSourceUpdated", Actor,
-            diff.Length > 0 ? diff : "No changes", ct);
-        return NoContent();
+            (diff.Length > 0 ? diff : "No changes") + seedNote, ct);
+        return seedNote.Length > 0 ? Ok(new { warnings }) : NoContent();
     }
 
     [Authorize(Policy = "RequireAdmin")]

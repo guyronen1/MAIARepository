@@ -15,6 +15,10 @@ export interface ScanCheckRule {
   /** DB scans: column on the source row that holds the input file path.
    *  Captured into JobFailure.SourceFilePath when this rule matches. */
   filePathColumn:     string | null;
+  /** DB scans: comma-separated source-row columns whose values are appended
+   *  to the failure's error message as "Column: value" lines (e.g.
+   *  "UpdateDate, Details"). SqlQuery rules must SELECT them. Null = none. */
+  detailColumns:      string | null;
   /** FS scans: regex with capture group #1 = input file path extracted
    *  from the matching error line. Differs from classification patterns:
    *  full regex applies here (capture groups required). */
@@ -34,6 +38,30 @@ export interface ScanCheckRule {
   extractorPredicateValue: string | null;
   severity:         string;
   description:      string | null;
+  /** Composite scan rule: extra checks AND'd onto this rule's own check, all on
+   *  the SAME source row (Phase 1: DB ValueEquals / ColumnRange rules only).
+   *  Empty for a plain single-check rule. Ordered by conditionOrder. */
+  conditions:       ScanCheckRuleCondition[];
+}
+
+/** One extra AND'd condition of a composite scan rule. `conditionId` churns on
+ *  every save (replace-all persistence) — never key on it. */
+export interface ScanCheckRuleCondition {
+  conditionId:    number;
+  conditionOrder: number;
+  /** ValueEquals | ColumnRange (Phase 1). Reserved: FileContent, ErrorKeyword. */
+  kind:           string;
+  /** Column name on the source row (Phase 2: XPath locator / keyword). */
+  targetField:    string;
+  /** ValueEquals: the value that flags the row. */
+  expectedValue:  string | null;
+  /** ColumnRange: rows below this are flagged. */
+  minValue:       number | null;
+  /** ColumnRange: rows above this are flagged. */
+  maxValue:       number | null;
+  /** Reserved for Phase 2 FileContent conditions; always null today. */
+  predicateType:  string | null;
+  description:    string | null;
 }
 
 /** Tier 2.5: a typed observation point within a job (its own ScanType + config),

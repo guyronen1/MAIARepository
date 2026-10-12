@@ -8,8 +8,9 @@ smoke-tested end-to-end. See the "Last completed (2026-06-07)" entry and the
 FileContent decisions block below. The open questions from the design phase are
 now resolved: watermarking is a **new `ScanContentWatermarks` table** (mtime-based,
 content-hash deferred to v2); output shape is **`JobFailure`** (downstream pipeline
-unchanged). v2 extractors (CSV/JSON/Excel), content-hash watermarking, and
-composite scan rules are deferred (see Known follow-ups).
+unchanged). v2 extractors (CSV/JSON/Excel) and content-hash watermarking are
+deferred (see Known follow-ups). Composite scan rules shipped Phase 1 (DB) on
+2026-10-12; the FileContent / FS phase is the open follow-up.
 
 **Backlog (already documented in Known follow-ups below):**
 
@@ -22,6 +23,42 @@ composite scan rules are deferred (see Known follow-ups).
   consistency, sort UI on failures-list, style budget warnings,
   CHECK constraints for composite invariants, `FixExecutionLog` retention
   worker
+- ~~**"Start scanning from now" watermark seeding** on new DB rules / FS + FileContent
+  sources~~ **SHIPPED 2026-10-12** (checkbox, checked by default; avoids the
+  scan-everything first tick). See DECISIONS → "Start scanning from now".
+- **Composite scan rules** — ~~Phase 1 (DB multi-column AND)~~ **SHIPPED 2026-10-12**;
+  Phase 2 (FileContent multi-locator + FS multi-keyword) open — see Known follow-ups.
+
+**Last completed (2026-10-12) — Composite scan rules, Phase 1 (Database table rules):**
+
+- **One DB rule can now require several columns on the SAME row.** A `ValueEquals` /
+  `ColumnRange` rule carries 0..N AND'd conditions (`ScanCheckRuleCondition`, new table
+  `ScanCheckRuleConditions`: FK cascade, unique `(CheckRuleId, ConditionOrder)`, CHECK
+  `Kind IN (ValueEquals, ColumnRange, FileContent, ErrorKeyword)` — the Phase 2 kinds are
+  pre-allowed so that phase needs no migration). Migration `AddScanCheckRuleConditions`.
+- **Additive model, not a `Composite` CheckType** (DECISIONS → "Composite scan rules"):
+  the parent's own check is condition #0; zero conditions ⇒ byte-identical SQL + message.
+  `DatabaseScanStrategy`: `BuildFilterClause` ANDs a parenthesised clause per condition
+  with `@C{i}_*` params (shared with `QueryFilteredMaxAsync` ⇒ watermark baseline tracks
+  the composite population); each condition column projected as `_C{i}`; the row reader
+  is now **by-name** (was positional `nextCol++`); `BuildRowMessage` appends one
+  `[Field=Value]` token per condition *after* the parent token. An invalid condition
+  skips the whole rule (never fire on the parent alone). SqlQuery rules ignore conditions
+  with a warning (controller forbids them).
+- **Repository eager-loads `Conditions`** at all nine `ScanCheckRules` Include sites in
+  `SqlMonitoredJobRepository` (+ `AsSplitQuery` on `GetActiveWithRulesAsync`) — a missing
+  Include would silently widen the match.
+- **API:** `UpsertScanCheckRuleRequest.Conditions` (`ScanRuleConditionDto`, replace-all on
+  PUT), `ScanCheckRuleDto.Conditions`; `ApplyAndValidateConditions` → 400
+  `ConditionsNotSupported` / `ConditionKindMismatch` / `ConditionIncomplete`; orders
+  re-packed 1..N; audit `Conditions: '(none)' → '1:ValueEquals Region=EU AND …'`.
+- **UI:** "Additional conditions (all must match on the same row)" editor in the DB
+  branch of the scan-rule drawer (kind · column · value | min/max, ↑ ↓ ✕, + Add; cleared
+  when switching to SqlQuery; client guard mirrors `ConditionIncomplete`); `+N conditions`
+  in the job-config rule list and the Flow view. `coverage-match.util` unchanged (the
+  parent token is still first).
+- **Tests:** 358 backend green (11 new strategy tests, 7 new controller tests); 6 new
+  drawer specs. `schema-clean.sql` regenerated.
 
 **Last completed (2026-07-16) — UI/UX improvement batch:**
 

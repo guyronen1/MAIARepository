@@ -33,6 +33,44 @@ public sealed class DatabaseScanStrategy(
     // Code-side cap for SqlQuery (can't inject TOP into an arbitrary query/proc).
     private const int MaxSqlQueryRows = 500;
 
+    // Per-value cap for DetailColumns text appended to ErrorMessage, so one
+    // multi-KB XML/stack-trace column can't swamp the failures list.
+    internal const int MaxDetailValueLength = 2000;
+
+    // Rendered when a SqlQuery result set lacks a configured detail column —
+    // visible on the failure so a typo'd column name is self-diagnosing.
+    internal const string DetailColumnMissing = "(column not in result set)";
+
+    /// <summary>
+    /// One matching source row as surfaced by either query path.
+    /// <see cref="Details"/> carries the operator's DetailColumns values in
+    /// configured order (null = SQL NULL); empty when none configured.
+    /// <see cref="ConditionValues"/> carries the actual value of each
+    /// <see cref="ScanCheckRuleCondition"/>'s column, index-aligned with
+    /// <see cref="OrderedConditions"/>; empty when the rule has none (and always
+    /// empty on the SqlQuery path, which doesn't support conditions).
+    /// </summary>
+    private sealed record MatchedRow(
+        string RowKey,
+        object Value,
+        string? WatermarkValue,
+        string? SourceIdValue,
+        string? ReferenceIdValue,
+        string? FilePathValue,
+        IReadOnlyList<KeyValuePair<string, string?>> Details,
+        IReadOnlyList<string?> ConditionValues);
+
+    private static readonly IReadOnlyList<KeyValuePair<string, string?>> NoDetails = [];
+    private static readonly IReadOnlyList<string?> NoConditionValues = [];
+
+    /// <summary>
+    /// The rule's extra AND'd conditions in evaluation order. Every site that walks
+    /// conditions (filter clause, SELECT aliases, reader, message tokens) MUST use
+    /// this so index <c>i</c> means the same condition everywhere.
+    /// </summary>
+    internal static List<ScanCheckRuleCondition> OrderedConditions(ScanCheckRule rule)
+        => rule.Conditions.OrderBy(c => c.ConditionOrder).ToList();
+
     public ScanType ScanType => ScanType.Database;
 
     public async Task<ScanResult> ScanAsync(MonitoredJob job, ScanSource source, CancellationToken ct = default)
@@ -76,10 +114,14 @@ public sealed class DatabaseScanStrategy(
         {
             if (!IsRuleValid(rule))
             {
-                logger.LogWarning("ScanCheckRule {Id} on job '{Job}' is missing required value config — skipping",
+                logger.LogWarning("ScanCheckRule {Id} on job '{Job}' is missing required value config (or has an invalid condition) — skipping",
                     rule.CheckRuleId, job.Name);
                 continue;
             }
+            if (rule.CheckType == CheckType.SqlQuery && rule.Conditions.Count > 0)
+                // Controller forbids this; only reachable via hand-inserted rows.
+                logger.LogWarning("ScanCheckRule {Id} on job '{Job}' is a SqlQuery with {Count} condition(s) — conditions are ignored on SqlQuery rules (put the compound logic in the query)",
+                    rule.CheckRuleId, job.Name, rule.Conditions.Count);
 
           try
           {
@@ -96,7 +138,7 @@ public sealed class DatabaseScanStrategy(
                 ? $"db://{conn}/query"
                 : $"db://{conn}/{rule.SourceTable}";
 
-            List<(string RowKey, object Value, string? WatermarkValue, string? SourceIdValue, string? ReferenceIdValue, string? FilePathValue)> rows;
+            List<MatchedRow> rows;
 
             if (rule.CheckType == CheckType.SqlQuery)
             {
@@ -143,7 +185,7 @@ public sealed class DatabaseScanStrategy(
 
             if (rows.Count == 0) continue;
 
-            foreach (var (rowKey, value, wmValue, srcValue, refValue, filePathValue) in rows)
+            foreach (var row in rows)
             {
                 var failure = new JobFailure
                 {
@@ -152,11 +194,11 @@ public sealed class DatabaseScanStrategy(
                     MonitoredJobId = job.MonitoredJobId,
                     ScanSourceId   = source.ScanSourceId,    // which source produced it
                     StepName       = stepName,
-                    SourceId       = srcValue ?? rowKey,
-                    ReferenceId    = refValue,               // null when rule.ReferenceIdColumn unset
-                    ErrorMessage   = BuildRowMessage(rule, rowKey, value, wmValue, srcValue),
+                    SourceId       = row.SourceIdValue ?? row.RowKey,
+                    ReferenceId    = row.ReferenceIdValue,   // null when rule.ReferenceIdColumn unset
+                    ErrorMessage   = BuildRowMessage(rule, row.RowKey, row.Value, row.WatermarkValue, row.SourceIdValue, row.Details, row.ConditionValues),
                     SourceLogPath  = sourceLogPath,
-                    SourceFilePath = filePathValue,          // null when rule.FilePathColumn unset
+                    SourceFilePath = row.FilePathValue,      // null when rule.FilePathColumn unset
                     Status         = JobStatus.Failed,
                     DetectedAt     = DateTime.Now,
                 };
@@ -204,29 +246,98 @@ public sealed class DatabaseScanStrategy(
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
-    private static bool IsRuleValid(ScanCheckRule rule) => rule.CheckType switch
+    /// <summary>
+    /// Table rules (ColumnRange / ValueEquals) are valid only when the parent check AND
+    /// every extra condition have the config their kind needs. One invalid condition
+    /// skips the WHOLE rule (mirrors how an invalid parent is treated) — firing on the
+    /// parent alone would silently widen the match, which is the one thing a composite
+    /// rule must never do.
+    /// </summary>
+    internal static bool IsRuleValid(ScanCheckRule rule) => rule.CheckType switch
     {
-        CheckType.ColumnRange => rule.MinValue.HasValue || rule.MaxValue.HasValue,
-        CheckType.ValueEquals => !string.IsNullOrWhiteSpace(rule.ExpectedValue),
+        CheckType.ColumnRange => (rule.MinValue.HasValue || rule.MaxValue.HasValue) && rule.Conditions.All(IsConditionValid),
+        CheckType.ValueEquals => !string.IsNullOrWhiteSpace(rule.ExpectedValue) && rule.Conditions.All(IsConditionValid),
         // SqlQuery: the query (SourceTable) + the value column (TargetField) are all
         // that's needed — Option A, every returned row is a failure (no predicate).
+        // Conditions are ignored on SqlQuery (warned in the loop), so not validated.
         CheckType.SqlQuery    => !string.IsNullOrWhiteSpace(rule.SourceTable) && !string.IsNullOrWhiteSpace(rule.TargetField),
         _                     => false
     };
 
-    private static string RuleDescription(ScanCheckRule r) => r.CheckType switch
-    {
-        CheckType.ColumnRange => $"[{r.SourceTable}].[{r.TargetField}] ∈ [{r.MinValue?.ToString() ?? "−∞"}, {r.MaxValue?.ToString() ?? "+∞"}]",
-        CheckType.ValueEquals => $"[{r.SourceTable}].[{r.TargetField}] = {r.ExpectedValue}",
-        CheckType.SqlQuery    => $"SqlQuery → [{r.TargetField}]",
-        _                     => $"[{r.SourceTable}].[{r.TargetField}]"
-    };
+    /// <summary>Phase 1 condition kinds are the two DB column predicates; each needs
+    /// a column plus the value(s) its kind compares against.</summary>
+    internal static bool IsConditionValid(ScanCheckRuleCondition c) =>
+        !string.IsNullOrWhiteSpace(c.TargetField) && c.Kind switch
+        {
+            CheckType.ValueEquals => !string.IsNullOrWhiteSpace(c.ExpectedValue),
+            CheckType.ColumnRange => c.MinValue.HasValue || c.MaxValue.HasValue,
+            _                     => false,
+        };
 
-    private static string BuildRowMessage(ScanCheckRule rule, string rowKey, object value, string? wmValue, string? srcValue)
+    private static string RuleDescription(ScanCheckRule r)
+    {
+        var head = r.CheckType switch
+        {
+            CheckType.ColumnRange => $"[{r.SourceTable}].[{r.TargetField}] ∈ [{r.MinValue?.ToString() ?? "−∞"}, {r.MaxValue?.ToString() ?? "+∞"}]",
+            CheckType.ValueEquals => $"[{r.SourceTable}].[{r.TargetField}] = {r.ExpectedValue}",
+            CheckType.SqlQuery    => $"SqlQuery → [{r.TargetField}]",
+            _                     => $"[{r.SourceTable}].[{r.TargetField}]"
+        };
+        return r.Conditions.Count > 0 && r.CheckType != CheckType.SqlQuery
+            ? $"{head} +{r.Conditions.Count} cond"
+            : head;
+    }
+
+    /// <summary>
+    /// Splits the rule's comma-separated DetailColumns into trimmed, non-blank,
+    /// case-insensitively distinct column references in configured order.
+    /// </summary>
+    internal static IReadOnlyList<string> ParseDetailColumns(string? csv)
+    {
+        if (string.IsNullOrWhiteSpace(csv)) return [];
+        return csv.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                  .Distinct(StringComparer.OrdinalIgnoreCase)
+                  .ToList();
+    }
+
+    /// <summary>
+    /// Builds the failure's ErrorMessage. The first line is the rule-derived
+    /// synthetic message (byte-identical regardless of DetailColumns, so classifier
+    /// tokens and the coverage heuristic are unaffected); each configured detail
+    /// column then adds a "\nColumn: value" line, values capped at
+    /// <see cref="MaxDetailValueLength"/>.
+    /// </summary>
+    internal static string BuildRowMessage(ScanCheckRule rule, string rowKey, object value, string? wmValue, string? srcValue,
+        IReadOnlyList<KeyValuePair<string, string?>>? details = null,
+        IReadOnlyList<string?>? conditionValues = null)
+    {
+        var head = BuildRowMessageHead(rule, rowKey, value, wmValue, srcValue, conditionValues);
+        if (details is null || details.Count == 0) return head;
+
+        var sb = new System.Text.StringBuilder(head);
+        foreach (var (column, raw) in details)
+        {
+            var text = raw ?? "NULL";
+            if (text.Length > MaxDetailValueLength)
+                text = string.Concat(text.AsSpan(0, MaxDetailValueLength), "…");
+            sb.Append('\n').Append(column).Append(": ").Append(text);
+        }
+        return sb.ToString();
+    }
+
+    private static string BuildRowMessageHead(ScanCheckRule rule, string rowKey, object value, string? wmValue, string? srcValue,
+        IReadOnlyList<string?>? conditionValues)
     {
         var rowId = srcValue is not null  ? $"{rule.SourceIdColumn}={srcValue}"
                   : wmValue  is not null  ? $"{rule.WatermarkColumn}={wmValue}"
                   : $"row#{rowKey}";
+
+        // One extra "[Field=Value]" token per AND'd condition, appended AFTER the
+        // parent's token (which therefore stays the FIRST token — the classifier /
+        // coverage-heuristic contract is unchanged) and BEFORE the Description.
+        // ValueEquals conditions use the operator-typed ExpectedValue (canonical form,
+        // same reasoning as the parent); ColumnRange conditions use the actual value.
+        var condTokens = ConditionTokens(rule, conditionValues);
 
         return rule.CheckType switch
         {
@@ -236,13 +347,13 @@ public sealed class DatabaseScanStrategy(
                 // Compact, space-free classifier token so an intuitive pattern
                 // ("Amount") matches via substring, and the coverage heuristic's
                 // synthetic keyword genuinely appears in the message. See DECISIONS.
-                $" [{rule.TargetField}={value}]" +
+                $" [{rule.TargetField}={value}]" + condTokens +
                 (rule.Description is not null ? $" — {rule.Description}" : ""),
             CheckType.ValueEquals =>
                 $"[{rule.SourceTable}].[{rule.TargetField}] = {value} matches error value {rule.ExpectedValue} ({rowId})" +
                 // Token uses ExpectedValue (the operator-typed, canonical form) so a
                 // literal "Field=Value" pattern matches at runtime without wildcards.
-                $" [{rule.TargetField}={rule.ExpectedValue}]" +
+                $" [{rule.TargetField}={rule.ExpectedValue}]" + condTokens +
                 (rule.Description is not null ? $" — {rule.Description}" : ""),
             // Predictable, classifier-matchable shape; Description leads when set.
             CheckType.SqlQuery =>
@@ -250,6 +361,22 @@ public sealed class DatabaseScanStrategy(
             _ =>
                 $"[{rule.SourceTable}].[{rule.TargetField}] = {value} ({rowId})"
         };
+    }
+
+    private static string ConditionTokens(ScanCheckRule rule, IReadOnlyList<string?>? conditionValues)
+    {
+        if (rule.Conditions.Count == 0 || rule.CheckType == CheckType.SqlQuery) return string.Empty;
+        var conds = OrderedConditions(rule);
+        var sb = new System.Text.StringBuilder();
+        for (var i = 0; i < conds.Count; i++)
+        {
+            var c = conds[i];
+            var shown = c.Kind == CheckType.ValueEquals
+                ? c.ExpectedValue
+                : (conditionValues is not null && i < conditionValues.Count ? conditionValues[i] : null) ?? "NULL";
+            sb.Append(" [").Append(c.TargetField).Append('=').Append(shown).Append(']');
+        }
+        return sb.ToString();
     }
 
     // ── SQL helpers ───────────────────────────────────────────────────────────
@@ -268,12 +395,13 @@ public sealed class DatabaseScanStrategy(
     /// Both compose; with neither configured it falls back to the coarse per-rule
     /// open-failure dedup. Columns are read BY NAME (operator-defined result shape).
     /// </summary>
-    private async Task<List<(string RowKey, object Value, string? WatermarkValue, string? SourceIdValue, string? ReferenceIdValue, string? FilePathValue)>> ScanSqlRuleAsync(
+    private async Task<List<MatchedRow>> ScanSqlRuleAsync(
         string connStr, MonitoredJob job, ScanCheckRule rule, string stepName, CancellationToken ct)
     {
         var hasWatermark    = !string.IsNullOrWhiteSpace(rule.WatermarkColumn);
         var hasSourceId     = !string.IsNullOrWhiteSpace(rule.SourceIdColumn);
         var hasReferenceId  = !string.IsNullOrWhiteSpace(rule.ReferenceIdColumn);
+        var detailColumns   = ParseDetailColumns(rule.DetailColumns);
 
         var resultRows = await sqlRunner.ExecuteAsync(connStr, rule.SourceTable!, MaxSqlQueryRows, ct);
         if (resultRows.Count >= MaxSqlQueryRows)
@@ -285,7 +413,7 @@ public sealed class DatabaseScanStrategy(
         var stored = hasWatermark ? await watermarks.GetDbWatermarkAsync(rule.CheckRuleId, ct) : null;
 
         object? maxWm = null;
-        var candidates = new List<(string RowKey, object Value, string? WatermarkValue, string? SourceIdValue, string? ReferenceIdValue, string? FilePathValue)>();
+        var candidates = new List<MatchedRow>();
         var rowIndex = 0;
         foreach (var row in resultRows)
         {
@@ -332,7 +460,25 @@ public sealed class DatabaseScanStrategy(
                 wmCanonical = wmRaw is not null ? Canonical(wmRaw) : null;
             }
 
-            candidates.Add((rowIndex.ToString(), value, wmCanonical, srcVal, refVal, null));
+            // DetailColumns read BY NAME like everything else on this path. A column
+            // the operator's SELECT doesn't return renders a visible marker instead of
+            // silently vanishing (deliberately NOT ReferenceId's silent-null — a
+            // missing diagnostic column is a config error the operator should see).
+            IReadOnlyList<KeyValuePair<string, string?>> details = NoDetails;
+            if (detailColumns.Count > 0)
+            {
+                var list = new List<KeyValuePair<string, string?>>(detailColumns.Count);
+                foreach (var col in detailColumns)
+                {
+                    var text = row.TryGetValue(col, out var dv)
+                        ? (dv is null ? null : Canonical(dv))
+                        : DetailColumnMissing;
+                    list.Add(new KeyValuePair<string, string?>(col, text));
+                }
+                details = list;
+            }
+
+            candidates.Add(new MatchedRow(rowIndex.ToString(), value, wmCanonical, srcVal, refVal, null, details, NoConditionValues));
         }
 
         // Advance the watermark to the highest value seen this scan (if it advanced).
@@ -390,7 +536,7 @@ public sealed class DatabaseScanStrategy(
     }
 
     /// <summary>True when a &gt; b for two values of the same watermark column.</summary>
-    private static bool ValueGreater(object a, object b)
+    internal static bool ValueGreater(object a, object b)
     {
         if (a is DateTime da && b is DateTime db) return da > db;
         try { return Convert.ToDecimal(a, CultureInfo.InvariantCulture) > Convert.ToDecimal(b, CultureInfo.InvariantCulture); }
@@ -399,13 +545,13 @@ public sealed class DatabaseScanStrategy(
 
     /// <summary>Sortable, round-trippable string form for the watermark store.
     /// DateTime uses the same ISO shape as the table path's CONVERT(..., 121).</summary>
-    private static string Canonical(object value) => value switch
+    internal static string Canonical(object value) => value switch
     {
         DateTime dt => dt.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture),
         _           => Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty
     };
 
-    private static async Task<List<(string RowKey, object Value, string? WatermarkValue, string? SourceIdValue, string? ReferenceIdValue, string? FilePathValue)>> QueryMatchingRowsAsync(
+    private static async Task<List<MatchedRow>> QueryMatchingRowsAsync(
         string connStr, string sourceTable, ScanCheckRule rule, string? watermark, CancellationToken ct)
     {
         var (filterClause, filterParams) = BuildFilterClause(rule);
@@ -413,13 +559,15 @@ public sealed class DatabaseScanStrategy(
             ? $" AND {Bracket(rule.WatermarkColumn)} > @Watermark"
             : string.Empty;
 
-        // WatermarkColumn / SourceIdColumn / FilePathColumn are extra columns
-        // projected for tracking, identity, and composite-fix path capture.
+        // WatermarkColumn / SourceIdColumn / FilePathColumn / DetailColumns are extra
+        // columns projected for tracking, identity, composite-fix path capture, and
+        // operator-visible diagnostics.
         // All column names and the table come from admin config and are bracketed.
         // All filter values are always parameterised.
-        // FilePathColumn supports a dotted "alias.Column" form (rare) — bracket
-        // only the column portion so a JOIN encoded in SourceTable still works.
+        // FilePathColumn and DetailColumns support a dotted "alias.Column" form —
+        // bracket only the column portion so a JOIN encoded in SourceTable still works.
         var quotedTable = QuoteTable(sourceTable);
+        var detailColumns = ParseDetailColumns(rule.DetailColumns);
         // Style 121 = ISO `yyyy-mm-dd hh:mi:ss.fffffff` (full datetime2 precision).
         // For non-date columns the style is silently ignored and you get the default text form.
         var wmSelect  = rule.WatermarkColumn is not null
@@ -434,6 +582,16 @@ public sealed class DatabaseScanStrategy(
         var fpSelect  = !string.IsNullOrEmpty(rule.FilePathColumn)
             ? $", CAST({QuoteColumnRef(rule.FilePathColumn)} AS NVARCHAR(500)) AS _FilePathVal"
             : string.Empty;
+        // Style 121 again so date-typed detail columns render ISO rather than SQL
+        // Server's locale default ("Oct 12 2026 9:14AM"); ignored for non-date types.
+        var detailSelect = string.Concat(detailColumns.Select((col, i) =>
+            $", CONVERT(NVARCHAR(MAX), {QuoteColumnRef(col)}, 121) AS _Detail{i}"));
+        // Each AND'd condition's column is projected too (for the message token).
+        // Aliased _C{i} so a condition may target the parent's column (or another
+        // condition's) without a duplicate-column-name clash in the result set.
+        var conds = OrderedConditions(rule);
+        var condSelect = string.Concat(conds.Select((c, i) =>
+            $", CONVERT(NVARCHAR(MAX), {Bracket(c.TargetField)}, 121) AS _C{i}"));
 
         var orderBy = rule.WatermarkColumn is not null
             ? $"ORDER BY {Bracket(rule.WatermarkColumn)} ASC"
@@ -447,11 +605,13 @@ public sealed class DatabaseScanStrategy(
                 {srcSelect}
                 {refSelect}
                 {fpSelect}
+                {detailSelect}
+                {condSelect}
             FROM {quotedTable}
             WHERE {filterClause}{watermarkFilter}
             """;
 
-        var rows = new List<(string, object, string?, string?, string?, string?)>();
+        var rows = new List<MatchedRow>();
         await using var conn = new SqlConnection(connStr);
         await conn.OpenAsync(ct);
         await using var cmd = new SqlCommand(sql, conn);
@@ -462,24 +622,44 @@ public sealed class DatabaseScanStrategy(
             cmd.Parameters.AddWithValue("@Watermark", watermark!);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+        // Optional columns are read BY NAME via their aliases (the parent value at
+        // ordinal 1 is the only unaliased column). This replaces the earlier positional
+        // nextCol++ arithmetic, which silently depended on every optional column being
+        // emitted in exactly the SELECT order above — one reordering away from reading
+        // the watermark out of the source-id column.
+        var ordinals = new Dictionary<string, int>(reader.FieldCount, StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < reader.FieldCount; i++) ordinals[reader.GetName(i)] = i;
+        string? ReadOptional(string alias)
+            => ordinals.TryGetValue(alias, out var o) && !reader.IsDBNull(o) ? reader.GetString(o) : null;
+
         while (await reader.ReadAsync(ct))
         {
             var rowKey  = reader.GetString(0);
             var val     = reader.IsDBNull(1) ? (object)"NULL" : reader.GetValue(1);
-            var nextCol = 2;
-            var wmVal   = rule.WatermarkColumn is not null
-                ? (!reader.IsDBNull(nextCol++) ? reader.GetString(nextCol - 1) : null)
-                : null;
-            var srcVal  = rule.SourceIdColumn is not null
-                ? (!reader.IsDBNull(nextCol++) ? reader.GetString(nextCol - 1) : null)
-                : null;
-            var refVal  = rule.ReferenceIdColumn is not null
-                ? (!reader.IsDBNull(nextCol++) ? reader.GetString(nextCol - 1) : null)
-                : null;
-            var fpVal   = !string.IsNullOrEmpty(rule.FilePathColumn)
-                ? (!reader.IsDBNull(nextCol)   ? reader.GetString(nextCol)     : null)
-                : null;
-            rows.Add((rowKey, val, wmVal, srcVal, refVal, fpVal));
+            var wmVal   = rule.WatermarkColumn is not null              ? ReadOptional("_WatermarkVal")   : null;
+            var srcVal  = rule.SourceIdColumn is not null               ? ReadOptional("_SourceIdVal")    : null;
+            var refVal  = rule.ReferenceIdColumn is not null            ? ReadOptional("_ReferenceIdVal") : null;
+            var fpVal   = !string.IsNullOrEmpty(rule.FilePathColumn)    ? ReadOptional("_FilePathVal")    : null;
+
+            IReadOnlyList<KeyValuePair<string, string?>> details = NoDetails;
+            if (detailColumns.Count > 0)
+            {
+                var list = new List<KeyValuePair<string, string?>>(detailColumns.Count);
+                for (var i = 0; i < detailColumns.Count; i++)
+                    list.Add(new KeyValuePair<string, string?>(detailColumns[i], ReadOptional($"_Detail{i}")));
+                details = list;
+            }
+
+            IReadOnlyList<string?> condValues = NoConditionValues;
+            if (conds.Count > 0)
+            {
+                var list = new string?[conds.Count];
+                for (var i = 0; i < conds.Count; i++) list[i] = ReadOptional($"_C{i}");
+                condValues = list;
+            }
+
+            rows.Add(new MatchedRow(rowKey, val, wmVal, srcVal, refVal, fpVal, details, condValues));
         }
 
         return rows;
@@ -505,7 +685,7 @@ public sealed class DatabaseScanStrategy(
     /// Used as the baseline when a scan returns zero matching rows, so the watermark only
     /// ever advances within the population the rule would actually report on.
     /// </summary>
-    private static async Task<string?> QueryFilteredMaxAsync(
+    internal static async Task<string?> QueryFilteredMaxAsync(
         string connStr, string sourceTable, string watermarkColumn, ScanCheckRule rule, CancellationToken ct)
     {
         var (filterClause, filterParams) = BuildFilterClause(rule);
@@ -538,22 +718,57 @@ public sealed class DatabaseScanStrategy(
         return string.Join(".", parts.Select(p => Bracket(p.Trim('[', ']'))));
     }
 
+    /// <summary>
+    /// The rule's WHERE filter: the parent check's clause, then one AND'd clause per
+    /// extra condition. Shared by <see cref="QueryMatchingRowsAsync"/> and
+    /// <see cref="QueryFilteredMaxAsync"/>, so the watermark baseline is computed over
+    /// exactly the population the composite rule reports on. The parent's clause and
+    /// parameter names (<c>@ExactVal</c> / <c>@Min</c> / <c>@Max</c>) are unchanged;
+    /// condition parameters are prefixed <c>@C{i}_</c> so they can never collide.
+    /// </summary>
     internal static (string Clause, List<(string Name, object Value)> Params) BuildFilterClause(ScanCheckRule rule)
     {
         var p = new List<(string, object)>();
+        string parentClause;
         if (rule.CheckType == CheckType.ValueEquals)
         {
             p.Add(("@ExactVal", rule.ExpectedValue!));
-            return ($"({Bracket(rule.TargetField)} = @ExactVal)", p);
+            parentClause = $"({Bracket(rule.TargetField)} = @ExactVal)";
         }
-        // ColumnRange — wrap in parentheses so callers can safely AND
-        // additional conditions onto this clause without the precedence bug
-        // where (a OR b) AND c parses as a OR (b AND c). The watermark filter
-        // in QueryMatchingRowsAsync is exactly that "additional AND" case;
-        // unparenthesized, it would bypass the OR's left branch entirely.
-        var conditions = new List<string>();
-        if (rule.MinValue.HasValue) { conditions.Add($"{Bracket(rule.TargetField)} < @Min"); p.Add(("@Min", rule.MinValue.Value)); }
-        if (rule.MaxValue.HasValue) { conditions.Add($"{Bracket(rule.TargetField)} > @Max"); p.Add(("@Max", rule.MaxValue.Value)); }
-        return ($"({string.Join(" OR ", conditions)})", p);
+        else
+        {
+            // ColumnRange — wrap in parentheses so callers can safely AND
+            // additional conditions onto this clause without the precedence bug
+            // where (a OR b) AND c parses as a OR (b AND c). The watermark filter
+            // in QueryMatchingRowsAsync is exactly that "additional AND" case;
+            // unparenthesized, it would bypass the OR's left branch entirely.
+            var conditions = new List<string>();
+            if (rule.MinValue.HasValue) { conditions.Add($"{Bracket(rule.TargetField)} < @Min"); p.Add(("@Min", rule.MinValue.Value)); }
+            if (rule.MaxValue.HasValue) { conditions.Add($"{Bracket(rule.TargetField)} > @Max"); p.Add(("@Max", rule.MaxValue.Value)); }
+            parentClause = $"({string.Join(" OR ", conditions)})";
+        }
+
+        if (rule.Conditions.Count == 0) return (parentClause, p);
+
+        var parts = new List<string> { parentClause };
+        var conds = OrderedConditions(rule);
+        for (var i = 0; i < conds.Count; i++)
+        {
+            var c   = conds[i];
+            var col = Bracket(c.TargetField);
+            if (c.Kind == CheckType.ValueEquals)
+            {
+                p.Add(($"@C{i}_ExactVal", c.ExpectedValue!));
+                parts.Add($"({col} = @C{i}_ExactVal)");
+            }
+            else
+            {
+                var cc = new List<string>();
+                if (c.MinValue.HasValue) { cc.Add($"{col} < @C{i}_Min"); p.Add(($"@C{i}_Min", c.MinValue.Value)); }
+                if (c.MaxValue.HasValue) { cc.Add($"{col} > @C{i}_Max"); p.Add(($"@C{i}_Max", c.MaxValue.Value)); }
+                parts.Add($"({string.Join(" OR ", cc)})");
+            }
+        }
+        return (string.Join(" AND ", parts), p);
     }
 }

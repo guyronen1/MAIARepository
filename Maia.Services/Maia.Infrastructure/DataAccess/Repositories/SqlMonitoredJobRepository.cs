@@ -13,10 +13,12 @@ public sealed class SqlMonitoredJobRepository(IDbContextFactory<MaiaDbContext> f
         return await db.MonitoredJobs
             .Include(m => m.JobType)
             .Include(m => m.ScanCheckRules.Where(r => r.IsActive))
+                .ThenInclude(r => r.Conditions.OrderBy(c => c.ConditionOrder))
             .Include(m => m.ScanSources.Where(s => s.IsActive))
                 .ThenInclude(s => s.ScanTypeDefinition)
             .Include(m => m.ScanSources.Where(s => s.IsActive))
                 .ThenInclude(s => s.ScanCheckRules.Where(r => r.IsActive))
+                    .ThenInclude(r => r.Conditions.OrderBy(c => c.ConditionOrder))
             .Where(m => m.IsActive)
             .AsSplitQuery()
             .ToListAsync(ct);
@@ -29,10 +31,12 @@ public sealed class SqlMonitoredJobRepository(IDbContextFactory<MaiaDbContext> f
             .Include(m => m.JobType)
             .Include(m => m.Lease)
             .Include(m => m.ScanCheckRules.Where(r => r.IsActive))
+                .ThenInclude(r => r.Conditions.OrderBy(c => c.ConditionOrder))
             .Include(m => m.JobRules.Where(jr => jr.IsActive))
                 .ThenInclude(jr => jr.Rule)
                     .ThenInclude(r => r!.ErrorType)
             .Where(m => m.IsActive)
+            .AsSplitQuery()
             .ToListAsync(ct);
     }
 
@@ -42,11 +46,13 @@ public sealed class SqlMonitoredJobRepository(IDbContextFactory<MaiaDbContext> f
         return await db.MonitoredJobs
             .Include(m => m.JobType)
             .Include(m => m.ScanCheckRules.Where(r => r.IsActive))
+                .ThenInclude(r => r.Conditions.OrderBy(c => c.ConditionOrder))
             .Include(m => m.JobRules).ThenInclude(jr => jr.Rule).ThenInclude(r => r!.ErrorType)
             .Include(m => m.ScanSources.Where(s => s.IsActive))
                 .ThenInclude(s => s.ScanTypeDefinition)
             .Include(m => m.ScanSources.Where(s => s.IsActive))
                 .ThenInclude(s => s.ScanCheckRules.Where(r => r.IsActive))
+                    .ThenInclude(r => r.Conditions.OrderBy(c => c.ConditionOrder))
             .AsSplitQuery()
             .FirstOrDefaultAsync(m => m.MonitoredJobId == monitoredJobId, ct);
     }
@@ -57,10 +63,12 @@ public sealed class SqlMonitoredJobRepository(IDbContextFactory<MaiaDbContext> f
         return await db.MonitoredJobs
             .Include(m => m.JobType)
             .Include(m => m.ScanCheckRules.Where(r => r.IsActive))
+                .ThenInclude(r => r.Conditions.OrderBy(c => c.ConditionOrder))
             .Include(m => m.ScanSources.Where(s => s.IsActive))
                 .ThenInclude(s => s.ScanTypeDefinition)
             .Include(m => m.ScanSources.Where(s => s.IsActive))
                 .ThenInclude(s => s.ScanCheckRules.Where(r => r.IsActive))
+                    .ThenInclude(r => r.Conditions.OrderBy(c => c.ConditionOrder))
             .AsSplitQuery()
             .FirstOrDefaultAsync(m => m.Name == name, ct);
     }
@@ -112,12 +120,14 @@ public sealed class SqlMonitoredJobRepository(IDbContextFactory<MaiaDbContext> f
             .Include(m => m.JobType)
             .Include(m => m.Lease)
             .Include(m => m.ScanCheckRules)
+                .ThenInclude(r => r.Conditions.OrderBy(c => c.ConditionOrder))
             .Include(m => m.JobRules.Where(jr => jr.IsActive))
                 .ThenInclude(jr => jr.Rule).ThenInclude(r => r!.ErrorType)
             .Include(m => m.ScanSources.Where(s => s.IsActive))
                 .ThenInclude(s => s.ScanTypeDefinition)
             .Include(m => m.ScanSources.Where(s => s.IsActive))
                 .ThenInclude(s => s.ScanCheckRules.Where(r => r.IsActive))
+                    .ThenInclude(r => r.Conditions.OrderBy(c => c.ConditionOrder))
             .OrderBy(m => m.Name)
             .AsSplitQuery()
             .ToListAsync(ct);

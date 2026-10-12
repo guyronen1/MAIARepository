@@ -41,6 +41,24 @@ public sealed class SqlScanWatermarkRepository(IDbContextFactory<MaiaDbContext> 
         await db.SaveChangesAsync(ct);
     }
 
+    public async Task<bool> TryAddFileOffsetAsync(int monitoredJobId, int scanSourceId, string filePath, long byteOffset, CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        if (await db.ScanFileWatermarks.AnyAsync(w => w.MonitoredJobId == monitoredJobId && w.FilePath == filePath, ct))
+            return false;
+
+        db.ScanFileWatermarks.Add(new ScanFileWatermark
+        {
+            MonitoredJobId = monitoredJobId,
+            ScanSourceId   = scanSourceId,
+            FilePath       = filePath,
+            ByteOffset     = byteOffset,
+            LastScannedAt  = DateTime.Now,
+        });
+        await db.SaveChangesAsync(ct);
+        return true;
+    }
+
     // ── Content watermarks (FileContent scans) ─────────────────────────────────
 
     public async Task<DateTime?> GetContentWatermarkAsync(int monitoredJobId, string filePath, CancellationToken ct = default)
@@ -75,6 +93,24 @@ public sealed class SqlScanWatermarkRepository(IDbContextFactory<MaiaDbContext> 
         await db.SaveChangesAsync(ct);
     }
 
+    public async Task<bool> TryAddContentWatermarkAsync(int monitoredJobId, int scanSourceId, string filePath, DateTime lastModifiedAt, CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        if (await db.ScanContentWatermarks.AnyAsync(w => w.MonitoredJobId == monitoredJobId && w.FilePath == filePath, ct))
+            return false;
+
+        db.ScanContentWatermarks.Add(new ScanContentWatermark
+        {
+            MonitoredJobId = monitoredJobId,
+            ScanSourceId   = scanSourceId,
+            FilePath       = filePath,
+            LastModifiedAt = lastModifiedAt,
+            LastScannedAt  = DateTime.Now,
+        });
+        await db.SaveChangesAsync(ct);
+        return true;
+    }
+
     // ── Database watermarks ──────────────────────────────────────────────────
 
     public async Task<string?> GetDbWatermarkAsync(int checkRuleId, CancellationToken ct = default)
@@ -105,5 +141,21 @@ public sealed class SqlScanWatermarkRepository(IDbContextFactory<MaiaDbContext> 
         }
 
         await db.SaveChangesAsync(ct);
+    }
+
+    public async Task<bool> TryAddDbWatermarkAsync(int checkRuleId, string watermarkValue, CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        if (await db.ScanDbWatermarks.AnyAsync(w => w.CheckRuleId == checkRuleId, ct))
+            return false;
+
+        db.ScanDbWatermarks.Add(new ScanDbWatermark
+        {
+            CheckRuleId    = checkRuleId,
+            WatermarkValue = watermarkValue,
+            LastScannedAt  = DateTime.Now,
+        });
+        await db.SaveChangesAsync(ct);
+        return true;
     }
 }

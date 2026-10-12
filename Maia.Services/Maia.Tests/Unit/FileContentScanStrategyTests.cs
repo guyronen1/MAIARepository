@@ -42,6 +42,9 @@ public class FileContentScanStrategyTests
         public Task UpdateFileOffsetAsync(int j, int s, string p, long o, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<string?> GetDbWatermarkAsync(int r, CancellationToken ct = default) => throw new NotImplementedException();
         public Task UpdateDbWatermarkAsync(int r, string v, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<bool> TryAddFileOffsetAsync(int j, int s, string p, long o, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<bool> TryAddDbWatermarkAsync(int r, string v, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<bool> TryAddContentWatermarkAsync(int j, int s, string p, DateTime m, CancellationToken ct = default) => throw new NotImplementedException();
     }
 
     private sealed class Harness

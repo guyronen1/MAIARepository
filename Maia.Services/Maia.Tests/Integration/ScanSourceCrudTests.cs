@@ -49,12 +49,12 @@ public class ScanSourceCrudTests : IAsyncLifetime
         var factory     = new TestDbContextFactory(options);
         var currentUser = Mock.Of<ICurrentUserAccessor>();
         _ctrl = new ScanSourcesConfigController(
-            factory, _audit, currentUser,
+            factory, _audit, Mock.Of<IScanWatermarkSeeder>(), currentUser,
             NullLogger<ScanSourcesConfigController>.Instance);
         _rules = new ScanRulesConfigController(
             factory,
             new IFileContentExtractor[] { new XmlContentExtractor(NullLogger<XmlContentExtractor>.Instance) },
-            _audit, currentUser,
+            _audit, Mock.Of<IScanWatermarkSeeder>(), currentUser,
             NullLogger<ScanRulesConfigController>.Instance);
     }
 
@@ -217,6 +217,114 @@ public class ScanSourceCrudTests : IAsyncLifetime
 
         await _ctrl.DeleteScanSource(id, default);
         Assert.Contains(_audit.Rows, a => a.EventType == "ScanSourceDeleted" && a.Detail!.Contains("Soft-deleted ScanSource"));
+    }
+
+    // ── Composite scan rules (Phase 1 — DB table rules) ──────────────────────────
+
+    private static UpsertScanCheckRuleRequest DbRule(string checkType, string target, string? expected = null,
+        decimal? min = null, decimal? max = null, IReadOnlyList<ScanRuleConditionDto>? conditions = null)
+        => new(CheckType: checkType, SourceTable: checkType == "SqlQuery" ? "SELECT 1 AS X WHERE 1=0" : "dbo.Files",
+               TargetField: target, MinValue: min, MaxValue: max, ExpectedValue: expected,
+               WatermarkColumn: null, SourceIdColumn: "Id", Severity: "Medium", Description: null,
+               Conditions: conditions);
+
+    private async Task<int> DbSourceAsync() => await CreateOkAsync(Req("db", DbType, connectionName: "DefaultConnection"));
+
+    [Fact]
+    public async Task Conditions_on_a_SqlQuery_rule_are_rejected_ConditionsNotSupported()
+    {
+        var sid = await DbSourceAsync();
+        var r = await _rules.CreateScanRuleForSource(sid,
+            DbRule("SqlQuery", "X", conditions: [new ScanRuleConditionDto(1, "ValueEquals", "Region", "EU")]), default);
+        Assert.Equal("ConditionsNotSupported", ErrorOf(r));
+    }
+
+    [Fact]
+    public async Task Conditions_on_an_ErrorKeyword_rule_are_rejected_ConditionsNotSupported()
+    {
+        var sid = await CreateOkAsync(Req("fs", FsType, logFolder: "c:/x"));
+        var r = await _rules.CreateScanRuleForSource(sid, new UpsertScanCheckRuleRequest(
+            CheckType: "ErrorKeyword", SourceTable: null, TargetField: "ERROR",
+            MinValue: null, MaxValue: null, ExpectedValue: null, WatermarkColumn: null,
+            SourceIdColumn: null, Severity: "Medium", Description: null,
+            Conditions: [new ScanRuleConditionDto(1, "ErrorKeyword", "timeout")]), default);
+        Assert.Equal("ConditionsNotSupported", ErrorOf(r));
+    }
+
+    [Fact]
+    public async Task Condition_with_a_non_DB_kind_is_rejected_ConditionKindMismatch()
+    {
+        var sid = await DbSourceAsync();
+        var r = await _rules.CreateScanRuleForSource(sid,
+            DbRule("ValueEquals", "Status", "5", conditions: [new ScanRuleConditionDto(1, "FileContent", "/x/y", "v")]), default);
+        Assert.Equal("ConditionKindMismatch", ErrorOf(r));
+    }
+
+    [Theory]
+    [InlineData("ValueEquals", "Region", null, null, null)]   // no expected value
+    [InlineData("ColumnRange", "Amount", null, null, null)]   // neither bound
+    [InlineData("ValueEquals", "   ",    "EU", null, null)]   // no column
+    public async Task Incomplete_condition_is_rejected_ConditionIncomplete(string kind, string col, string? expected, double? min, double? max)
+    {
+        var sid = await DbSourceAsync();
+        var r = await _rules.CreateScanRuleForSource(sid,
+            DbRule("ValueEquals", "Status", "5", conditions:
+                [new ScanRuleConditionDto(1, kind, col, expected, (decimal?)min, (decimal?)max)]), default);
+        Assert.Equal("ConditionIncomplete", ErrorOf(r));
+    }
+
+    [Fact]
+    public async Task Create_persists_conditions_packed_1_to_N_with_kind_irrelevant_fields_nulled()
+    {
+        var sid = await DbSourceAsync();
+        var r = await _rules.CreateScanRuleForSource(sid, DbRule("ValueEquals", "Status", "5", conditions:
+        [
+            new ScanRuleConditionDto(7, "ColumnRange", "Amount", "stale", 10m, 100m),   // ExpectedValue must be dropped
+            new ScanRuleConditionDto(3, "ValueEquals", " Region ", "EU", 1m, 2m),        // bounds must be dropped, column trimmed
+        ]), default);
+        Assert.IsType<OkObjectResult>(r);
+
+        var rule = await _db.ScanCheckRules.AsNoTracking().Include(x => x.Conditions).FirstAsync(x => x.ScanSourceId == sid);
+        var conds = rule.Conditions.OrderBy(c => c.ConditionOrder).ToList();
+        Assert.Equal(2, conds.Count);
+        Assert.Equal(1, conds[0].ConditionOrder); Assert.Equal(Maia.Core.Enums.CheckType.ValueEquals, conds[0].Kind);
+        Assert.Equal("Region", conds[0].TargetField); Assert.Equal("EU", conds[0].ExpectedValue);
+        Assert.Null(conds[0].MinValue); Assert.Null(conds[0].MaxValue);
+        Assert.Equal(2, conds[1].ConditionOrder); Assert.Equal(Maia.Core.Enums.CheckType.ColumnRange, conds[1].Kind);
+        Assert.Null(conds[1].ExpectedValue); Assert.Equal(10m, conds[1].MinValue); Assert.Equal(100m, conds[1].MaxValue);
+        Assert.All(conds, c => Assert.Null(c.PredicateType));
+
+        Assert.Contains(_audit.Rows, a => a.EventType == "ScanRuleCreated"
+            && a.Detail!.Contains("2 condition(s): 1:ValueEquals Region=EU AND 2:ColumnRange Amount[10, 100]"));
+    }
+
+    [Fact]
+    public async Task Update_replaces_all_conditions_and_audits_before_after()
+    {
+        var sid = await DbSourceAsync();
+        var created = await _rules.CreateScanRuleForSource(sid, DbRule("ValueEquals", "Status", "5"), default);
+        var ruleId = (int)((OkObjectResult)created).Value!.GetType().GetProperty("CheckRuleId")!.GetValue(((OkObjectResult)created).Value)!;
+
+        // Add two conditions
+        var put1 = await _rules.UpdateScanRule(ruleId, DbRule("ValueEquals", "Status", "5", conditions:
+            [new ScanRuleConditionDto(1, "ValueEquals", "Region", "EU"), new ScanRuleConditionDto(2, "ColumnRange", "Amount", null, 10m, null)]), default);
+        Assert.IsType<NoContentResult>(put1);
+        Assert.Equal(2, await _db.ScanCheckRuleConditions.AsNoTracking().CountAsync(c => c.CheckRuleId == ruleId));
+        Assert.Contains(_audit.Rows, a => a.EventType == "ScanRuleUpdated"
+            && a.Detail!.Contains("Conditions: '(none)' → '1:ValueEquals Region=EU AND 2:ColumnRange Amount[10, +∞]'"));
+
+        // Replace with one — the old rows must be gone, not accumulated
+        var put2 = await _rules.UpdateScanRule(ruleId, DbRule("ValueEquals", "Status", "5", conditions:
+            [new ScanRuleConditionDto(1, "ValueEquals", "Country", "IL")]), default);
+        Assert.IsType<NoContentResult>(put2);
+        var remaining = await _db.ScanCheckRuleConditions.AsNoTracking().Where(c => c.CheckRuleId == ruleId).ToListAsync();
+        Assert.Equal("Country", Assert.Single(remaining).TargetField);
+
+        // Omitting conditions clears them (replace-all contract)
+        var put3 = await _rules.UpdateScanRule(ruleId, DbRule("ValueEquals", "Status", "5"), default);
+        Assert.IsType<NoContentResult>(put3);
+        Assert.Equal(0, await _db.ScanCheckRuleConditions.AsNoTracking().CountAsync(c => c.CheckRuleId == ruleId));
+        Assert.Contains(_audit.Rows, a => a.EventType == "ScanRuleUpdated" && a.Detail!.Contains("→ '(none)'"));
     }
 
     // ── Fakes ─────────────────────────────────────────────────────────────────────

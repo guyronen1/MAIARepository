@@ -21,6 +21,7 @@ public class MaiaDbContext(DbContextOptions<MaiaDbContext> options) : DbContext(
     public DbSet<ScanTypeDefinition>  ScanTypes           => Set<ScanTypeDefinition>();
     public DbSet<ScanSource>          ScanSources         => Set<ScanSource>();
     public DbSet<ScanCheckRule>       ScanCheckRules      => Set<ScanCheckRule>();
+    public DbSet<ScanCheckRuleCondition> ScanCheckRuleConditions => Set<ScanCheckRuleCondition>();
     public DbSet<ScanFileWatermark>   ScanFileWatermarks  => Set<ScanFileWatermark>();
     public DbSet<ScanContentWatermark> ScanContentWatermarks => Set<ScanContentWatermark>();
     public DbSet<ScanDbWatermark>     ScanDbWatermarks    => Set<ScanDbWatermark>();
@@ -45,6 +46,7 @@ public class MaiaDbContext(DbContextOptions<MaiaDbContext> options) : DbContext(
         ConfigureScanTypeDefinition(mb);
         ConfigureScanSource(mb);
         ConfigureScanCheckRule(mb);
+        ConfigureScanCheckRuleCondition(mb);
         ConfigureScanFileWatermark(mb);
         ConfigureScanContentWatermark(mb);
         ConfigureScanDbWatermark(mb);
@@ -420,6 +422,7 @@ public class MaiaDbContext(DbContextOptions<MaiaDbContext> options) : DbContext(
             e.Property(r => r.SourceIdColumn).HasMaxLength(200);
             e.Property(r => r.ReferenceIdColumn).HasMaxLength(200);
             e.Property(r => r.FilePathColumn).HasMaxLength(100);
+            e.Property(r => r.DetailColumns).HasMaxLength(500);
             e.Property(r => r.InputPathPattern).HasMaxLength(500);
             // FileContent scan fields — all nullable (NULL on FS/DB/API rules).
             // Enums stored as their string name, matching every other enum column.
@@ -444,6 +447,41 @@ public class MaiaDbContext(DbContextOptions<MaiaDbContext> options) : DbContext(
                 .WithMany(s => s.ScanCheckRules)
                 .HasForeignKey(r => r.ScanSourceId)
                 .OnDelete(DeleteBehavior.NoAction);
+        });
+    }
+
+    private static void ConfigureScanCheckRuleCondition(ModelBuilder mb)
+    {
+        mb.Entity<ScanCheckRuleCondition>(e =>
+        {
+            e.ToTable("ScanCheckRuleConditions");
+            e.HasKey(c => c.ConditionId);
+            // Kind reuses CheckType, stored as its string name like every other enum
+            // column. The migration adds CK_ScanCheckRuleConditions_Kind_Allowed
+            // (ValueEquals / ColumnRange / FileContent / ErrorKeyword) as DB-level
+            // defense-in-depth for what ScanRulesConfigController validates.
+            e.Property(c => c.Kind).IsRequired().HasMaxLength(50).HasConversion<string>();
+            // 500 (not the parent's 200): Phase 2 stores XPath locators here.
+            e.Property(c => c.TargetField).IsRequired().HasMaxLength(500);
+            e.Property(c => c.ExpectedValue).HasMaxLength(500);
+            e.Property(c => c.MinValue).HasPrecision(18, 4);
+            e.Property(c => c.MaxValue).HasPrecision(18, 4);
+            e.Property(c => c.PredicateType).HasMaxLength(50).HasConversion<string>();
+            e.Property(c => c.Description).HasMaxLength(500);
+
+            // Cascade: a condition cannot exist without its rule (same reasoning as
+            // FixPolicyRuleSteps). Single cascade path — ScanSource → ScanCheckRule is
+            // NoAction, so SQL Server's multiple-cascade-paths check isn't tripped.
+            e.HasOne(c => c.CheckRule)
+                .WithMany(r => r.Conditions)
+                .HasForeignKey(c => c.CheckRuleId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // (CheckRuleId, ConditionOrder) unique; controller packs orders to 1..N
+            // before persisting so the operator never trips on this.
+            e.HasIndex(c => new { c.CheckRuleId, c.ConditionOrder })
+                .HasDatabaseName("UX_ScanCheckRuleConditions_CheckRuleId_ConditionOrder")
+                .IsUnique();
         });
     }
 

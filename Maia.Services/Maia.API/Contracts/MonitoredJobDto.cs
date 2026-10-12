@@ -118,6 +118,7 @@ public sealed record ScanCheckRuleDto(
     string?   SourceIdColumn,
     string?   ReferenceIdColumn,
     string?   FilePathColumn,
+    string?   DetailColumns,
     string?   InputPathPattern,
     // FileContent
     string?   ExtractorType,
@@ -126,7 +127,10 @@ public sealed record ScanCheckRuleDto(
     string?   ExtractorPredicateType,
     string?   ExtractorPredicateValue,
     string    Severity,
-    string?   Description)
+    string?   Description,
+    /// <summary>Extra AND'd conditions (composite scan rule), in ConditionOrder.
+    /// Empty for a plain single-check rule.</summary>
+    IReadOnlyList<ScanCheckRuleConditionDto> Conditions)
 {
     public static ScanCheckRuleDto From(ScanCheckRule r) => new(
         r.CheckRuleId,
@@ -140,6 +144,7 @@ public sealed record ScanCheckRuleDto(
         r.SourceIdColumn,
         r.ReferenceIdColumn,
         r.FilePathColumn,
+        r.DetailColumns,
         r.InputPathPattern,
         r.ExtractorType?.ToString(),
         r.ExtractorLocator,
@@ -147,7 +152,34 @@ public sealed record ScanCheckRuleDto(
         r.ExtractorPredicateType?.ToString(),
         r.ExtractorPredicateValue,
         r.Severity.ToString(),
-        r.Description);
+        r.Description,
+        r.Conditions.OrderBy(c => c.ConditionOrder).Select(ScanCheckRuleConditionDto.From).ToList());
+}
+
+/// <summary>One extra AND'd condition of a composite scan rule (read shape). The id
+/// churns on every save (replace-all persistence) — clients must not key on it.</summary>
+public sealed record ScanCheckRuleConditionDto(
+    int      ConditionId,
+    int      ConditionOrder,
+    string   Kind,
+    string   TargetField,
+    string?  ExpectedValue,
+    decimal? MinValue,
+    decimal? MaxValue,
+    /// <summary>Reserved for Phase 2 FileContent conditions; always null in Phase 1.</summary>
+    string?  PredicateType,
+    string?  Description)
+{
+    public static ScanCheckRuleConditionDto From(ScanCheckRuleCondition c) => new(
+        c.ConditionId,
+        c.ConditionOrder,
+        c.Kind.ToString(),
+        c.TargetField,
+        c.ExpectedValue,
+        c.MinValue,
+        c.MaxValue,
+        c.PredicateType?.ToString(),
+        c.Description);
 }
 
 public sealed record RuleOverrideDto(

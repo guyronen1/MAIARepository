@@ -276,9 +276,11 @@ export class JobFlowComponent implements OnInit {
     return detail && detail !== s.scanTypeName ? `${s.scanTypeName} · ${detail}` : s.scanTypeName;
   }
   private ruleDetail(r: ScanCheckRule): string {
+    const n = r.conditions?.length ?? 0;
+    const and = n > 0 ? ` AND ${n} more condition${n > 1 ? 's' : ''}` : '';
     switch (r.checkType) {
-      case 'ColumnRange':  return `range ${r.minValue ?? '−∞'}…${r.maxValue ?? '∞'}`;
-      case 'ValueEquals':  return r.expectedValue ? `= ${r.expectedValue}` : '';
+      case 'ColumnRange':  return `range ${r.minValue ?? '−∞'}…${r.maxValue ?? '∞'}${and}`;
+      case 'ValueEquals':  return (r.expectedValue ? `= ${r.expectedValue}` : '') + and;
       case 'ErrorKeyword': return 'log keyword';
       case 'FileContent':  return r.extractorLocator ? `at ${r.extractorLocator}` : 'file content';
       case 'SqlQuery':     return r.description ?? 'custom SQL';

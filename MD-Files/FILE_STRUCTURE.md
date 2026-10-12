@@ -19,6 +19,8 @@ Maia.Core/
 │   ├── MonitoredJobRule     M:N — MonitoredJob ↔ ClassificationRule
 │   ├── MonitoredJobLease    1:1 with MonitoredJob; runtime claim/release state for the worker
 │   ├── ScanCheckRule        per-job check: DB column range, file existence, FileContent extraction, etc.
+│   │                          (+ Conditions: extra AND'd checks on the same row — composite scan rule)
+│   ├── ScanCheckRuleCondition  one AND'd condition of a composite scan rule (Kind/TargetField/Expected/Min/Max/Order)
 │   │                          (FileContent: TargetField = filename pattern; + ExtractorType,
 │   │                           ExtractorLocator, IdentifierLocator, ExtractorPredicateType/Value)
 │   ├── ScanDbWatermark      incremental DB scan watermark
@@ -52,6 +54,8 @@ Maia.Core/
 │   │                 IFixCatalogueRepository, IFixPolicyRepository,
 │   │                 IScanWatermarkRepository, IMonitoredJobLeaseRepository,
 │   │                 IOperatorActionRepository, IScanRunHistoryRepository
+│   ├── IScanWatermarkSeeder       "start scanning from now" — seeds watermark rows at
+│   │                              save time (+ WatermarkSeedResult record)
 │   ├── IClassificationStrategy
 │   ├── IFixEngine
 │   ├── IFixHandler          FixCategory-based fallback handler
@@ -99,6 +103,8 @@ Maia.Infrastructure/
 │   ├── DatabaseScanStrategy       → IScanStrategy (Database)
 │   ├── ApiEndpointScanStrategy    → IScanStrategy (ApiEndpoint)
 │   ├── FileContentScanStrategy    → IScanStrategy (FileContent) — file-outer/rule-inner walk
+│   ├── ScanWatermarkSeeder        → IScanWatermarkSeeder — insert-only seed of the DB / file /
+│   │                              content watermark at the current position (config save-time)
 │   └── XmlContentExtractor        → IFileContentExtractor (Xml; XPath, namespace-blind, 5MB cap)
 ├── Fix/
 │   ├── Handlers (FixCategory fallback)
@@ -158,7 +164,8 @@ Maia.Tests/            xUnit + Moq; refs Maia.Core/Application/Infrastructure/AP
 ├── Unit/              isolated logic — scan strategies, FilenamePattern,
 │                      ClassificationMatcher, PlaceholderResolver, PasswordHasher,
 │                      DefaultFixEngine (composite), Copy/SqlScript executors,
-│                      use cases, NgramClusterAnalyzer, XmlContentExtractor, …
+│                      use cases, NgramClusterAnalyzer, XmlContentExtractor,
+│                      ScanWatermarkSeederTests, …
 ├── Integration/       WebApplicationFactory (Microsoft.AspNetCore.Mvc.Testing) +
 │                      EF Core Sqlite/InMemory — controller-level tests:
 │                      AuthTestFactory, AuthorizationMatrixTests, PolicyGapStatusTests,
@@ -174,7 +181,7 @@ Maia.Tests/            xUnit + Moq; refs Maia.Core/Application/Infrastructure/AP
 src/app/
 ├── core/
 │   ├── models/
-│   │   ├── monitored-job.model.ts  (MonitoredJob, ScanCheckRule, RuleOverride)
+│   │   ├── monitored-job.model.ts  (MonitoredJob, ScanCheckRule, ScanCheckRuleCondition, RuleOverride)
 │   │   ├── failure.model.ts
 │   │   ├── recommendation.model.ts
 │   │   ├── scan-result.model.ts
