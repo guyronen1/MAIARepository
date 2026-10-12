@@ -257,6 +257,7 @@ CREATE TABLE [ScanCheckRules] (
     [SourceIdColumn] nvarchar(200) NULL,
     [ReferenceIdColumn] nvarchar(200) NULL,
     [FilePathColumn] nvarchar(100) NULL,
+    [DetailColumns] nvarchar(500) NULL,
     [InputPathPattern] nvarchar(500) NULL,
     [ExtractorType] nvarchar(50) NULL,
     [ExtractorLocator] nvarchar(500) NULL,
