@@ -3,6 +3,10 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Old `dotnet publish -o publish` outputs live inside the project dir; without this
+         their appsettings/web.config/*.json are picked up as Content and re-published,
+         nesting stale copies (publish/publish-fx/publish/...) into every new build. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);publish/**;publish-fx/**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.10" />

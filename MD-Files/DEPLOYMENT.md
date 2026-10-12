@@ -57,6 +57,20 @@ Set this in **`appsettings.Production.json`** on the server (not in the repo's c
 placeholder). SQL auth (`User Id`/`Password`) and Windows Auth (`Integrated Security=true`
 + app pool identity granted a SQL login) both work fine once TCP is forced — pick either.
 
+Schema scripts (`Maia.Services/Scripts/`; always `sqlcmd -I -b`, back up first). The app
+never calls `Migrate()`, so the DB is script-managed:
+
+- **New, empty DB:** `schema-clean.sql` → `seed-metadata.sql`. `schema-clean.sql` is
+  generated from the EF model by `generate-clean-schema.ps1` and marks every migration
+  applied in `__EFMigrationsHistory`. (`schema-create.sql` is the older generator's
+  output — no CHECK constraints, no history — don't use it for new installs.)
+- **Existing DB from the July 2026 install** (`schema-create.sql`, no
+  `__EFMigrationsHistory`): `upgrade-existing-to-20261012.sql`. Existence-guarded and
+  re-runnable; aborts without changes if the DB isn't at the July baseline or has rows
+  the new CHECK constraints reject (lists them). Afterwards the schema is identical to a
+  clean install (verified object-by-object) and the history table is populated, so the
+  **next** upgrade can be a plain `dotnet ef migrations script <last-applied> --idempotent`.
+
 ---
 
 ## Deploy: API

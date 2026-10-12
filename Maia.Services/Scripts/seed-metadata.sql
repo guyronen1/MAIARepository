@@ -2,6 +2,10 @@
 -- seed-metadata.sql
 -- Reference data a fresh MAIA database needs to run. Idempotent:
 -- every row is inserted only if missing, so re-running is safe.
+-- A row counts as present if its ID *or* its natural key (ScanType/JobType
+-- Name, ErrorType Code) exists - so running this against a non-empty DB
+-- (e.g. one whose error types were created in the UI under other IDs)
+-- neither duplicates a row nor trips IX_ErrorTypes_Code and rolls back.
 --
 -- Contains: Roles, bootstrap admin user, ScanTypes, JobTypes,
 -- default ErrorTypes. Values mirror MaiaDbContext.SeedData (keep in
@@ -60,19 +64,19 @@ IF NOT EXISTS (SELECT 1 FROM [dbo].[Users] WHERE [Username] = N'admin')
 -- ============================================================
 SET IDENTITY_INSERT [dbo].[ScanTypes] ON;
 
-IF NOT EXISTS (SELECT 1 FROM [dbo].[ScanTypes] WHERE [ScanTypeId] = 1)
+IF NOT EXISTS (SELECT 1 FROM [dbo].[ScanTypes] WHERE [ScanTypeId] = 1 OR [Name] = N'FileSystem')
     INSERT INTO [dbo].[ScanTypes] ([ScanTypeId], [Name], [Description], [LeaseDurationSeconds])
     VALUES (1, N'FileSystem', N'Scan log files in a folder matching glob patterns', 300);
 
-IF NOT EXISTS (SELECT 1 FROM [dbo].[ScanTypes] WHERE [ScanTypeId] = 2)
+IF NOT EXISTS (SELECT 1 FROM [dbo].[ScanTypes] WHERE [ScanTypeId] = 2 OR [Name] = N'Database')
     INSERT INTO [dbo].[ScanTypes] ([ScanTypeId], [Name], [Description], [LeaseDurationSeconds])
     VALUES (2, N'Database', N'Query a SQL table and check column values against rules', 1800);
 
-IF NOT EXISTS (SELECT 1 FROM [dbo].[ScanTypes] WHERE [ScanTypeId] = 3)
+IF NOT EXISTS (SELECT 1 FROM [dbo].[ScanTypes] WHERE [ScanTypeId] = 3 OR [Name] = N'ApiEndpoint')
     INSERT INTO [dbo].[ScanTypes] ([ScanTypeId], [Name], [Description], [LeaseDurationSeconds])
     VALUES (3, N'ApiEndpoint', N'Poll an HTTP endpoint and inspect the response', 60);
 
-IF NOT EXISTS (SELECT 1 FROM [dbo].[ScanTypes] WHERE [ScanTypeId] = 4)
+IF NOT EXISTS (SELECT 1 FROM [dbo].[ScanTypes] WHERE [ScanTypeId] = 4 OR [Name] = N'FileContent')
     INSERT INTO [dbo].[ScanTypes] ([ScanTypeId], [Name], [Description], [LeaseDurationSeconds])
     VALUES (4, N'FileContent', N'Structured extraction from input data files (XML, …)', 300);
 
@@ -84,23 +88,23 @@ SET IDENTITY_INSERT [dbo].[ScanTypes] OFF;
 -- ============================================================
 SET IDENTITY_INSERT [dbo].[JobTypes] ON;
 
-IF NOT EXISTS (SELECT 1 FROM [dbo].[JobTypes] WHERE [JobTypeId] = 1)
+IF NOT EXISTS (SELECT 1 FROM [dbo].[JobTypes] WHERE [JobTypeId] = 1 OR [Name] = N'DTSX')
     INSERT INTO [dbo].[JobTypes] ([JobTypeId], [Name], [Description], [IsActive])
     VALUES (1, N'DTSX', N'SQL Server Integration Services package', 1);
 
-IF NOT EXISTS (SELECT 1 FROM [dbo].[JobTypes] WHERE [JobTypeId] = 2)
+IF NOT EXISTS (SELECT 1 FROM [dbo].[JobTypes] WHERE [JobTypeId] = 2 OR [Name] = N'SqlAgent')
     INSERT INTO [dbo].[JobTypes] ([JobTypeId], [Name], [Description], [IsActive])
     VALUES (2, N'SqlAgent', N'SQL Server Agent Job', 1);
 
-IF NOT EXISTS (SELECT 1 FROM [dbo].[JobTypes] WHERE [JobTypeId] = 3)
+IF NOT EXISTS (SELECT 1 FROM [dbo].[JobTypes] WHERE [JobTypeId] = 3 OR [Name] = N'Python')
     INSERT INTO [dbo].[JobTypes] ([JobTypeId], [Name], [Description], [IsActive])
     VALUES (3, N'Python', N'Python script', 1);
 
-IF NOT EXISTS (SELECT 1 FROM [dbo].[JobTypes] WHERE [JobTypeId] = 4)
+IF NOT EXISTS (SELECT 1 FROM [dbo].[JobTypes] WHERE [JobTypeId] = 4 OR [Name] = N'PowerShell')
     INSERT INTO [dbo].[JobTypes] ([JobTypeId], [Name], [Description], [IsActive])
     VALUES (4, N'PowerShell', N'PowerShell script', 1);
 
-IF NOT EXISTS (SELECT 1 FROM [dbo].[JobTypes] WHERE [JobTypeId] = 5)
+IF NOT EXISTS (SELECT 1 FROM [dbo].[JobTypes] WHERE [JobTypeId] = 5 OR [Name] = N'Exe')
     INSERT INTO [dbo].[JobTypes] ([JobTypeId], [Name], [Description], [IsActive])
     VALUES (5, N'Exe', N'Native executable / batch process', 1);
 
@@ -113,27 +117,27 @@ SET IDENTITY_INSERT [dbo].[JobTypes] OFF;
 -- ============================================================
 SET IDENTITY_INSERT [dbo].[ErrorTypes] ON;
 
-IF NOT EXISTS (SELECT 1 FROM [dbo].[ErrorTypes] WHERE [ErrorTypeId] = 1)
+IF NOT EXISTS (SELECT 1 FROM [dbo].[ErrorTypes] WHERE [ErrorTypeId] = 1 OR [Code] = N'FileNotFound')
     INSERT INTO [dbo].[ErrorTypes] ([ErrorTypeId], [Code], [DisplayName], [Severity], [IsActive])
     VALUES (1, N'FileNotFound', N'File Not Found', N'High', 1);
 
-IF NOT EXISTS (SELECT 1 FROM [dbo].[ErrorTypes] WHERE [ErrorTypeId] = 2)
+IF NOT EXISTS (SELECT 1 FROM [dbo].[ErrorTypes] WHERE [ErrorTypeId] = 2 OR [Code] = N'DbConnection')
     INSERT INTO [dbo].[ErrorTypes] ([ErrorTypeId], [Code], [DisplayName], [Severity], [IsActive])
     VALUES (2, N'DbConnection', N'Database Connection Error', N'High', 1);
 
-IF NOT EXISTS (SELECT 1 FROM [dbo].[ErrorTypes] WHERE [ErrorTypeId] = 3)
+IF NOT EXISTS (SELECT 1 FROM [dbo].[ErrorTypes] WHERE [ErrorTypeId] = 3 OR [Code] = N'Timeout')
     INSERT INTO [dbo].[ErrorTypes] ([ErrorTypeId], [Code], [DisplayName], [Severity], [IsActive])
     VALUES (3, N'Timeout', N'Execution Timeout', N'Medium', 1);
 
-IF NOT EXISTS (SELECT 1 FROM [dbo].[ErrorTypes] WHERE [ErrorTypeId] = 4)
+IF NOT EXISTS (SELECT 1 FROM [dbo].[ErrorTypes] WHERE [ErrorTypeId] = 4 OR [Code] = N'Transform')
     INSERT INTO [dbo].[ErrorTypes] ([ErrorTypeId], [Code], [DisplayName], [Severity], [IsActive])
     VALUES (4, N'Transform', N'Data Transform Failure', N'Medium', 1);
 
-IF NOT EXISTS (SELECT 1 FROM [dbo].[ErrorTypes] WHERE [ErrorTypeId] = 5)
+IF NOT EXISTS (SELECT 1 FROM [dbo].[ErrorTypes] WHERE [ErrorTypeId] = 5 OR [Code] = N'Permission')
     INSERT INTO [dbo].[ErrorTypes] ([ErrorTypeId], [Code], [DisplayName], [Severity], [IsActive])
     VALUES (5, N'Permission', N'Access Denied', N'High', 1);
 
-IF NOT EXISTS (SELECT 1 FROM [dbo].[ErrorTypes] WHERE [ErrorTypeId] = 6)
+IF NOT EXISTS (SELECT 1 FROM [dbo].[ErrorTypes] WHERE [ErrorTypeId] = 6 OR [Code] = N'Unknown')
     INSERT INTO [dbo].[ErrorTypes] ([ErrorTypeId], [Code], [DisplayName], [Severity], [IsActive])
     VALUES (6, N'Unknown', N'Unknown Error', N'Low', 1);
 
