@@ -1,6 +1,6 @@
 import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
-import { provideHttpClientTesting } from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideRouter } from '@angular/router';
 import { ScanRuleDrawerComponent } from './scan-rule-drawer.component';
 import type { ScanSource } from '../../../../core/models';
@@ -24,6 +24,46 @@ describe('ScanRuleDrawerComponent', () => {
 
   const source = (scanTypeId: number): ScanSource =>
     ({ scanSourceId: 5, scanTypeId, name: 'S' } as unknown as ScanSource);
+
+  const oracleSource = (): ScanSource =>
+    ({ scanSourceId: 6, scanTypeId: 2, name: 'Billing', connectionName: 'Billing' } as unknown as ScanSource);
+  const flushConnections = () =>
+    TestBed.inject(HttpTestingController).expectOne(r => r.url.endsWith('/config/connection-names'))
+      .flush([{ name: 'Billing', provider: 'Oracle' }, { name: 'DefaultConnection', provider: 'SqlServer' }]);
+
+  it('reads the engine from the source connection and switches the SqlQuery guidance to Oracle', () => {
+    c.open(oracleSource(), null);
+    expect(c.isOracle()).toBe(false);                          // until the lookup answers
+    flushConnections();
+    expect(c.isOracle()).toBe(true);
+    expect(c.sqlQueryPlaceholder()).not.toContain('EXEC');
+    expect(c.sqlQueryTip()).toContain('Oracle');
+
+    c.onRuleModeChange('SqlQuery');
+    c.form.sourceTable = 'BEGIN check_orders; END;';
+    expect(c.oracleQueryNotSelect()).toBe(true);
+    c.form.sourceTable = 'SELECT order_id FROM orders WHERE stuck = 1';
+    expect(c.oracleQueryNotSelect()).toBe(false);
+  });
+
+  it('keeps T-SQL guidance (EXEC allowed) for SQL Server connections and caches the lookup', () => {
+    c.open(source(2), null);                                  // no connectionName → DefaultConnection
+    flushConnections();
+    expect(c.isOracle()).toBe(false);
+    c.form.sourceTable = 'EXEC sp_Check @x=1';
+    expect(c.oracleQueryNotSelect()).toBe(false);
+    expect(c.sqlQueryPlaceholder()).toContain('EXEC');
+
+    c.open(oracleSource(), null);                             // cached — no second request
+    TestBed.inject(HttpTestingController).expectNone(r => r.url.endsWith('/config/connection-names'));
+    expect(c.isOracle()).toBe(true);
+  });
+
+  it('does not look up connections for file-based sources', () => {
+    c.open(source(1), null);
+    TestBed.inject(HttpTestingController).expectNone(r => r.url.endsWith('/config/connection-names'));
+    expect(c.isOracle()).toBe(false);
+  });
 
   it('open(new) defaults the check type from the source ScanType', () => {
     c.open(source(1), null);                       // FileSystem

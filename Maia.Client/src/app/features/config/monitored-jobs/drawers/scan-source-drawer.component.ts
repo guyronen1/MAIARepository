@@ -1,7 +1,7 @@
 import { Component, inject, input, output, signal } from '@angular/core';
 import { Observable } from 'rxjs';
 import { FormsModule } from '@angular/forms';
-import { ConfigService, UpsertScanSourceRequest, CreateScanSourceResponse } from '../../../../core/services/config.service';
+import { ConfigService, ConnectionInfo, UpsertScanSourceRequest, CreateScanSourceResponse } from '../../../../core/services/config.service';
 import { NotificationService } from '../../../../core/services/notification.service';
 import { ScanSource } from '../../../../core/models';
 import { DrawerComponent } from '../../../../shared/drawer/drawer.component';
@@ -80,16 +80,20 @@ const SCAN_TYPES = [
         @if (form.scanTypeId === 2) {
           <div class="form-group span2">
             <label>Connection Name *</label>
-            @if (connectionNames(); as names) {
+            @if (connections(); as conns) {
               <select [(ngModel)]="form.connectionName">
                 <option [ngValue]="null" disabled>Select a connection…</option>
-                @if (isStaleConnection(names)) {
+                @if (isStaleConnection(conns)) {
                   <option [ngValue]="form.connectionName">{{ form.connectionName }} (not configured)</option>
                 }
-                @for (n of names; track n) { <option [ngValue]="n">{{ n }}</option> }
+                @for (c of conns; track c.name) { <option [ngValue]="c.name">{{ connectionLabel(c) }}</option> }
               </select>
-              @if (isStaleConnection(names)) {
+              @if (isStaleConnection(conns)) {
                 <div class="soft-warn">⚠ '{{ form.connectionName }}' is not in the API's ConnectionStrings — pick a configured connection.</div>
+              } @else if (selectedProvider(conns) === 'Oracle') {
+                <span class="field-hint">Oracle connection — this source's scan rules run as Oracle SQL. A TNS alias in <code>Data Source</code> resolves through <code>tnsnames.ora</code> on the MAIA server.</span>
+              } @else if (selectedProvider(conns) === 'Unknown') {
+                <div class="soft-warn">⚠ '{{ form.connectionName }}' has an unrecognised <code>{{ form.connectionName }}_ProviderName</code> in appsettings — set it to SqlServer or Oracle.</div>
               }
             } @else {
               <!-- Lookup failed / nothing configured: never strand the drawer on an empty select. -->
@@ -175,9 +179,9 @@ export class ScanSourceDrawerComponent {
   editingId = signal<number | null>(null);
   form: UpsertScanSourceRequest = this.blank();
 
-  /** ConnectionStrings keys for the Database dropdown; null = not loaded / failed /
-   *  empty (falls back to the free-text input). Loaded once per drawer lifetime. */
-  connectionNames    = signal<string[] | null>(null);
+  /** ConnectionStrings keys (+ engine) for the Database dropdown; null = not loaded /
+   *  failed / empty (falls back to the free-text input). Loaded once per drawer lifetime. */
+  connections        = signal<ConnectionInfo[] | null>(null);
   connectionsLoading = signal(false);
   /** Which folder field the server-side picker is filling; null = picker closed. */
   pickerField        = signal<'logFolder' | 'inputFolder' | null>(null);
@@ -196,13 +200,24 @@ export class ScanSourceDrawerComponent {
           seedWatermarkFromNow: true }
       : this.blank();
     this.pickerField.set(null);
-    this.loadConnectionNames();
+    this.loadConnections();
     this.isOpen.set(true);
   }
 
   /** A saved connection key the API no longer has — kept visible, flagged. */
-  isStaleConnection(names: string[]): boolean {
-    return !!this.form.connectionName && !names.includes(this.form.connectionName);
+  isStaleConnection(conns: ConnectionInfo[]): boolean {
+    return !!this.form.connectionName && !conns.some(c => c.name === this.form.connectionName);
+  }
+
+  /** SQL Server is the default engine, so only the others are named in the option. */
+  connectionLabel(c: ConnectionInfo): string {
+    return c.provider === 'Oracle'  ? `${c.name} — Oracle`
+         : c.provider === 'Unknown' ? `${c.name} — unknown provider`
+         : c.name;
+  }
+
+  selectedProvider(conns: ConnectionInfo[]): ConnectionInfo['provider'] | null {
+    return conns.find(c => c.name === this.form.connectionName)?.provider ?? null;
   }
 
   browse(field: 'logFolder' | 'inputFolder') {
@@ -216,11 +231,11 @@ export class ScanSourceDrawerComponent {
     this.pickerField.set(null);
   }
 
-  private loadConnectionNames() {
-    if (this.connectionNames() !== null || this.connectionsLoading()) return;
+  private loadConnections() {
+    if (this.connections() !== null || this.connectionsLoading()) return;
     this.connectionsLoading.set(true);
-    this.svc.getConnectionNames().subscribe({
-      next:  names => { this.connectionNames.set(names.length ? names : null); this.connectionsLoading.set(false); },
+    this.svc.getConnections().subscribe({
+      next:  conns => { this.connections.set(conns.length ? conns : null); this.connectionsLoading.set(false); },
       error: ()    => this.connectionsLoading.set(false),
     });
   }

@@ -27,12 +27,14 @@ public class DatabaseScanStrategySqlQueryTests
 
     private sealed class FakeSqlRunner(IReadOnlyList<IReadOnlyDictionary<string, object?>> rows) : ISqlQueryRunner
     {
-        public string? LastCommandText { get; private set; }
-        public int      LastMaxRows    { get; private set; }
+        public string?     LastCommandText { get; private set; }
+        public int         LastMaxRows    { get; private set; }
+        public DbProvider? LastProvider   { get; private set; }
 
         public Task<IReadOnlyList<IReadOnlyDictionary<string, object?>>> ExecuteAsync(
-            string connectionString, string commandText, int maxRows, CancellationToken ct = default)
+            DbProvider provider, string connectionString, string commandText, int maxRows, CancellationToken ct = default)
         {
+            LastProvider    = provider;
             LastCommandText = commandText;
             LastMaxRows     = maxRows;
             return Task.FromResult(rows);
@@ -47,6 +49,8 @@ public class DatabaseScanStrategySqlQueryTests
         public string? StoredWatermark { get; init; }
         public HashSet<string> OpenSourceIds { get; init; } = new(StringComparer.OrdinalIgnoreCase);
         public string? UpdatedWatermark { get; private set; }
+        /// <summary>TestDb_ProviderName; null = no companion key (SQL Server).</summary>
+        public string? Provider { get; init; }
 
         public DatabaseScanStrategy Build(ISqlQueryRunner runner)
         {
@@ -79,7 +83,11 @@ public class DatabaseScanStrategySqlQueryTests
                    .Returns(Task.CompletedTask);
 
             var config = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string?> { ["ConnectionStrings:TestDb"] = "Server=fake;Database=x;" })
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["ConnectionStrings:TestDb"]              = "Server=fake;Database=x;",
+                    ["ConnectionStrings:TestDb_ProviderName"] = Provider,
+                })
                 .Build();
 
             return new DatabaseScanStrategy(
@@ -432,5 +440,32 @@ public class DatabaseScanStrategySqlQueryTests
         Assert.Equal("Good", h.Saved[0].StepName);
         // ... and that failure was classified BEFORE the error surfaced (not orphaned).
         Assert.Contains(h.Classified, f => f.SourceId == "k");
+    }
+
+    // ── Provider routing ─────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(null,     DbProvider.SqlServer)]
+    [InlineData("Oracle", DbProvider.Oracle)]
+    public async Task SqlQuery_runs_on_the_connections_provider(string? providerName, DbProvider expected)
+    {
+        var runner = new FakeSqlRunner(new[] { Row(("X", 1)) });
+        var h = new Harness { Provider = providerName };
+        var (job, source) = JobAndSource(SqlRule(10, "SELECT 1 AS X FROM dual", "X"));
+
+        await h.Build(runner).ScanAsync(job, source);
+
+        Assert.Equal(expected, runner.LastProvider);
+    }
+
+    [Fact]
+    public async Task Unknown_provider_fails_the_scan_with_a_clear_message()
+    {
+        var h = new Harness { Provider = "MySql" };
+        var (job, source) = JobAndSource(SqlRule(10, "SELECT 1", "X"));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => h.Build(new FakeSqlRunner([])).ScanAsync(job, source));
+        Assert.Contains("TestDb_ProviderName", ex.Message);
     }
 }

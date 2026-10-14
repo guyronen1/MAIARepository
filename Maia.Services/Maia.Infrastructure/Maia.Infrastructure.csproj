@@ -28,5 +28,8 @@
     <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
     <PackageReference Include="Microsoft.SqlServer.TransactSql.ScriptDom" Version="180.18.1" />
+    <!-- Oracle Database scan sources (ConnectionStrings:{Name}_ProviderName = "Oracle").
+         Fully managed — no Oracle client install; TNS aliases resolve via Oracle:TnsAdmin. -->
+    <PackageReference Include="Oracle.ManagedDataAccess.Core" Version="23.26.300" />
   </ItemGroup>
 </Project>

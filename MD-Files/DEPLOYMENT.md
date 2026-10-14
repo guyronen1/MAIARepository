@@ -27,6 +27,7 @@ If the aliases `Maia.API` / `Maia.Client` ever change, update to match:
 - **VC++ Redistributable (x64)** — https://aka.ms/vs/17/release/vc_redist.x64.exe
 - SQL Server reachable from this box, login provisioned (see below)
 - TLS certificate (self-signed OK for internal use)
+- *(Only for Oracle scan sources)* the folder holding `tnsnames.ora`, readable by the app-pool identity. Set `Oracle:TnsAdmin` to it in `appsettings.Production.json` (or rely on `TNS_ADMIN`). No Oracle client install is needed: the managed ODP.NET driver ships with the API. Declare each Oracle connection with a `{Name}_ProviderName: "Oracle"` key next to it in `ConnectionStrings`.
 
 ---
 
@@ -177,3 +178,5 @@ public class TrustAllCertsPolicy : ICertificatePolicy {
 | `503` mid-troubleshooting | Rapid-Fail Protection stopped the pool after repeated crashes | `Start-WebAppPool` |
 | `PlatformNotSupportedException` on `Microsoft.Data.SqlClient` | Self-contained publish | Republish framework-dependent |
 | `Shared Memory Provider: No process is on the other end of the pipe` | Same-server SQL connection under IIS service identity | Force `tcp:<host>,1433` in the connection string |
+| DB scan on an Oracle source: "server was not found" / error 26 or 40 | No `{Name}_ProviderName: "Oracle"`, so SqlClient treats the TNS alias as a SQL Server name | Add the companion key next to the connection string, then recycle the pool |
+| `ORA-12154: could not resolve the connect identifier` | ODP.NET can't find `tnsnames.ora` (it ignores the registry, and IIS's working directory is system32) | Set `Oracle:TnsAdmin`; check that the startup log shows `Oracle: TNS_ADMIN = …` |

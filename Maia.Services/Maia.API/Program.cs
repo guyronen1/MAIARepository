@@ -4,6 +4,7 @@ using Maia.API.Middleware;
 using Maia.Core.Configuration;
 using Maia.Core.Interfaces;
 using Maia.Infrastructure.Extensions;
+using Maia.Infrastructure.Scanning;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc.Authorization;
@@ -109,6 +110,16 @@ builder.Services.AddHealthChecks();
 builder.Services.AddGlobalExceptionHandling();
 
 var app = builder.Build();
+
+// ── Oracle scan sources: where tnsnames.ora lives (TNS-alias Data Sources) ────
+// ODP.NET Core ignores the registry / ORACLE_HOME the unmanaged client uses, and
+// IIS runs with system32 as the working directory, so the folder is set explicitly.
+var tnsAdmin = DbConnections.ConfigureOracle(app.Configuration);
+if (tnsAdmin is not null)
+    app.Logger.LogInformation("Oracle: TNS_ADMIN = {TnsAdmin}", tnsAdmin);
+else if (DbConnections.Names(app.Configuration).Any(n =>
+             DbConnections.TryParseProvider(DbConnections.ProviderSetting(app.Configuration, n), out var p) && p == Maia.Core.Enums.DbProvider.Oracle))
+    app.Logger.LogWarning("Oracle: connections are configured but no tnsnames.ora folder was found (set Oracle:TnsAdmin). TNS-alias Data Sources will not resolve; EZConnect host:port/service still works.");
 
 // EnableSwagger lets ops expose Swagger in a non-Development environment for
 // deployment troubleshooting (e.g. IIS) without switching ASPNETCORE_ENVIRONMENT,

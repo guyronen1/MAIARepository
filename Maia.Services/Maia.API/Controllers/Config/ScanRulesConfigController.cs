@@ -1,7 +1,9 @@
 using Maia.Core.Entities;
 using Maia.Core.Enums;
 using Maia.Core.Interfaces;
+using System.Text.RegularExpressions;
 using Maia.Infrastructure.DataAccess;
+using Maia.Infrastructure.Scanning;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -20,6 +22,7 @@ public class ScanRulesConfigController(
     IEnumerable<IFileContentExtractor>  extractors,
     IAuditRepository                    audit,
     IScanWatermarkSeeder                seeder,
+    IConfiguration                      config,
     ICurrentUserAccessor                currentUser,
     ILogger<ScanRulesConfigController>  logger)
     : ConfigControllerBase(audit, currentUser, logger)
@@ -97,20 +100,42 @@ public class ScanRulesConfigController(
         return null;
     }
 
+    // Statements that return no result set over ODP.NET (procedure calls, PL/SQL blocks).
+    private static readonly Regex OracleNonQuery =
+        new(@"^\s*(EXEC|EXECUTE|CALL|BEGIN|DECLARE)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Engine of the source's connection (<c>{Name}_ProviderName</c>). Non-Database
+    /// sources and unrecognised values report SqlServer — the source save already
+    /// rejects an unknown provider, so that only covers hand-edited config.
+    /// </summary>
+    private DbProvider ProviderOf(ScanSource source) =>
+        DbConnections.TryParseProvider(DbConnections.ProviderSetting(config, source.ConnectionName ?? "DefaultConnection"), out var p)
+            ? p
+            : DbProvider.SqlServer;
+
     /// <summary>
     /// SqlQuery-scoped validation (CheckType.SqlQuery), mirroring the FileContent
     /// validator. Cheap + save-time — no SQL parsing/execution (same trust model as
     /// the existing SourceTable: a wrong query fails clearly at scan time). For
     /// CheckType.SqlQuery, SourceTable holds the operator-written query / "EXEC
-    /// sp_Name …". Returns a 400 on inconsistent config, else null.
+    /// sp_Name …" (SQL Server) or a SELECT (Oracle — 400 OracleQueryNotSelect for a
+    /// procedure call / PL/SQL block). Returns a 400 on inconsistent config, else null.
     /// </summary>
-    private IActionResult? ApplyAndValidateSqlQuery(UpsertScanCheckRuleRequest req, ScanCheckRule rule, CheckType checkType)
+    private IActionResult? ApplyAndValidateSqlQuery(UpsertScanCheckRuleRequest req, ScanCheckRule rule, CheckType checkType, DbProvider provider)
     {
         if (checkType != CheckType.SqlQuery) return null;
 
         if (string.IsNullOrWhiteSpace(rule.SourceTable))
             return BadRequest(new { error = "SourceQueryRequired",
-                message = "SqlQuery rules require a Source Query — a SELECT statement or 'EXEC sp_Name @p=…'." });
+                message = provider == DbProvider.Oracle
+                    ? "SqlQuery rules require a Source Query — an Oracle SELECT statement."
+                    : "SqlQuery rules require a Source Query — a SELECT statement or 'EXEC sp_Name @p=…'." });
+
+        if (provider == DbProvider.Oracle && OracleNonQuery.IsMatch(rule.SourceTable))
+            return BadRequest(new { error = "OracleQueryNotSelect",
+                message = "This source is an Oracle connection: the Source Query must be a SELECT (or WITH … SELECT). " +
+                          "Procedure calls and PL/SQL blocks return no rows to scan — select from a view or a pipelined function instead." });
 
         if (string.IsNullOrWhiteSpace(rule.TargetField))
             return BadRequest(new { error = "TargetFieldRequired",
@@ -299,7 +324,7 @@ public class ScanRulesConfigController(
             IsActive         = true,
         };
         if (ApplyAndValidateFileContent(req, rule, checkType) is { } fcError) return fcError;
-        if (ApplyAndValidateSqlQuery(req, rule, checkType) is { } sqError) return sqError;
+        if (ApplyAndValidateSqlQuery(req, rule, checkType, ProviderOf(activeSources[0])) is { } sqError) return sqError;
         if (ApplyAndValidateConditions(req, checkType, out var conditions) is { } condError) return condError;
 
         // Conditions ride along on the header insert — one SaveChanges, EF fixes up CheckRuleId.
@@ -354,6 +379,11 @@ public class ScanRulesConfigController(
         var beforeDescription      = rule.Description;
         var beforeIsActive         = rule.IsActive;
 
+        // Owning source: its connection's engine shapes SqlQuery validation, and the
+        // "start from now" seed below runs against it.
+        var ruleSource = await db.ScanSources.FindAsync([rule.ScanSourceId], ct);
+        if (ruleSource is null) return NotFound();
+
         var checkType = Enum.Parse<CheckType>(req.CheckType);
         if (NormalizeDetailColumns(req.DetailColumns, out var detailColumns) is { } dcError) return dcError;
         rule.CheckType        = checkType;
@@ -372,7 +402,7 @@ public class ScanRulesConfigController(
         rule.Description      = req.Description;
         rule.IsActive         = req.IsActive;
         if (ApplyAndValidateFileContent(req, rule, checkType) is { } fcError) return fcError;
-        if (ApplyAndValidateSqlQuery(req, rule, checkType) is { } sqError) return sqError;
+        if (ApplyAndValidateSqlQuery(req, rule, checkType, ProviderOf(ruleSource)) is { } sqError) return sqError;
         if (ApplyAndValidateConditions(req, checkType, out var conditions) is { } condError) return condError;
 
         // Conditions: replace-all (same as FixPolicyRuleSteps). Diffing per-condition
@@ -410,11 +440,7 @@ public class ScanRulesConfigController(
         // rule's source has unseen files). Returns 200 + warnings when it ran.
         var (seedNote, warnings) = (string.Empty, (string[]?)null);
         if (req.SeedWatermarkFromNow)
-        {
-            var source = await db.ScanSources.FindAsync([rule.ScanSourceId], ct);
-            if (source is not null)
-                (seedNote, warnings) = await SeedRuleIfRequestedAsync(req, rule, source, ct);
-        }
+            (seedNote, warnings) = await SeedRuleIfRequestedAsync(req, rule, ruleSource, ct);
 
         await WriteAuditAsync(
             entityType: "ScanCheckRule",
@@ -486,7 +512,7 @@ public class ScanRulesConfigController(
             IsActive          = true,
         };
         if (ApplyAndValidateFileContent(req, rule, checkType) is { } fcError) return fcError;
-        if (ApplyAndValidateSqlQuery(req, rule, checkType) is { } sqError) return sqError;
+        if (ApplyAndValidateSqlQuery(req, rule, checkType, ProviderOf(source)) is { } sqError) return sqError;
         if (ApplyAndValidateConditions(req, checkType, out var conditions) is { } condError) return condError;
 
         rule.Conditions = conditions;

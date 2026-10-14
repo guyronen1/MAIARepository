@@ -1,7 +1,7 @@
 import { Component, inject, output, signal } from '@angular/core';
 import { Observable } from 'rxjs';
 import { FormsModule } from '@angular/forms';
-import { ConfigService, UpsertScanRuleRequest, CreateScanRuleResponse, ScanRuleConditionDto } from '../../../../core/services/config.service';
+import { ConfigService, ConnectionInfo, DbProvider, UpsertScanRuleRequest, CreateScanRuleResponse, ScanRuleConditionDto } from '../../../../core/services/config.service';
 import { NotificationService } from '../../../../core/services/notification.service';
 import { ScanSource, ScanCheckRule } from '../../../../core/models';
 import { DrawerComponent } from '../../../../shared/drawer/drawer.component';
@@ -35,6 +35,7 @@ const SEVERITIES      = ['Low', 'Medium', 'High', 'Critical'];
       <ng-container drawer-title>
         {{ editingId() ? 'Edit' : 'New' }} Scan Rule
         @if (source(); as src) { &nbsp;<span class="drawer-title-sub">{{ src.name }}</span> }
+        @if (isOracle()) { <span class="engine-chip" title="This source's connection is Oracle — rules run as Oracle SQL">Oracle</span> }
       </ng-container>
       <div class="form-grid">
         @if (source()?.scanTypeId === 1) {
@@ -109,11 +110,18 @@ const SEVERITIES      = ['Low', 'Medium', 'High', 'Critical'];
           </div>
           @if (form.checkType === 'SqlQuery') {
             <div class="form-group span2">
-              <label>Source Query * <span class="info" data-tip="Full SQL SELECT or a stored-procedure call (EXEC sp_Name @p=…), run as-is. Every row the query returns becomes a failure — put the condition in your WHERE/JOIN (there's no separate predicate). Handles cross-table checks the single-table rules can't. Runs under the source's connection login — use a least-privilege read-only login.">ⓘ</span></label>
+              <label>Source Query * <span class="info" [attr.data-tip]="sqlQueryTip()">ⓘ</span></label>
               <textarea [(ngModel)]="form.sourceTable" rows="4" class="sql-area"
-                        placeholder="SELECT OrderId, IsStuck FROM Orders o JOIN Shipments s ON … WHERE …&#10;— or —&#10;EXEC sp_CheckStuckOrders @threshold=60"></textarea>
-              <span class="field-hint">SELECT or <code>EXEC sp_Name …</code>, run as-is. <strong>Every returned row is a failure</strong> — filter in your WHERE.</span>
+                        [placeholder]="sqlQueryPlaceholder()"></textarea>
+              @if (isOracle()) {
+                <span class="field-hint">Oracle <code>SELECT</code>, run as-is (a trailing <code>;</code> is fine). <strong>Every returned row is a failure</strong> — filter in your WHERE.</span>
+              } @else {
+                <span class="field-hint">SELECT or <code>EXEC sp_Name …</code>, run as-is. <strong>Every returned row is a failure</strong> — filter in your WHERE.</span>
+              }
             </div>
+            @if (oracleQueryNotSelect()) {
+              <div class="soft-warn span2">⚠ Oracle sources take a <code>SELECT</code> (or <code>WITH … SELECT</code>) only — procedure calls and PL/SQL blocks return no rows to scan. Select from a view or a pipelined function instead.</div>
+            }
             @if (sqlQueryNeedsWhereWarning()) {
               <div class="soft-warn span2" data-tip="This query has no WHERE clause — it will flag every returned row as a failure (up to 500). Add a WHERE to target specific problem rows, or confirm this is intentional (e.g. a pre-filtered view or aggregation).">⚠ No <code>WHERE</code> clause — every returned row (up to 500) becomes a failure.</div>
             }
@@ -144,8 +152,9 @@ const SEVERITIES      = ['Low', 'Medium', 'High', 'Critical'];
             </div>
           } @else {
             <div class="form-group">
-              <label>Source Table *</label>
-              <input [(ngModel)]="form.sourceTable" placeholder="dbo.Files" />
+              <label>Source Table * @if (isOracle()) { <span class="info" data-tip="Oracle names are case-insensitive here, as in SQL*Plus: Status means STATUS and hr.orders means HR.ORDERS. Only a name created with quotes in mixed case needs them — type it as &quot;MixedCase&quot;. The same applies to every column field below.">ⓘ</span>}</label>
+              <input [(ngModel)]="form.sourceTable" [placeholder]="isOracle() ? 'SCHEMA.TABLE' : 'dbo.Files'" />
+              @if (isOracle()) { <span class="field-hint">Oracle — names are case-insensitive (<code>Status</code> = <code>STATUS</code>).</span> }
             </div>
             <!-- Conditions: line 1 is the rule's own check (CheckType / TargetField /
                  ExpectedValue or Min-Max on the rule itself); lines 2+ are the extra
@@ -266,6 +275,7 @@ const SEVERITIES      = ['Low', 'Medium', 'High', 'Critical'];
   `,
   styles: [`
     .drawer-title-sub { font-weight: 400; color: var(--text-muted); font-size: 13px; }
+    .engine-chip { margin-left: 6px; font-size: 10px; font-weight: 600; letter-spacing: .02em; color: var(--text-dim); border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; vertical-align: middle; }
     .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; max-width: 560px; }
     .form-grid .span2 { grid-column: span 2; }
     .form-group { display: flex; flex-direction: column; gap: 4px; }
@@ -335,6 +345,50 @@ export class ScanRuleDrawerComponent {
   editingId = signal<number | null>(null);
   form: UpsertScanRuleRequest & { isActive: boolean } = this.blank();
 
+  /** Engine of the source's connection — decides how the DB rule runs (T-SQL vs
+   *  Oracle SQL) and so which SqlQuery syntax / naming hints apply. SqlServer until
+   *  the lookup answers, and when it fails (non-admins, older API): the backend
+   *  still validates with the real provider on save. */
+  provider = signal<DbProvider>('SqlServer');
+  /** Connection lookup, loaded once per drawer lifetime (like the source drawer). */
+  private connections: ConnectionInfo[] | null = null;
+  private connectionsLoading = false;
+
+  isOracle(): boolean { return this.isDbSource() && this.provider() === 'Oracle'; }
+
+  /** Mirrors the backend's 400 OracleQueryNotSelect — warn before the round trip. */
+  oracleQueryNotSelect(): boolean {
+    return this.isOracle() && /^\s*(EXEC|EXECUTE|CALL|BEGIN|DECLARE)\b/i.test(this.form.sourceTable ?? '');
+  }
+
+  sqlQueryPlaceholder(): string {
+    return this.isOracle()
+      ? 'SELECT o.order_id, o.is_stuck FROM orders o JOIN shipments s ON … WHERE …'
+      : 'SELECT OrderId, IsStuck FROM Orders o JOIN Shipments s ON … WHERE …\n— or —\nEXEC sp_CheckStuckOrders @threshold=60';
+  }
+
+  sqlQueryTip(): string {
+    return this.isOracle()
+      ? 'Full Oracle SELECT (or WITH … SELECT), run as-is on the source\'s Oracle connection; a trailing ; is stripped. Procedure calls and PL/SQL blocks are not supported — they return no rows. Every row the query returns becomes a failure — put the condition in your WHERE/JOIN. Result-column names match case-insensitively (ORDER_ID = order_id). Runs under the connection login — use a least-privilege read-only user.'
+      : 'Full SQL SELECT or a stored-procedure call (EXEC sp_Name @p=…), run as-is. Every row the query returns becomes a failure — put the condition in your WHERE/JOIN (there\'s no separate predicate). Handles cross-table checks the single-table rules can\'t. Runs under the source\'s connection login — use a least-privilege read-only login.';
+  }
+
+  private applyProvider(): void {
+    const name = this.source()?.connectionName ?? 'DefaultConnection';
+    const p = this.connections?.find(c => c.name === name)?.provider;
+    this.provider.set(p === 'Oracle' ? 'Oracle' : 'SqlServer');
+  }
+
+  private loadProvider(): void {
+    this.applyProvider();
+    if (!this.isDbSource() || this.connections !== null || this.connectionsLoading) return;
+    this.connectionsLoading = true;
+    this.svc.getConnections().subscribe({
+      next:  conns => { this.connections = conns; this.connectionsLoading = false; this.applyProvider(); },
+      error: ()    => { this.connectionsLoading = false; },
+    });
+  }
+
   /** Soft, non-blocking hint for a SqlQuery rule whose query has no row filter:
    *  no WHERE, no HAVING, and not an EXEC (stored procs filter internally). Such a
    *  query flags every returned row as a failure — bounded (500-row cap) but
@@ -342,7 +396,7 @@ export class ScanRuleDrawerComponent {
   sqlQueryNeedsWhereWarning(): boolean {
     const q = this.form.sourceTable ?? '';
     if (!q.trim()) return false;              // empty → handled by required validation
-    if (/^\s*EXEC\b/i.test(q)) return false;  // stored proc — filtering lives inside it
+    if (/^\s*EXEC\b/i.test(q)) return false;  // stored proc — filtering lives inside it (Oracle: the not-a-SELECT warning shows instead)
     return !/\bWHERE\b/i.test(q) && !/\bHAVING\b/i.test(q);
   }
 
@@ -475,6 +529,7 @@ export class ScanRuleDrawerComponent {
         expectedValue: c.expectedValue, minValue: c.minValue, maxValue: c.maxValue, description: c.description,
       })),
     } : this.blank(source.scanTypeId);
+    this.loadProvider();
     this.isOpen.set(true);
   }
 

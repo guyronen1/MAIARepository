@@ -4,14 +4,16 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { provideRouter } from '@angular/router';
 import { ScanSourceDrawerComponent } from './scan-source-drawer.component';
 import type { ScanSource } from '../../../../core/models';
+import type { ConnectionInfo } from '../../../../core/services/config.service';
 
 describe('ScanSourceDrawerComponent', () => {
   let fixture: ComponentFixture<ScanSourceDrawerComponent>;
   let c: ScanSourceDrawerComponent;
   let http: HttpTestingController;
 
-  const flushConnections = (names: string[] = ['B2BTest', 'DefaultConnection']) =>
-    http.expectOne(r => r.url.endsWith('/config/connection-names')).flush(names);
+  const sql = (...names: string[]): ConnectionInfo[] => names.map(name => ({ name, provider: 'SqlServer' }));
+  const flushConnections = (conns: ConnectionInfo[] = sql('B2BTest', 'DefaultConnection')) =>
+    http.expectOne(r => r.url.endsWith('/config/connection-names')).flush(conns);
 
   beforeEach(() => {
     TestBed.configureTestingModule({
@@ -61,20 +63,20 @@ describe('ScanSourceDrawerComponent', () => {
 
   it('loads the configured connection names once and caches them across opens', () => {
     c.open(null);
-    flushConnections(['A', 'B']);
+    flushConnections(sql('A', 'B'));
     c.open(null);
     http.expectNone(r => r.url.endsWith('/config/connection-names'));
-    expect(c.connectionNames()).toEqual(['A', 'B']);
+    expect(c.connections()?.map(x => x.name)).toEqual(['A', 'B']);
   });
 
   it('renders a Database connection as a dropdown, flagging a stale saved key', () => {
     c.open({ scanSourceId: 3, name: 'Orders', scanTypeId: 2, connectionName: 'Gone' } as unknown as ScanSource);
-    flushConnections(['B2BTest']);
+    flushConnections(sql('B2BTest'));
     fixture.detectChanges();
     const opts = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('select option')).map(o => o.textContent?.trim());
     expect(opts).toContain('Gone (not configured)');
     expect(opts).toContain('B2BTest');
-    expect(c.isStaleConnection(['B2BTest'])).toBe(true);
+    expect(c.isStaleConnection(sql('B2BTest'))).toBe(true);
     expect((fixture.nativeElement as HTMLElement).textContent).toContain('is not in the API');
   });
 
@@ -82,8 +84,26 @@ describe('ScanSourceDrawerComponent', () => {
     c.open({ scanSourceId: 3, name: 'Orders', scanTypeId: 2, connectionName: 'X' } as unknown as ScanSource);
     http.expectOne(r => r.url.endsWith('/config/connection-names')).flush('nope', { status: 500, statusText: 'err' });
     fixture.detectChanges();
-    expect(c.connectionNames()).toBeNull();
+    expect(c.connections()).toBeNull();
     expect((fixture.nativeElement as HTMLElement).querySelector('input[placeholder="appsettings connection key"]')).not.toBeNull();
+  });
+
+  it('names the engine for Oracle connections and explains what selecting one means', () => {
+    c.open({ scanSourceId: 3, name: 'Billing', scanTypeId: 2, connectionName: 'Billing' } as unknown as ScanSource);
+    flushConnections([{ name: 'B2BTest', provider: 'SqlServer' }, { name: 'Billing', provider: 'Oracle' }]);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    const opts = Array.from(el.querySelectorAll('select option')).map(o => o.textContent?.trim());
+    expect(opts).toContain('Billing — Oracle');
+    expect(opts).toContain('B2BTest');
+    expect(el.textContent).toContain('run as Oracle SQL');
+  });
+
+  it('flags a connection whose provider the API does not recognise', () => {
+    c.open({ scanSourceId: 3, name: 'Odd', scanTypeId: 2, connectionName: 'Odd' } as unknown as ScanSource);
+    flushConnections([{ name: 'Odd', provider: 'Unknown' }]);
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('Odd_ProviderName');
   });
 
   it('save() blocks a Database source with no connection selected', () => {

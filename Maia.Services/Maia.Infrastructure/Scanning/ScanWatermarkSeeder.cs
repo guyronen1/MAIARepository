@@ -52,10 +52,10 @@ public sealed class ScanWatermarkSeeder(
         if (string.IsNullOrWhiteSpace(rule.SourceTable))
             return WatermarkSeedResult.Failed("Watermark not seeded: the rule has no Source Table / Query.");
 
-        var connName = source.ConnectionName ?? "DefaultConnection";
-        var connStr  = config.GetConnectionString(connName);
-        if (string.IsNullOrWhiteSpace(connStr))
-            return WatermarkSeedResult.Failed($"Watermark not seeded: connection string '{connName}' not found in configuration. The first scan will process all existing rows.");
+        var connName   = source.ConnectionName ?? "DefaultConnection";
+        var connection = DbConnections.TryResolve(config, connName, out var connError);
+        if (connection is null)
+            return WatermarkSeedResult.Failed($"Watermark not seeded: {connError} The first scan will process all existing rows.");
 
         using var cts = ExecutorTimeouts.LinkedWithTimeout(ct, ExecutorTimeouts.Default);
         try
@@ -64,7 +64,7 @@ public sealed class ScanWatermarkSeeder(
             string? capNote = null;
             if (rule.CheckType == CheckType.SqlQuery)
             {
-                var rows = await sqlRunner.ExecuteAsync(connStr, rule.SourceTable!, MaxSqlQueryRows, cts.Token);
+                var rows = await sqlRunner.ExecuteAsync(connection.Provider, connection.ConnectionString, rule.SourceTable!, MaxSqlQueryRows, cts.Token);
                 object? best = null;
                 foreach (var row in rows)
                 {
@@ -80,7 +80,7 @@ public sealed class ScanWatermarkSeeder(
             }
             else
             {
-                max = await DatabaseScanStrategy.QueryFilteredMaxAsync(connStr, rule.SourceTable!, rule.WatermarkColumn!, rule, cts.Token);
+                max = await DatabaseScanStrategy.QueryFilteredMaxAsync(connection, rule.SourceTable!, rule.WatermarkColumn!, rule, cts.Token);
             }
 
             if (max is null)

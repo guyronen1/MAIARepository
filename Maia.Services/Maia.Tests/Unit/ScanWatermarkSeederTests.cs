@@ -231,7 +231,7 @@ public sealed class ScanWatermarkSeederTests : IDisposable
             new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase) { ["Status"] = 5, ["UpdateDate"] = new DateTime(2026, 10, 12, 9, 30, 0) },
             new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase) { ["Status"] = 5, ["UpdateDate"] = null },
         };
-        _sql.Setup(s => s.ExecuteAsync("Server=x;Database=y;", "SELECT * FROM T WHERE Status=5", 500, It.IsAny<CancellationToken>()))
+        _sql.Setup(s => s.ExecuteAsync(DbProvider.SqlServer, "Server=x;Database=y;", "SELECT * FROM T WHERE Status=5", 500, It.IsAny<CancellationToken>()))
             .ReturnsAsync(rows);
         _repo.Setup(r => r.TryAddDbWatermarkAsync(99, "2026-10-12 09:30:00.0000000", It.IsAny<CancellationToken>())).ReturnsAsync(true);
 
@@ -248,7 +248,7 @@ public sealed class ScanWatermarkSeederTests : IDisposable
     public async Task SqlQuery_rule_with_no_matching_rows_seeds_nothing_without_warning()
     {
         var cfg = new Dictionary<string, string?> { ["ConnectionStrings:DefaultConnection"] = "Server=x;" };
-        _sql.Setup(s => s.ExecuteAsync("Server=x;", "Q", 500, It.IsAny<CancellationToken>()))
+        _sql.Setup(s => s.ExecuteAsync(DbProvider.SqlServer, "Server=x;", "Q", 500, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<IReadOnlyDictionary<string, object?>>());
 
         var res = await Seeder(cfg).SeedRuleFromNowAsync(DbRule(CheckType.SqlQuery, "Id", "Q"), Source());
@@ -267,7 +267,7 @@ public sealed class ScanWatermarkSeederTests : IDisposable
         {
             new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase) { ["Status"] = 5 },
         };
-        _sql.Setup(s => s.ExecuteAsync("Server=x;", "Q", 500, It.IsAny<CancellationToken>())).ReturnsAsync(rows);
+        _sql.Setup(s => s.ExecuteAsync(DbProvider.SqlServer, "Server=x;", "Q", 500, It.IsAny<CancellationToken>())).ReturnsAsync(rows);
 
         var res = await Seeder(cfg).SeedRuleFromNowAsync(DbRule(CheckType.SqlQuery, "UpdateDate", "Q"), Source());
 
@@ -280,7 +280,7 @@ public sealed class ScanWatermarkSeederTests : IDisposable
     public async Task Sql_exception_is_a_warning_not_a_throw()
     {
         var cfg = new Dictionary<string, string?> { ["ConnectionStrings:DefaultConnection"] = "Server=x;" };
-        _sql.Setup(s => s.ExecuteAsync("Server=x;", "Q", 500, It.IsAny<CancellationToken>()))
+        _sql.Setup(s => s.ExecuteAsync(DbProvider.SqlServer, "Server=x;", "Q", 500, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("login failed"));
 
         var res = await Seeder(cfg).SeedRuleFromNowAsync(DbRule(CheckType.SqlQuery, "Id", "Q"), Source());

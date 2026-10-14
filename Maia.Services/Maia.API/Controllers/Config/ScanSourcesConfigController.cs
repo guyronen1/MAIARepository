@@ -2,6 +2,7 @@ using Maia.Core.Entities;
 using Maia.Core.Enums;
 using Maia.Core.Interfaces;
 using Maia.Infrastructure.DataAccess;
+using Maia.Infrastructure.Scanning;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -32,6 +33,7 @@ public class ScanSourcesConfigController(
     ///     config field the source's type needs.
     ///   • ConnectionNameUnknown — the key isn't in ConnectionStrings (every scan of
     ///     the source would fail). The drawer's dropdown is the primary guard.
+    ///   • ConnectionProviderUnknown — its {Name}_ProviderName isn't SqlServer / Oracle.
     ///   • IncludeSubfoldersInvalidForType — recursion only applies to file types.
     ///   • SourceNameRequired / SourceNameDuplicate — name present + unique among the
     ///     job's ACTIVE sources (case-insensitive via the DB's CI collation).
@@ -57,9 +59,18 @@ public class ScanSourcesConfigController(
             return BadRequest(new { error = "LogFolderRequired", message = $"{scanType} sources require a Log Folder." });
         if (scanType == ScanType.Database && string.IsNullOrWhiteSpace(req.ConnectionName))
             return BadRequest(new { error = "ConnectionNameRequired", message = "Database sources require a Connection Name." });
-        if (scanType == ScanType.Database && string.IsNullOrWhiteSpace(config.GetConnectionString(req.ConnectionName!.Trim())))
-            return BadRequest(new { error = "ConnectionNameUnknown",
-                message = $"Connection '{req.ConnectionName}' is not configured in appsettings ConnectionStrings." });
+        if (scanType == ScanType.Database)
+        {
+            var connName = req.ConnectionName!.Trim();
+            if (connName.EndsWith(DbConnections.ProviderSuffix, StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(config.GetConnectionString(connName)))
+                return BadRequest(new { error = "ConnectionNameUnknown",
+                    message = $"Connection '{req.ConnectionName}' is not configured in appsettings ConnectionStrings." });
+            if (!DbConnections.TryParseProvider(DbConnections.ProviderSetting(config, connName), out _))
+                return BadRequest(new { error = "ConnectionProviderUnknown",
+                    message = $"Connection '{connName}' has an unrecognised {connName}{DbConnections.ProviderSuffix} " +
+                              $"'{DbConnections.ProviderSetting(config, connName)}' — use 'SqlServer' or 'Oracle'." });
+        }
         if (scanType == ScanType.ApiEndpoint && string.IsNullOrWhiteSpace(req.LogSourceUrl))
             return BadRequest(new { error = "LogSourceUrlRequired", message = "ApiEndpoint sources require a URL." });
         if (req.IncludeSubfolders && !isFileBased)

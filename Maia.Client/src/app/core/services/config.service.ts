@@ -5,6 +5,9 @@ import { environment } from '../../../environments/environment';
 import { MonitoredJob } from '../models';
 
 export interface JobType    { jobTypeId: number; name: string; description: string; }
+/** Engine behind a connection. 'Unknown' = an unrecognised `{Name}_ProviderName` (a source save is a 400). */
+export type DbProvider = 'SqlServer' | 'Oracle' | 'Unknown';
+export interface ConnectionInfo { name: string; provider: DbProvider; }
 export interface ErrorType  {
   errorTypeId: number; code: string; displayName: string;
   description?: string | null; severity: string; isActive?: boolean;
@@ -168,8 +171,9 @@ export class ConfigService {
 
   // ── Lookups ────────────────────────────────────────────────────────────────
   getJobTypes():   Observable<JobType[]>   { return this.http.get<JobType[]>(`${this.base}/job-types`); }
-  /** ConnectionStrings keys from the API's appsettings (names only, never values). Admin. */
-  getConnectionNames(): Observable<string[]> { return this.http.get<string[]>(`${this.base}/connection-names`); }
+  /** ConnectionStrings keys from the API's appsettings with each one's engine
+   *  (`{Name}_ProviderName`; names only, never values). Admin. */
+  getConnections(): Observable<ConnectionInfo[]> { return this.http.get<ConnectionInfo[]>(`${this.base}/connection-names`); }
   /** Sub-folders of `path` on the MAIA server; omit `path` for the roots. Admin. */
   browseFolders(path?: string | null): Observable<FolderListing> {
     const params = path ? new HttpParams().set('path', path) : undefined;

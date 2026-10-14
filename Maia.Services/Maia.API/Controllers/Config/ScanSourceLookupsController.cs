@@ -1,3 +1,4 @@
+using Maia.Infrastructure.Scanning;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -27,13 +28,18 @@ public class ScanSourceLookupsController(
         AttributesToSkip      = FileAttributes.Hidden | FileAttributes.System,
     };
 
-    /// <summary>Connection-string keys from every config provider (appsettings.{Env}, env vars).</summary>
+    /// <summary>
+    /// Connection-string keys from every config provider (appsettings.{Env}, env vars),
+    /// each with its engine from the <c>{Name}_ProviderName</c> companion key
+    /// (<c>SqlServer</c> when absent, <c>Unknown</c> when unrecognised). The companion
+    /// keys themselves aren't connections and are not listed. Never the values.
+    /// </summary>
     [HttpGet("connection-names")]
     public IActionResult GetConnectionNames() =>
-        Ok(config.GetSection("ConnectionStrings").GetChildren()
-            .Where(c => !string.IsNullOrWhiteSpace(c.Value))
-            .Select(c => c.Key)
+        Ok(DbConnections.Names(config)
             .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
+            .Select(k => new ConnectionEntry(k,
+                DbConnections.TryParseProvider(DbConnections.ProviderSetting(config, k), out var p) ? p.ToString() : "Unknown"))
             .ToArray());
 
     /// <summary>
@@ -120,6 +126,7 @@ public class ScanSourceLookupsController(
         return WithSep(full).StartsWith(WithSep(root), StringComparison.OrdinalIgnoreCase);
     }
 
+    public sealed record ConnectionEntry(string Name, string Provider);
     public sealed record FolderEntry(string Name, string FullPath);
     public sealed record FolderListing(string? Path, string? Parent, FolderEntry[] Folders, FolderEntry[] Roots, bool Truncated);
 }

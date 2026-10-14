@@ -47,7 +47,28 @@ public sealed class ScanSourceLookupsControllerTests : IDisposable
             ["ConnectionStrings:Empty"]             = "",
         }).GetConnectionNames());
 
-        Assert.Equal(new[] { "b2bTest", "DefaultConnection" }, Assert.IsType<string[]>(ok.Value));
+        var entries = Assert.IsType<ScanSourceLookupsController.ConnectionEntry[]>(ok.Value);
+        Assert.Equal(new[] { "b2bTest", "DefaultConnection" }, entries.Select(e => e.Name));
+        Assert.All(entries, e => Assert.Equal("SqlServer", e.Provider));
+        Assert.DoesNotContain("secret", JsonSerializer.Serialize(ok.Value));
+    }
+
+    [Fact]
+    public void ConnectionNames_reports_each_provider_and_hides_the_companion_keys()
+    {
+        var ok = Assert.IsType<OkObjectResult>(Ctrl(new()
+        {
+            ["ConnectionStrings:Billing"]              = "Data Source=BILLPRD;User Id=u;Password=secret;",
+            ["ConnectionStrings:Billing_ProviderName"] = "Oracle",
+            ["ConnectionStrings:Main"]                 = "Server=x;",
+            ["ConnectionStrings:Main_ProviderName"]    = "System.Data.SqlClient",
+            ["ConnectionStrings:Odd"]                  = "Server=x;",
+            ["ConnectionStrings:Odd_ProviderName"]     = "MySql",
+        }).GetConnectionNames());
+
+        var entries = Assert.IsType<ScanSourceLookupsController.ConnectionEntry[]>(ok.Value);
+        Assert.Equal(new[] { ("Billing", "Oracle"), ("Main", "SqlServer"), ("Odd", "Unknown") },
+            entries.Select(e => (e.Name, e.Provider)));
         Assert.DoesNotContain("secret", JsonSerializer.Serialize(ok.Value));
     }
 

@@ -2,6 +2,7 @@ using Maia.Core.Entities;
 using Maia.Core.Enums;
 using Maia.Core.Interfaces;
 using Maia.Infrastructure.DataAccess;
+using Maia.Infrastructure.Scanning;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -75,6 +76,20 @@ public sealed class StoredProcedureExecutor(
                 "StoredProcedureExecutor: Connection '{ConnectionName}' not found in configuration (Failure {FailureId})",
                 connectionName, recommendation.FailureId);
             return FixActionResult.Fail($"Connection '{connectionName}' is not configured on this server.");
+        }
+
+        // Oracle connections are scan-only: this executor speaks T-SQL over SqlClient.
+        // A failure from an Oracle scan source defaults to that source's connection, so
+        // say so plainly instead of surfacing SqlClient's "server not found".
+        if (!DbConnections.TryParseProvider(DbConnections.ProviderSetting(config, connectionName), out var provider)
+            || provider != DbProvider.SqlServer)
+        {
+            logger.LogWarning(
+                "StoredProcedureExecutor: Connection '{ConnectionName}' is not a SQL Server connection (Failure {FailureId})",
+                connectionName, recommendation.FailureId);
+            return FixActionResult.Fail(
+                $"Connection '{connectionName}' is not a SQL Server connection — StoredProcedure fixes run on SQL Server only. " +
+                "Prefix the payload with a SQL Server connection ('Name|SpName') or resolve this failure manually.");
         }
 
         using var cts = ExecutorTimeouts.LinkedWithTimeout(ct, ExecutorTimeouts.Default);

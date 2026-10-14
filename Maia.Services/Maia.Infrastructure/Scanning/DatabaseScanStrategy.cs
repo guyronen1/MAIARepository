@@ -4,7 +4,6 @@ using Maia.Core.Enums;
 using Maia.Core.Interfaces;
 using Maia.Core.Interfaces.UseCases;
 using Maia.Core.Results;
-using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -17,6 +16,9 @@ namespace Maia.Infrastructure.Scanning;
 /// WatermarkColumn value exceeds the last stored watermark — so the same row
 /// is never reported twice. The first scan processes all existing rows and
 /// sets the watermark baseline.
+/// The source's connection decides the engine (<see cref="DbConnections"/>): table
+/// rules are generated through the matching <see cref="SqlDialect"/> (T-SQL or Oracle
+/// SQL), SqlQuery rules run the operator's SQL on that engine's driver.
 /// </summary>
 public sealed class DatabaseScanStrategy(
     IConfiguration                config,
@@ -90,10 +92,8 @@ public sealed class DatabaseScanStrategy(
                 $"Job '{job.Name}': {missingTable.Count} rule(s) have no SourceTable — " +
                 $"rule IDs: {string.Join(", ", missingTable.Select(r => r.CheckRuleId))}.");
 
-        var connStr = config.GetConnectionString(source.ConnectionName ?? "DefaultConnection");
-        if (string.IsNullOrWhiteSpace(connStr))
-            throw new InvalidOperationException(
-                $"Connection string '{source.ConnectionName ?? "DefaultConnection"}' not found in configuration.");
+        // Missing connection string or unrecognised {Name}_ProviderName fails the scan.
+        var connection = DbConnections.Resolve(config, source.ConnectionName ?? "DefaultConnection");
 
         var result = new ScanResult
         {
@@ -146,7 +146,7 @@ public sealed class DatabaseScanStrategy(
                 // operator's SQL/EXEC can't be safely rewritten to push a watermark
                 // filter into the query (could be an EXEC), so both run in-memory on the
                 // returned rows. See ScanSqlRuleAsync.
-                rows = await ScanSqlRuleAsync(connStr, job, rule, stepName, ct);
+                rows = await ScanSqlRuleAsync(connection, job, rule, stepName, ct);
             }
             else
             {
@@ -156,7 +156,7 @@ public sealed class DatabaseScanStrategy(
                     ? await watermarks.GetDbWatermarkAsync(rule.CheckRuleId, ct)
                     : null;
 
-                rows = await QueryMatchingRowsAsync(connStr, rule.SourceTable!, rule, watermark, ct);
+                rows = await QueryMatchingRowsAsync(connection, rule.SourceTable!, rule, watermark, ct);
 
                 // Advance the watermark to the highest WatermarkColumn value seen this scan.
                 // When zero rows matched, take MAX over rows that satisfy the rule's filter —
@@ -165,8 +165,8 @@ public sealed class DatabaseScanStrategy(
                 if (rule.WatermarkColumn is not null)
                 {
                     var newWatermark = rows.Count > 0
-                        ? rows.Max(r => r.WatermarkValue ?? string.Empty)
-                        : await QueryFilteredMaxAsync(connStr, rule.SourceTable!, rule.WatermarkColumn, rule, ct);
+                        ? HighestWatermark(rows, connection.Provider)
+                        : await QueryFilteredMaxAsync(connection, rule.SourceTable!, rule.WatermarkColumn, rule, ct);
 
                     if (newWatermark is not null)
                         await watermarks.UpdateDbWatermarkAsync(rule.CheckRuleId, newWatermark, ct);
@@ -396,14 +396,14 @@ public sealed class DatabaseScanStrategy(
     /// open-failure dedup. Columns are read BY NAME (operator-defined result shape).
     /// </summary>
     private async Task<List<MatchedRow>> ScanSqlRuleAsync(
-        string connStr, MonitoredJob job, ScanCheckRule rule, string stepName, CancellationToken ct)
+        ResolvedConnection connection, MonitoredJob job, ScanCheckRule rule, string stepName, CancellationToken ct)
     {
         var hasWatermark    = !string.IsNullOrWhiteSpace(rule.WatermarkColumn);
         var hasSourceId     = !string.IsNullOrWhiteSpace(rule.SourceIdColumn);
         var hasReferenceId  = !string.IsNullOrWhiteSpace(rule.ReferenceIdColumn);
         var detailColumns   = ParseDetailColumns(rule.DetailColumns);
 
-        var resultRows = await sqlRunner.ExecuteAsync(connStr, rule.SourceTable!, MaxSqlQueryRows, ct);
+        var resultRows = await sqlRunner.ExecuteAsync(connection.Provider, connection.ConnectionString, rule.SourceTable!, MaxSqlQueryRows, ct);
         if (resultRows.Count >= MaxSqlQueryRows)
             logger.LogWarning(
                 "DatabaseScan '{Job}': SqlQuery rule {RuleId} hit the {Cap}-row cap — results may be truncated. " +
@@ -551,75 +551,77 @@ public sealed class DatabaseScanStrategy(
         _           => Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty
     };
 
+    /// <summary>
+    /// The watermark to store after a table-rule scan that returned rows.
+    /// SQL Server: the lexical max of the CONVERT(…, 121) strings (unchanged legacy
+    /// behaviour). Oracle: the rows arrive ORDER BY the watermark column server-side,
+    /// so the last non-null value is the true maximum by the column's native type —
+    /// "10" correctly beats "9" for a NUMBER key. All-null → null (mark unchanged).
+    /// </summary>
+    private static string? HighestWatermark(List<MatchedRow> rows, DbProvider provider)
+        => provider == DbProvider.Oracle
+            ? rows.LastOrDefault(r => r.WatermarkValue is not null)?.WatermarkValue
+            : rows.Max(r => r.WatermarkValue ?? string.Empty);
+
+    private const int MaxTableRuleRows = 500;
+
     private static async Task<List<MatchedRow>> QueryMatchingRowsAsync(
-        string connStr, string sourceTable, ScanCheckRule rule, string? watermark, CancellationToken ct)
+        ResolvedConnection connection, string sourceTable, ScanCheckRule rule, string? watermark, CancellationToken ct)
     {
-        var (filterClause, filterParams) = BuildFilterClause(rule);
+        var d = SqlDialect.For(connection.Provider);
+        var (filterClause, filterParams) = BuildFilterClause(rule, d);
         var watermarkFilter = rule.WatermarkColumn is not null && watermark is not null
-            ? $" AND {Bracket(rule.WatermarkColumn)} > @Watermark"
+            ? $" AND {d.QuoteIdentifier(rule.WatermarkColumn)} > {d.Placeholder("Watermark")}"
             : string.Empty;
 
         // WatermarkColumn / SourceIdColumn / FilePathColumn / DetailColumns are extra
         // columns projected for tracking, identity, composite-fix path capture, and
         // operator-visible diagnostics.
-        // All column names and the table come from admin config and are bracketed.
-        // All filter values are always parameterised.
+        // All column names and the table come from admin config and are quoted by the
+        // dialect. All filter values are always parameterised.
         // FilePathColumn and DetailColumns support a dotted "alias.Column" form —
-        // bracket only the column portion so a JOIN encoded in SourceTable still works.
-        var quotedTable = QuoteTable(sourceTable);
+        // quote only the column portion so a JOIN encoded in SourceTable still works.
+        var quotedTable = d.QuoteTable(sourceTable);
         var detailColumns = ParseDetailColumns(rule.DetailColumns);
-        // Style 121 = ISO `yyyy-mm-dd hh:mi:ss.fffffff` (full datetime2 precision).
-        // For non-date columns the style is silently ignored and you get the default text form.
         var wmSelect  = rule.WatermarkColumn is not null
-            ? $", CONVERT(NVARCHAR(50), {Bracket(rule.WatermarkColumn)}, 121) AS _WatermarkVal"
+            ? $", {d.WatermarkText(d.QuoteIdentifier(rule.WatermarkColumn))} AS {d.Alias("_WatermarkVal")}"
             : string.Empty;
         var srcSelect = rule.SourceIdColumn is not null
-            ? $", CAST({Bracket(rule.SourceIdColumn)} AS NVARCHAR(100)) AS _SourceIdVal"
+            ? $", {d.IdText(d.QuoteIdentifier(rule.SourceIdColumn), 100)} AS {d.Alias("_SourceIdVal")}"
             : string.Empty;
         var refSelect = rule.ReferenceIdColumn is not null
-            ? $", CAST({Bracket(rule.ReferenceIdColumn)} AS NVARCHAR(200)) AS _ReferenceIdVal"
+            ? $", {d.IdText(d.QuoteIdentifier(rule.ReferenceIdColumn), 200)} AS {d.Alias("_ReferenceIdVal")}"
             : string.Empty;
         var fpSelect  = !string.IsNullOrEmpty(rule.FilePathColumn)
-            ? $", CAST({QuoteColumnRef(rule.FilePathColumn)} AS NVARCHAR(500)) AS _FilePathVal"
+            ? $", {d.IdText(d.QuoteColumnRef(rule.FilePathColumn), 500)} AS {d.Alias("_FilePathVal")}"
             : string.Empty;
-        // Style 121 again so date-typed detail columns render ISO rather than SQL
-        // Server's locale default ("Oct 12 2026 9:14AM"); ignored for non-date types.
+        // Date-typed detail columns render ISO rather than the engine's locale default
+        // ("Oct 12 2026 9:14AM") — via style 121 on SQL Server, via the reader on Oracle.
         var detailSelect = string.Concat(detailColumns.Select((col, i) =>
-            $", CONVERT(NVARCHAR(MAX), {QuoteColumnRef(col)}, 121) AS _Detail{i}"));
+            $", {d.DetailText(d.QuoteColumnRef(col))} AS {d.Alias($"_Detail{i}")}"));
         // Each AND'd condition's column is projected too (for the message token).
         // Aliased _C{i} so a condition may target the parent's column (or another
         // condition's) without a duplicate-column-name clash in the result set.
         var conds = OrderedConditions(rule);
         var condSelect = string.Concat(conds.Select((c, i) =>
-            $", CONVERT(NVARCHAR(MAX), {Bracket(c.TargetField)}, 121) AS _C{i}"));
+            $", {d.ConditionText(d.QuoteIdentifier(c.TargetField))} AS {d.Alias($"_C{i}")}"));
 
-        var orderBy = rule.WatermarkColumn is not null
-            ? $"ORDER BY {Bracket(rule.WatermarkColumn)} ASC"
-            : "ORDER BY (SELECT NULL)";
-
-        var sql = $"""
-            SELECT TOP 500
-                CAST(ROW_NUMBER() OVER ({orderBy}) AS NVARCHAR(20)) AS _RowKey,
-                {Bracket(rule.TargetField)}
-                {wmSelect}
-                {srcSelect}
-                {refSelect}
-                {fpSelect}
-                {detailSelect}
-                {condSelect}
-            FROM {quotedTable}
-            WHERE {filterClause}{watermarkFilter}
-            """;
+        var sql = d.MatchingRowsQuery(
+            targetColumn:  d.QuoteIdentifier(rule.TargetField),
+            extraColumns:  wmSelect + srcSelect + refSelect + fpSelect + detailSelect + condSelect,
+            table:         quotedTable,
+            where:         filterClause + watermarkFilter,
+            orderByColumn: rule.WatermarkColumn is not null ? d.QuoteIdentifier(rule.WatermarkColumn) : null,
+            maxRows:       MaxTableRuleRows);
 
         var rows = new List<MatchedRow>();
-        await using var conn = new SqlConnection(connStr);
-        await conn.OpenAsync(ct);
-        await using var cmd = new SqlCommand(sql, conn);
+        await using var conn = await DbConnections.OpenAsync(connection, ct);
+        await using var cmd = DbConnections.CreateCommand(conn, sql);
 
         foreach (var (name, value) in filterParams)
-            cmd.Parameters.AddWithValue(name, value);
+            AddParameter(cmd, name, value);
         if (watermarkFilter.Length > 0)
-            cmd.Parameters.AddWithValue("@Watermark", watermark!);
+            AddParameter(cmd, d.ParamName("Watermark"), watermark!);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
 
@@ -630,13 +632,17 @@ public sealed class DatabaseScanStrategy(
         // the watermark out of the source-id column.
         var ordinals = new Dictionary<string, int>(reader.FieldCount, StringComparer.OrdinalIgnoreCase);
         for (var i = 0; i < reader.FieldCount; i++) ordinals[reader.GetName(i)] = i;
+        // Text projections arrive as strings already; raw ones (Oracle detail columns)
+        // are canonicalised so dates render ISO.
         string? ReadOptional(string alias)
-            => ordinals.TryGetValue(alias, out var o) && !reader.IsDBNull(o) ? reader.GetString(o) : null;
+            => ordinals.TryGetValue(alias, out var o) && DbConnections.ReadValue(reader, o) is { } v
+                ? v as string ?? Canonical(v)
+                : null;
 
         while (await reader.ReadAsync(ct))
         {
             var rowKey  = reader.GetString(0);
-            var val     = reader.IsDBNull(1) ? (object)"NULL" : reader.GetValue(1);
+            var val     = DbConnections.ReadValue(reader, 1) ?? "NULL";
             var wmVal   = rule.WatermarkColumn is not null              ? ReadOptional("_WatermarkVal")   : null;
             var srcVal  = rule.SourceIdColumn is not null               ? ReadOptional("_SourceIdVal")    : null;
             var refVal  = rule.ReferenceIdColumn is not null            ? ReadOptional("_ReferenceIdVal") : null;
@@ -665,20 +671,23 @@ public sealed class DatabaseScanStrategy(
         return rows;
     }
 
+    private static void AddParameter(System.Data.Common.DbCommand cmd, string name, object value)
+    {
+        var p = cmd.CreateParameter();
+        p.ParameterName = name;
+        p.Value         = value;
+        cmd.Parameters.Add(p);
+    }
+
     /// <summary>
     /// Bracket a single column reference, supporting an optional "alias.Column"
     /// form used when the operator put a JOIN into SourceTable. Examples:
     ///   "FilePath"       → "[FilePath]"
     ///   "j.FilePath"     → "j.[FilePath]"
     /// Only the column part is bracketed so the alias resolves naturally.
+    /// SQL Server form; the Oracle form lives on <see cref="SqlDialect"/>.
     /// </summary>
-    internal static string QuoteColumnRef(string columnRef)
-    {
-        var dot = columnRef.LastIndexOf('.');
-        return dot < 0
-            ? Bracket(columnRef)
-            : $"{columnRef[..dot]}.{Bracket(columnRef[(dot + 1)..])}";
-    }
+    internal static string QuoteColumnRef(string columnRef) => SqlDialect.SqlServer.QuoteColumnRef(columnRef);
 
     /// <summary>
     /// MAX(watermark) over rows that satisfy the rule's filter clause.
@@ -686,17 +695,16 @@ public sealed class DatabaseScanStrategy(
     /// ever advances within the population the rule would actually report on.
     /// </summary>
     internal static async Task<string?> QueryFilteredMaxAsync(
-        string connStr, string sourceTable, string watermarkColumn, ScanCheckRule rule, CancellationToken ct)
+        ResolvedConnection connection, string sourceTable, string watermarkColumn, ScanCheckRule rule, CancellationToken ct)
     {
-        var (filterClause, filterParams) = BuildFilterClause(rule);
-        var sql = $"SELECT CONVERT(NVARCHAR(50), MAX({Bracket(watermarkColumn)}), 121) " +
-                  $"FROM {QuoteTable(sourceTable)} WHERE {filterClause}";
+        var d = SqlDialect.For(connection.Provider);
+        var (filterClause, filterParams) = BuildFilterClause(rule, d);
+        var sql = d.FilteredMaxQuery(d.QuoteIdentifier(watermarkColumn), d.QuoteTable(sourceTable), filterClause);
 
-        await using var conn = new SqlConnection(connStr);
-        await conn.OpenAsync(ct);
-        await using var cmd = new SqlCommand(sql, conn);
+        await using var conn = await DbConnections.OpenAsync(connection, ct);
+        await using var cmd = DbConnections.CreateCommand(conn, sql);
         foreach (var (name, value) in filterParams)
-            cmd.Parameters.AddWithValue(name, value);
+            AddParameter(cmd, name, value);
 
         var result = await cmd.ExecuteScalarAsync(ct);
         return result is DBNull || result is null ? null : result.ToString();
@@ -706,34 +714,36 @@ public sealed class DatabaseScanStrategy(
     /// <c>]]</c> so a column/table name containing <c>]</c> cannot break out of the
     /// quoting. Admin-scoped config, but an unsanitized identifier is still worth
     /// escaping (defense-in-depth; the identifier is the one thing not parameterised).</summary>
-    internal static string Bracket(string identifier) => "[" + identifier.Replace("]", "]]") + "]";
+    internal static string Bracket(string identifier) => SqlDialect.SqlServer.QuoteIdentifier(identifier);
 
     /// <summary>
     /// Converts "dbo.Files" → "[dbo].[Files]", or "Files" → "[Files]".
     /// Prevents the bracketing bug where [dbo.Files] is treated as a literal name.
     /// </summary>
-    internal static string QuoteTable(string sourceTable)
-    {
-        var parts = sourceTable.Split('.');
-        return string.Join(".", parts.Select(p => Bracket(p.Trim('[', ']'))));
-    }
+    internal static string QuoteTable(string sourceTable) => SqlDialect.SqlServer.QuoteTable(sourceTable);
+
+    /// <summary>T-SQL form of <see cref="BuildFilterClause(ScanCheckRule, SqlDialect)"/>.</summary>
+    internal static (string Clause, List<(string Name, object Value)> Params) BuildFilterClause(ScanCheckRule rule)
+        => BuildFilterClause(rule, SqlDialect.SqlServer);
 
     /// <summary>
     /// The rule's WHERE filter: the parent check's clause, then one AND'd clause per
     /// extra condition. Shared by <see cref="QueryMatchingRowsAsync"/> and
     /// <see cref="QueryFilteredMaxAsync"/>, so the watermark baseline is computed over
-    /// exactly the population the composite rule reports on. The parent's clause and
-    /// parameter names (<c>@ExactVal</c> / <c>@Min</c> / <c>@Max</c>) are unchanged;
-    /// condition parameters are prefixed <c>@C{i}_</c> so they can never collide.
+    /// exactly the population the composite rule reports on. The parent's parameters
+    /// are <c>ExactVal</c> / <c>Min</c> / <c>Max</c> (T-SQL <c>@ExactVal</c>, Oracle
+    /// <c>:p_ExactVal</c>); condition parameters are prefixed <c>C{i}_</c> so they can
+    /// never collide.
     /// </summary>
-    internal static (string Clause, List<(string Name, object Value)> Params) BuildFilterClause(ScanCheckRule rule)
+    internal static (string Clause, List<(string Name, object Value)> Params) BuildFilterClause(ScanCheckRule rule, SqlDialect d)
     {
         var p = new List<(string, object)>();
+        string Bind(string name, object value) { p.Add((d.ParamName(name), value)); return d.Placeholder(name); }
+
         string parentClause;
         if (rule.CheckType == CheckType.ValueEquals)
         {
-            p.Add(("@ExactVal", rule.ExpectedValue!));
-            parentClause = $"({Bracket(rule.TargetField)} = @ExactVal)";
+            parentClause = $"({d.QuoteIdentifier(rule.TargetField)} = {Bind("ExactVal", rule.ExpectedValue!)})";
         }
         else
         {
@@ -743,8 +753,8 @@ public sealed class DatabaseScanStrategy(
             // in QueryMatchingRowsAsync is exactly that "additional AND" case;
             // unparenthesized, it would bypass the OR's left branch entirely.
             var conditions = new List<string>();
-            if (rule.MinValue.HasValue) { conditions.Add($"{Bracket(rule.TargetField)} < @Min"); p.Add(("@Min", rule.MinValue.Value)); }
-            if (rule.MaxValue.HasValue) { conditions.Add($"{Bracket(rule.TargetField)} > @Max"); p.Add(("@Max", rule.MaxValue.Value)); }
+            if (rule.MinValue.HasValue) conditions.Add($"{d.QuoteIdentifier(rule.TargetField)} < {Bind("Min", rule.MinValue.Value)}");
+            if (rule.MaxValue.HasValue) conditions.Add($"{d.QuoteIdentifier(rule.TargetField)} > {Bind("Max", rule.MaxValue.Value)}");
             parentClause = $"({string.Join(" OR ", conditions)})";
         }
 
@@ -755,17 +765,16 @@ public sealed class DatabaseScanStrategy(
         for (var i = 0; i < conds.Count; i++)
         {
             var c   = conds[i];
-            var col = Bracket(c.TargetField);
+            var col = d.QuoteIdentifier(c.TargetField);
             if (c.Kind == CheckType.ValueEquals)
             {
-                p.Add(($"@C{i}_ExactVal", c.ExpectedValue!));
-                parts.Add($"({col} = @C{i}_ExactVal)");
+                parts.Add($"({col} = {Bind($"C{i}_ExactVal", c.ExpectedValue!)})");
             }
             else
             {
                 var cc = new List<string>();
-                if (c.MinValue.HasValue) { cc.Add($"{col} < @C{i}_Min"); p.Add(($"@C{i}_Min", c.MinValue.Value)); }
-                if (c.MaxValue.HasValue) { cc.Add($"{col} > @C{i}_Max"); p.Add(($"@C{i}_Max", c.MaxValue.Value)); }
+                if (c.MinValue.HasValue) cc.Add($"{col} < {Bind($"C{i}_Min", c.MinValue.Value)}");
+                if (c.MaxValue.HasValue) cc.Add($"{col} > {Bind($"C{i}_Max", c.MaxValue.Value)}");
                 parts.Add($"({string.Join(" OR ", cc)})");
             }
         }

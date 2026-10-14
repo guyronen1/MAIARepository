@@ -2,6 +2,7 @@ using Maia.Core.Entities;
 using Maia.Core.Enums;
 using Maia.Core.Interfaces;
 using Maia.Infrastructure.DataAccess;
+using Maia.Infrastructure.Scanning;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -69,6 +70,20 @@ public sealed class SqlScriptExecutor(
                 "SqlScriptExecutor: Connection '{ConnectionName}' not found in configuration (Failure {FailureId})",
                 connectionName, recommendation.FailureId);
             return FixActionResult.Fail($"Connection '{connectionName}' is not configured on this server.");
+        }
+
+        // Oracle connections are scan-only: this executor speaks T-SQL over SqlClient.
+        // A failure from an Oracle scan source defaults to that source's connection, so
+        // say so plainly instead of surfacing SqlClient's "server not found".
+        if (!DbConnections.TryParseProvider(DbConnections.ProviderSetting(config, connectionName), out var provider)
+            || provider != DbProvider.SqlServer)
+        {
+            logger.LogWarning(
+                "SqlScriptExecutor: Connection '{ConnectionName}' is not a SQL Server connection (Failure {FailureId})",
+                connectionName, recommendation.FailureId);
+            return FixActionResult.Fail(
+                $"Connection '{connectionName}' is not a SQL Server connection — SqlScript fixes run on SQL Server only. " +
+                "Prefix the payload with a SQL Server connection ('Name|SQL…') or resolve this failure manually.");
         }
 
         // SECURITY: placeholder values (SourceId/ReferenceId/file paths) come from

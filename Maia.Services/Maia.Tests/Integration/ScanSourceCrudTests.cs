@@ -56,6 +56,10 @@ public class ScanSourceCrudTests : IAsyncLifetime
             ["ConnectionStrings:C"]                 = "Server=x;",
             ["ConnectionStrings:ConnA"]             = "Server=x;",
             ["ConnectionStrings:ConnB"]             = "Server=x;",
+            ["ConnectionStrings:Ora"]               = "Data Source=ORCL;User Id=u;Password=p;",
+            ["ConnectionStrings:Ora_ProviderName"]  = "Oracle",
+            ["ConnectionStrings:Odd"]               = "Server=x;",
+            ["ConnectionStrings:Odd_ProviderName"]  = "MySql",
         }).Build();
         _ctrl = new ScanSourcesConfigController(
             factory, _audit, Mock.Of<IScanWatermarkSeeder>(), config, currentUser,
@@ -63,7 +67,7 @@ public class ScanSourceCrudTests : IAsyncLifetime
         _rules = new ScanRulesConfigController(
             factory,
             new IFileContentExtractor[] { new XmlContentExtractor(NullLogger<XmlContentExtractor>.Instance) },
-            _audit, Mock.Of<IScanWatermarkSeeder>(), currentUser,
+            _audit, Mock.Of<IScanWatermarkSeeder>(), config, currentUser,
             NullLogger<ScanRulesConfigController>.Instance);
     }
 
@@ -249,6 +253,42 @@ public class ScanSourceCrudTests : IAsyncLifetime
                Conditions: conditions);
 
     private async Task<int> DbSourceAsync() => await CreateOkAsync(Req("db", DbType, connectionName: "DefaultConnection"));
+
+    // ── Oracle connections ({Name}_ProviderName) ─────────────────────────────────
+
+    [Fact] public async Task DbSource_OracleConnection_is_accepted()
+        => await CreateOkAsync(Req("ora", DbType, connectionName: "Ora"));
+
+    [Fact] public async Task DbSource_UnknownProvider_400()
+        => Assert.Equal("ConnectionProviderUnknown",
+            ErrorOf(await _ctrl.CreateScanSource(JobId, Req("odd", DbType, connectionName: "Odd"), default)));
+
+    [Fact] public async Task DbSource_ProviderCompanionKey_is_not_a_connection_400()
+        => Assert.Equal("ConnectionNameUnknown",
+            ErrorOf(await _ctrl.CreateScanSource(JobId, Req("ora", DbType, connectionName: "Ora_ProviderName"), default)));
+
+    [Theory]
+    [InlineData("EXEC check_orders(60)")]
+    [InlineData("  begin check_orders; end;")]
+    [InlineData("CALL check_orders()")]
+    public async Task OracleSource_SqlQuery_that_is_not_a_SELECT_is_rejected(string query)
+    {
+        var sid = await CreateOkAsync(Req("ora", DbType, connectionName: "Ora"));
+        var r = await _rules.CreateScanRuleForSource(sid, DbRule("SqlQuery", "X") with { SourceTable = query }, default);
+        Assert.Equal("OracleQueryNotSelect", ErrorOf(r));
+    }
+
+    [Fact]
+    public async Task OracleSource_SqlQuery_SELECT_is_accepted_and_SqlServer_EXEC_still_is()
+    {
+        var ora = await CreateOkAsync(Req("ora", DbType, connectionName: "Ora"));
+        Assert.IsType<OkObjectResult>(await _rules.CreateScanRuleForSource(ora,
+            DbRule("SqlQuery", "X") with { SourceTable = "SELECT order_id, 1 AS x FROM orders WHERE stuck = 1;" }, default));
+
+        var mssql = await DbSourceAsync();
+        Assert.IsType<OkObjectResult>(await _rules.CreateScanRuleForSource(mssql,
+            DbRule("SqlQuery", "X") with { SourceTable = "EXEC sp_CheckStuckOrders @threshold=60" }, default));
+    }
 
     [Fact]
     public async Task Conditions_on_a_SqlQuery_rule_are_rejected_ConditionsNotSupported()

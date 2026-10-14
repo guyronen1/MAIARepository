@@ -173,3 +173,19 @@ Context: the scan-source `📁 Browse…` picker is a **server-side** folder bro
 2. An unreachable `\\nohost` returns an error within the timeout and doesn't hang the request.
 3. With `FolderBrowser:Roots` set, a server that no root sits on is rejected with `PathOutsideRoots`.
 4. Quick-pick chips show the existing source folders (deduplicated, case-insensitive), and clicking one opens it.
+
+## Oracle scan sources follow-ons (opened 2026-10-14)
+
+Context: Database scan sources can target Oracle (`ConnectionStrings:{Name}_ProviderName = "Oracle"`; see `DECISIONS.md` → "Oracle Database scan sources").
+
+- **Live verification against a real Oracle DB is still owed.** The dialect, provider routing and validation are unit-tested, but the generated SQL has not been run against an actual Oracle instance. Acceptance, on the target server:
+  1. A ValueEquals rule on a table with a DATE watermark scans, reports only new rows on the second tick, and the stored watermark looks like `2026-10-14 09:15:00`.
+  2. A NUMBER watermark advances to the numeric max (`10` beats `9`).
+  3. A SqlQuery `SELECT … ;` copied from SQL Developer runs.
+  4. "Start scanning from now" seeds.
+  5. The startup log shows `Oracle: TNS_ADMIN = …`.
+- **SQL Server table-rule latent bugs found while porting (NOT fixed — behaviour deliberately unchanged).**
+  - (a) `SELECT TOP 500` has no outer `ORDER BY` (the ROW_NUMBER window doesn't order the result). When more than 500 rows match, an arbitrary 500 come back while the watermark advances past all of them, which can skip rows.
+  - (b) The new watermark is the **lexical** max of the CONVERT strings. An int watermark column with `9` and `10` in one batch stores `9`, so `10`+ is re-reported next tick.
+  - Fix for both: add `ORDER BY <watermark> ASC` to the outer query and take the last non-null value, as the Oracle dialect does.
+- **Oracle fix executors.** SqlScript / StoredProcedure are SQL Server-only and refuse Oracle connections. Oracle-side fixes would first need an Oracle write-guard (ScriptDom is T-SQL-only). Scan = read-strict; fix = scope-strict.
