@@ -13,4 +13,7 @@ export const environment = {
   appName: 'MAIA',
   version: '1.0.0',
   dashboardRefreshIntervalMs: 5000,
+  // Knowledge assistant (KnowledgeAgent Api) base URL, e.g. 'https://<host>/KnowledgeAgent'. Empty = feature off.
+  // That Api serves /assistant/main.js + styles.css and must list MAIA's origin in Cors:Origins.
+  knowledgeAssistantUrl: '',
 };

@@ -1,15 +1,17 @@
-import { Component, inject } from '@angular/core';
+import { Component, effect, inject } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { TopBarComponent } from '../top-bar/top-bar.component';
 import { SideMenuComponent } from '../side-menu/side-menu.component';
 import { NavigationHistoryService } from '../../core/services/navigation-history.service';
 import { NotificationService } from '../../core/services/notification.service';
 import { CommandPaletteComponent } from '../../shared/command-palette/command-palette.component';
+import { AssistantDrawerComponent } from '../assistant-drawer/assistant-drawer.component';
+import { AssistantService } from '../../core/services/assistant.service';
 
 @Component({
   selector: 'app-shell',
   standalone: true,
-  imports: [RouterOutlet, TopBarComponent, SideMenuComponent, CommandPaletteComponent],
+  imports: [RouterOutlet, TopBarComponent, SideMenuComponent, CommandPaletteComponent, AssistantDrawerComponent],
   template: `
     <div class="shell">
       <app-top-bar />
@@ -23,6 +25,14 @@ import { CommandPaletteComponent } from '../../shared/command-palette/command-pa
       <!-- Global Ctrl/Cmd+K command palette (always mounted; overlay is
            self-gated on its open signal). -->
       <app-command-palette />
+
+      <!-- Knowledge assistant drawer (KnowledgeAgent's <knowledge-assistant>); the
+           launcher lives in the top bar. Absent unless the build has an
+           environment.knowledgeAssistantUrl AND the API's appsettings
+           KnowledgeAssistant:Enabled is true. -->
+      @if (assistant.enabled()) {
+        <app-assistant-drawer />
+      }
 
       @if (notices().length) {
         <div class="toast-stack">
@@ -56,6 +66,16 @@ export class ShellComponent {
   // referrer is lost.
   private _navHistory = inject(NavigationHistoryService);
   private notifications = inject(NotificationService);
+  readonly assistant = inject(AssistantService);
+
+  constructor() {
+    // Shell = signed-in area: load the assistant bundle once so the top-bar
+    // launcher appears. A KnowledgeAgent Api that is down just means no launcher.
+    // An effect, because the server flag arrives with /api/auth/me; load() is idempotent.
+    effect(() => {
+      if (this.assistant.enabled()) void this.assistant.load();
+    });
+  }
 
   readonly notices = this.notifications.notices;
   dismiss(id: number): void { this.notifications.dismiss(id); }

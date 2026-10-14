@@ -5,6 +5,7 @@ import { RecommendationsService } from '../../core/services/recommendations.serv
 import { ConfigService, FixPolicyRuleStep } from '../../core/services/config.service';
 import { AuthService } from '../../core/services/auth.service';
 import { NotificationService } from '../../core/services/notification.service';
+import { AssistantService } from '../../core/services/assistant.service';
 import { FailureStatus, FixExecution, Recommendation } from '../../core/models';
 import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
 import { confidenceBand } from '../../core/util/confidence.util';
@@ -60,6 +61,14 @@ import { StatusBadgeComponent } from '../../shared/status-badge/status-badge.com
               <h3>Failure Details</h3>
               <div class="header-actions">
                 <app-status-badge [status]="failure()!.status" />
+                @if (assistant.available()) {
+                  <!-- Opens the knowledge-assistant drawer with this failure in the
+                       composer; the operator edits and sends (nothing is asked yet). -->
+                  <button class="btn btn-ghost btn-sm" type="button" (click)="askAssistant()"
+                          [title]="'Ask ' + assistant.assistantName() + ' about this failure'">
+                    ✦ Ask {{ assistant.assistantName() }}
+                  </button>
+                }
                 @if (canAct() && (failure()!.status === 'AwaitingManualAction' || failure()!.status === 'ManualRequired')) {
                   <!-- Exit ramp for the off-system manual flow. Visible when:
                          • Status = AwaitingManualAction → operator approved a
@@ -430,6 +439,7 @@ export class FailureDetailComponent implements OnDestroy {
   private configSvc = inject(ConfigService);
   private auth      = inject(AuthService);
   private notify    = inject(NotificationService);
+  readonly assistant = inject(AssistantService);
 
   /** Approve/reject/retry/mark-resolved are Operator+. A read-only User sees the
    *  failure detail but no action controls (cosmetic; the API enforces too). */
@@ -554,6 +564,21 @@ export class FailureDetailComponent implements OnDestroy {
       next:  () => { this.markingResolved.set(false); this.reload(); },
       error: () => { this.markingResolved.set(false); },
     });
+  }
+
+  /** Opens the knowledge-assistant drawer with this failure as an editable question
+   *  (identifiers verbatim — the assistant's hybrid search matches them literally). */
+  askAssistant() {
+    const f = this.failure();
+    if (!f) return;
+    const lines = [
+      'What does this failure mean and how do I fix it?',
+      f.monitoredJobName ? `Job: ${f.monitoredJobName}` : null,
+      f.stepName ? `Step / file: ${f.stepName}` : null,
+      f.errorTypeCode ? `Error type: ${f.errorTypeCode}` : null,
+      f.errorMessage ? `Error: ${f.errorMessage}` : null,
+    ];
+    this.assistant.ask(lines.filter(l => l !== null).join('\n'));
   }
 
   constructor() {

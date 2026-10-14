@@ -13,6 +13,8 @@ export interface CurrentUser {
   /** Server says the forced change may be skipped — true ONLY in a Development
    *  deployment. Drives whether the "Skip for now" button is offered. */
   canSkipPasswordChange: boolean;
+  /** Server appsettings `KnowledgeAssistant:Enabled` — show the AI assistant UI. Missing = false. */
+  knowledgeAssistantEnabled: boolean;
 }
 
 interface MeResponse {
@@ -21,6 +23,7 @@ interface MeResponse {
   role?: MaiaRole;
   mustChangePassword?: boolean;
   canSkipPasswordChange?: boolean;
+  knowledgeAssistantEnabled?: boolean;
 }
 
 /**
@@ -50,6 +53,7 @@ export class AuthService {
         username: r.username!, role: r.role!,
         mustChangePassword: !!r.mustChangePassword,
         canSkipPasswordChange: !!r.canSkipPasswordChange,
+        knowledgeAssistantEnabled: !!r.knowledgeAssistantEnabled,
       })),
       tap(u => this.currentUser.set(u)),
     );
@@ -88,6 +92,7 @@ export class AuthService {
             username: r.username!, role: r.role!,
             mustChangePassword: !!r.mustChangePassword,
             canSkipPasswordChange: !!r.canSkipPasswordChange,
+            knowledgeAssistantEnabled: !!r.knowledgeAssistantEnabled,
           }
         : null),
       tap(u => this.currentUser.set(u)),

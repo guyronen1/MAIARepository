@@ -1,4 +1,4 @@
-import { Component, OnDestroy, OnInit, computed, effect, inject, signal } from '@angular/core';
+import { CUSTOM_ELEMENTS_SCHEMA, Component, OnDestroy, OnInit, computed, effect, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { PolledData, WorkerStatusService } from '../../core/services/worker-status.service';
@@ -9,6 +9,7 @@ import { ScanService } from '../../core/services/scan.service';
 import { ThemeService } from '../../core/services/theme.service';
 import { SearchService } from '../../core/services/search.service';
 import { LanguageService, LangCode } from '../../core/services/language.service';
+import { AssistantService } from '../../core/services/assistant.service';
 
 type DotState = 'green' | 'yellow' | 'red' | 'gray' | 'paused';
 
@@ -16,6 +17,8 @@ type DotState = 'green' | 'yellow' | 'red' | 'gray' | 'paused';
   selector: 'app-top-bar',
   standalone: true,
   imports: [],
+  // <knowledge-assistant-launcher> is a custom element from the assistant bundle.
+  schemas: [CUSTOM_ELEMENTS_SCHEMA],
   template: `
     <header class="topbar">
       <div class="topbar-left">
@@ -28,6 +31,15 @@ type DotState = 'green' | 'yellow' | 'red' | 'gray' | 'paused';
       </div>
 
       <div class="topbar-right">
+        <!-- "Ask {assistant}" button from the knowledge-assistant bundle; renders
+             once the bundle has loaded (AssistantService). Its Ctrl/Cmd+K shortcut
+             is off — that key belongs to the command palette. Esc closes. -->
+        @if (assistant.enabled()) {
+          <knowledge-assistant-launcher drawer-id="ka-drawer" shortcut="false"
+                                        [open]="assistant.open()"
+                                        (openChange)="assistant.setOpen($any($event).detail)">
+          </knowledge-assistant-launcher>
+        }
         <!-- Command palette trigger (also Ctrl/Cmd+K). Jump to pages, jobs,
              failures (item 6). -->
         <button class="search-trigger" type="button" (click)="search.openPalette()"
@@ -321,6 +333,7 @@ export class TopBarComponent implements OnInit, OnDestroy {
   readonly theme = inject(ThemeService);
   readonly search = inject(SearchService);
   readonly lang = inject(LanguageService);
+  readonly assistant = inject(AssistantService);
   readonly accountMenuOpen = signal(false);
 
   pickLang(code: LangCode): void {

@@ -20,7 +20,8 @@ public class AuthController(
     IAuthService          auth,
     ICurrentUserAccessor  currentUser,
     AuthOptions           options,
-    IWebHostEnvironment   env) : ControllerBase
+    IWebHostEnvironment   env,
+    IConfiguration        config) : ControllerBase
 {
     public sealed record LoginRequest(string Username, string Password);
     public sealed record ChangePasswordRequest(string CurrentPassword, string NewPassword);
@@ -29,6 +30,10 @@ public class AuthController(
     // any non-Development environment (incl. unset → Production) cannot skip, so the
     // forced rotation is the shipped default. This is the single env-gated point.
     private bool SkipAllowed => env.IsDevelopment();
+
+    // Knowledge-assistant UI toggle (appsettings KnowledgeAssistant:Enabled). Missing key = false,
+    // so the AI button stays hidden unless a deployment opts in. UX gating only, like canSkipPasswordChange.
+    private bool AssistantEnabled => config.GetValue<bool>("KnowledgeAssistant:Enabled");
 
     [AllowAnonymous]
     [HttpPost("login")]
@@ -51,6 +56,7 @@ public class AuthController(
             role                 = result.User.Role?.Name,
             mustChangePassword   = result.MustChangePassword,
             canSkipPasswordChange = SkipAllowed,
+            knowledgeAssistantEnabled = AssistantEnabled,
         });
     }
 
@@ -118,6 +124,7 @@ public class AuthController(
             role                  = currentUser.Role?.ToString(),
             mustChangePassword    = currentUser.MustChangePassword,
             canSkipPasswordChange = SkipAllowed,
+            knowledgeAssistantEnabled = AssistantEnabled,
         });
     }
 }
