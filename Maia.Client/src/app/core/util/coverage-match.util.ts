@@ -10,7 +10,8 @@
  * backend, which matches real failure messages). It deliberately mirrors the
  * markers' confident-vs-uncertain boundary:
  *
- *   ValueEquals / ColumnRange  → predictable output → link is computable.
+ *   ValueEquals / NotEquals / Contains / InList / ColumnRange
+ *                              → predictable output → link is computable.
  *   ErrorKeyword / FileContent → broad keyword; with rules present the link is
  *                                NOT asserted (only flagged as a gap when there
  *                                are zero effective rules at all).
@@ -64,7 +65,9 @@ export function computeEffectiveClassRules(
  * The representative keyword a scan rule's failure message will contain.
  *   - ErrorKeyword / FileContent → the keyword / filename pattern itself
  *   - ValueEquals → "TargetField=ExpectedValue" (e.g. "FileStatusCode=5")
- *   - ColumnRange → the column name
+ *   - Contains    → "TargetField~text" (the message token, e.g. "Details~timeout")
+ *   - ColumnRange / NotEquals / InList → the column name (the token carries the
+ *     row's own value, which varies)
  */
 export function scanRulePredictedPattern(rule: ScanCheckRule): string {
   const target = (rule.targetField ?? '').replace(/\*/g, '').trim();
@@ -72,7 +75,10 @@ export function scanRulePredictedPattern(rule: ScanCheckRule): string {
     case 'ErrorKeyword': return target;
     case 'FileContent':  return target;
     case 'ValueEquals':  return target && rule.expectedValue ? `${target}=${rule.expectedValue}` : target;
-    case 'ColumnRange':  return target;
+    case 'Contains':     return target && rule.expectedValue ? `${target}~${rule.expectedValue}` : target;
+    case 'ColumnRange':
+    case 'NotEquals':
+    case 'InList':       return target;
     default:             return target;
   }
 }

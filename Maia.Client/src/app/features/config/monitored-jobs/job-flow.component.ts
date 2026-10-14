@@ -3,6 +3,7 @@ import { forkJoin, of } from 'rxjs';
 import { map, switchMap } from 'rxjs/operators';
 import { ConfigService, ClassificationRule, FixPolicyRule } from '../../../core/services/config.service';
 import { MonitoredJob, ScanSource, ScanCheckRule } from '../../../core/models';
+import { describeCheck } from '../../../core/util/db-check-kinds.util';
 import {
   EffectiveClassRule, ClassificationLinkState,
   computeEffectiveClassRules, matchScanRuleClassification, effectiveFixForErrorType,
@@ -279,8 +280,11 @@ export class JobFlowComponent implements OnInit {
     const n = r.conditions?.length ?? 0;
     const and = n > 0 ? ` AND ${n} more condition${n > 1 ? 's' : ''}` : '';
     switch (r.checkType) {
-      case 'ColumnRange':  return `range ${r.minValue ?? '−∞'}…${r.maxValue ?? '∞'}${and}`;
-      case 'ValueEquals':  return (r.expectedValue ? `= ${r.expectedValue}` : '') + and;
+      case 'ColumnRange':
+      case 'ValueEquals':
+      case 'NotEquals':
+      case 'Contains':
+      case 'InList':       return describeCheck(r.checkType, r.expectedValue, r.minValue, r.maxValue) + and;
       case 'ErrorKeyword': return 'log keyword';
       case 'FileContent':  return r.extractorLocator ? `at ${r.extractorLocator}` : 'file content';
       case 'SqlQuery':     return r.description ?? 'custom SQL';

@@ -416,3 +416,58 @@ Decisions:
 - **XML is parsed with DTDs prohibited and no resolver** (no XXE). A file that doesn't parse is shown raw.
 - **Dead ends are a 200 with `kind = "Unavailable"` and a reason**, not an error status. This covers a missing rule or key column, a deleted row, a rolled file, a connection error and API-endpoint sources. Only an unknown failure id is 404.
 - **Modal keyboard handling:** a window capture-phase listener takes Esc (closes only the modal) and swallows ↑/↓ so the failures list can't switch the failure underneath. The modal is anchored below the top bar, because the drawer's stacking context (z 50) can't lift it above.
+
+## Database check kinds NotEquals / Contains / InList (2026-10-14)
+
+**What:** three more table-rule check kinds, usable as a rule's own check (line 1) and as extra AND'd conditions. Semantics decided by the operator:
+- **NotEquals** is `col <> @v`. Rows where the column is NULL are **not** flagged (plain three-valued logic, no `OR col IS NULL`).
+- **Contains** is `col LIKE '%text%'`.
+- **InList** is `col IN (1, 2, 3)`, numbers only.
+
+**Why appended enum values, not new columns:** `CheckType` persists as its string name, so `NotEquals = 7`, `Contains = 8` and `InList = 9` need no migration on `ScanCheckRules`. All three reuse `ExpectedValue`; for InList it holds the comma-separated list, normalised to `1, 2, 3` on save. The only schema change is widening `CK_ScanCheckRuleConditions_Kind_Allowed` (migration `AllowNewDbConditionKinds`). The shared definitions are in `Maia.Core/Scanning/DbCheckKinds.cs` (server) and `core/util/db-check-kinds.util.ts` (client); add new kinds there, not by extending `ValueEquals or ColumnRange` checks.
+
+**Load-bearing details:**
+- **Everything is bound, nothing is spliced.**
+  - Contains binds the whole LIKE pattern, with the operator's text escaped by the dialect (`SqlDialect.ContainsPattern`) so `%`, `_` and `\` match literally (SQL Server also escapes `[`), plus `ESCAPE '\'`.
+  - **Oracle must not escape `[`**: an escape before any non-wildcard character is ORA-01424.
+  - InList binds one parameter per number (`@In0…`, conditions `@C{i}_In0…`), capped at 100.
+- **Classifier tokens.**
+  - NotEquals and InList emit `[Field=<row value>]`, like ColumnRange, so the coverage pattern is the column name.
+  - Contains emits `[Field~text]`, the operator's searched text, because the matched value is free text. The coverage pattern is then `Field~text`, and a classification pattern of just `text` also matches.
+  - The Contains headline caps the matched value at 200 chars; Detail Columns carry the full text.
+- **Save-time 400s for the new kinds only:** `CheckValueRequired` and `InvalidInList`; for conditions, `ConditionIncomplete`. ValueEquals and ColumnRange keep their scan-time skip, so existing rules are untouched.
+
+## Scan-rule column dropdowns — columns read live from the source table (2026-10-14)
+
+**What:** in the Database **table-rule** branch of the scan-rule drawer, the column fields are dropdowns of the Source Table's columns: line-1 column, each condition's column, Source ID, Reference ID, File Path, Watermark, and Detail Columns (chips plus an "+ Add column…" select that still writes the same CSV). SqlQuery rules keep free text.
+
+**Endpoint:** `GET /api/config/scan-sources/{sourceId}/columns?table=dbo.Files` on `ScanSourceLookupsController`, **Admin-only** like `connection-names` / `browse-folders`, and listed in `AuthorizationMatrixTests`. Response: `[{ name, dataType, isNullable, typeCategory }]` in column order. `name` is the catalog spelling; `dataType` is display text (`nvarchar(255)`, `decimal(19,5)`, `NUMBER(10,2)`).
+
+**Reader seam:** `ISourceSchemaReader` (Core) → `SourceSchemaReader` (Infrastructure/Scanning). The controller only maps the result status to HTTP, so its tests mock the reader; the catalog SQL can't run on InMemory. The reader:
+- loads the source and resolves the connection exactly like the scan: `ConnectionName ?? "DefaultConnection"`, engine from `{Name}_ProviderName`, opened by `DbConnections.OpenAsync`.
+- accepts only `table` or `schema.table` (plain, `[bracketed]` or `"quoted"` parts). A JOIN, an alias, a comma or a three-part name is `TableNotResolvable`, decided before any connection opens.
+- **SQL Server:** `sys.columns WHERE object_id = OBJECT_ID(@Object)`, with `@Object` the bracket-quoted name as a **parameter**. No schema means the login's default schema, the same resolution the scan's unqualified name gets. `TYPE_NAME(system_type_id)` drives the category, so alias types (`sysname`) map by their base type.
+- **Oracle:** `ALL_TAB_COLUMNS WHERE OWNER = :p_Owner AND TABLE_NAME = :p_Table`. Names go through `OracleDialect.CatalogName`, which is the scan's identifier rule factored out of `QuoteIdentifier` (plain → UPPER, "Quoted" → exact), so the list and the scan can't disagree. No owner means `SYS_CONTEXT('USERENV','CURRENT_SCHEMA')`, which is the connecting user unless a logon trigger moved it, and that is what an unqualified name resolves against. If that finds nothing, the reader follows one private-then-PUBLIC synonym hop (`ALL_SYNONYMS`), because read-only Oracle users usually see application tables through synonyms.
+- is read-only and capped at `ExecutorTimeouts.Default` (60s) for both open and query.
+
+**Errors are 400/404 `{ error, message }`, never 403.** The client toasts a plain 403 as "no permission", which is reserved for the role check.
+- 404: `SourceNotFound`, `TableNotFound` ("not found, or its login can't see it": both engines' catalogs hide tables the login has no rights on, so the two cases are indistinguishable).
+- 400: `TableNotResolvable`, `TableRequired`, `NotDatabaseSource`, `ConnectionUnresolved`, `ConnectionFailed` (open failed or timed out), `SchemaReadFailed` (catalog query failed).
+
+**Type mapping (`typeCategory`, server-side):**
+- `string`: char / varchar / nchar / nvarchar / text / ntext; Oracle VARCHAR2 / NVARCHAR2 / CHAR / NCHAR / CLOB / NCLOB / LONG.
+- `number`: the integer types, decimal / numeric, float / real, money, **bit** (it compares to 0 / 1); Oracle NUMBER / FLOAT / BINARY_*.
+- `date`: date / datetime / datetime2 / smalldatetime / datetimeoffset; Oracle DATE and every TIMESTAMP variant.
+- `other`: everything else, including **SQL Server `time`** (a time of day wraps at midnight, so it's no scan cursor), uniqueidentifier, xml, binary, rowversion.
+
+**Filtering (client, `columnCategoriesForKind` in `db-check-kinds.util.ts`):** Contains → string; InList / ColumnRange → number; Watermark → date or number; File Path → string; ValueEquals / NotEquals / Source ID / Reference ID / Detail → any. `other` and unknown categories are **always** offered, because the filter narrows and must never hide a column the API couldn't type. The currently selected column is always kept in the options, even when a kind switch makes its type not fit, so the operator's choice is never silently dropped.
+
+**Stored value = the scan's column reference, not the raw catalog name** (`columnRef` in `source-columns.util.ts`). On Oracle a catalog name that isn't plain upper-case (`MixedCase`, `lower`) is written `"MixedCase"`, otherwise the scan would upper-case it and miss the column. A saved value is matched to its option by catalog name (SQL Server case-insensitive, Oracle by the identifier rule), so `fileid` selects `FileId` without rewriting what's stored until the operator picks something.
+
+**Fallbacks (none blocks a save):**
+- **No list:** SqlQuery rule, no table yet, a non-admin (no request at all, so no 403 toast), a JOIN / alias, or a failed lookup. The fields stay the old free-text inputs, with a one-line hint under Source Table that carries the server's reason.
+- **Saved column not in the list:** it stays selected as `{name} (not in table)` (amber), and one soft warning lists every such column. This is the same pattern as the stale Connection key in the source drawer.
+
+**Loading:** on open (immediately) and on Source Table edits (debounced 400 ms; `switchMap` cancels a stale answer). Successful lists are cached per (sourceId, table) for the drawer's lifetime. Failures aren't cached, since a connection that was down may be back.
+
+**Rejected:** a `<select multiple>` for Detail Columns (clunky, and it loses the order that the message lines follow); reading columns through `INFORMATION_SCHEMA` with a split schema/table (`OBJECT_ID` already applies the login's default-schema resolution the scan relies on).

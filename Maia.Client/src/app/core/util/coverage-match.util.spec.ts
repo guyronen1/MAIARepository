@@ -66,6 +66,26 @@ describe('scanRulePredictedPattern', () => {
     expect(scanRulePredictedPattern(scanRule({ checkType: 'ValueEquals', targetField: 'FileStatusCode', expectedValue: '5' }))).toBe('FileStatusCode=5');
     expect(scanRulePredictedPattern(scanRule({ checkType: 'ValueEquals', targetField: 'FileStatusCode', expectedValue: null }))).toBe('FileStatusCode');
   });
+
+  it('Contains → "Field~text" (the message token); NotEquals / InList → the column name', () => {
+    expect(scanRulePredictedPattern(scanRule({ checkType: 'Contains', targetField: 'Details', expectedValue: 'timeout' }))).toBe('Details~timeout');
+    expect(scanRulePredictedPattern(scanRule({ checkType: 'NotEquals', targetField: 'Status', expectedValue: '0' }))).toBe('Status');
+    expect(scanRulePredictedPattern(scanRule({ checkType: 'InList', targetField: 'Code', expectedValue: '1, 2' }))).toBe('Code');
+  });
+});
+
+describe('matchScanRuleClassification — new DB check kinds', () => {
+  it('Contains matches a pattern on the searched text or the token; misses an unrelated one', () => {
+    const rule = scanRule({ checkType: 'Contains', targetField: 'Details', expectedValue: 'timeout' });
+    expect(matchScanRuleClassification(rule, [eff('timeout')]).state).toBe('matched');
+    expect(matchScanRuleClassification(rule, [eff('Details~timeout')]).state).toBe('matched');
+    expect(matchScanRuleClassification(rule, [eff('deadlock')]).state).toBe('gap');
+  });
+
+  it('NotEquals / InList match on the column, like ColumnRange', () => {
+    expect(matchScanRuleClassification(scanRule({ checkType: 'InList', targetField: 'Code', expectedValue: '1, 2' }), [eff('Code')]).state).toBe('matched');
+    expect(matchScanRuleClassification(scanRule({ checkType: 'NotEquals', targetField: 'Status', expectedValue: '0' }), [eff('Other')]).state).toBe('gap');
+  });
 });
 
 describe('matchScanRuleClassification', () => {

@@ -45,7 +45,7 @@ public sealed class ScanWatermarkSeeder(
         // is a no-op and only files that appeared since get a row.
         if (rule.CheckType == CheckType.ErrorKeyword) return await SeedSourceFromNowAsync(source, ScanType.FileSystem,  ct);
         if (rule.CheckType == CheckType.FileContent)  return await SeedSourceFromNowAsync(source, ScanType.FileContent, ct);
-        if (rule.CheckType is not (CheckType.ColumnRange or CheckType.ValueEquals or CheckType.SqlQuery))
+        if (!DbCheckKinds.IsDatabaseCheck(rule.CheckType))
             return WatermarkSeedResult.NotApplicable($"{rule.CheckType} rules have no watermark.");
         if (string.IsNullOrWhiteSpace(rule.WatermarkColumn))
             return WatermarkSeedResult.NotApplicable("rule has no WatermarkColumn — nothing to seed.");

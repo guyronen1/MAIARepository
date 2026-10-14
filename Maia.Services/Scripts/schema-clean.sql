@@ -507,7 +507,7 @@ GO
 -- Composite scan-rule condition kinds (migration AddScanCheckRuleConditions)
 ALTER TABLE [dbo].[ScanCheckRuleConditions] WITH CHECK
     ADD CONSTRAINT [CK_ScanCheckRuleConditions_Kind_Allowed]
-    CHECK ([Kind] IN ('ValueEquals', 'ColumnRange', 'FileContent', 'ErrorKeyword'));
+    CHECK ([Kind] IN ('ValueEquals', 'ColumnRange', 'NotEquals', 'Contains', 'InList', 'FileContent', 'ErrorKeyword'));
 GO
 
 -- Mark every migration as applied so future upgrades are plain EF scripts.

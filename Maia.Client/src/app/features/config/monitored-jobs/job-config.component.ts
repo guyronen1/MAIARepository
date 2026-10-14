@@ -11,6 +11,7 @@ import { ScanSourceDrawerComponent } from './drawers/scan-source-drawer.componen
 import { ScanRuleDrawerComponent } from './drawers/scan-rule-drawer.component';
 import { ClassRuleDrawerComponent } from './drawers/class-rule-drawer.component';
 import { FixOptionDrawerComponent } from './drawers/fix-option-drawer.component';
+import { describeCheck } from '../../../core/util/db-check-kinds.util';
 import { computeEffectiveClassRules, scanRulePredictedPattern,
   scanRuleNeedsClassification as coverageNeedsClassification } from '../../../core/util/coverage-match.util';
 
@@ -583,8 +584,11 @@ export class JobConfigComponent implements OnInit {
     const n = r.conditions?.length ?? 0;
     const suffix = n > 0 ? ` · +${n} condition${n > 1 ? 's' : ''}` : '';
     switch (r.checkType) {
-      case 'ValueEquals':  return '= ' + (r.expectedValue ?? '') + suffix;
-      case 'ColumnRange':  return `${r.minValue ?? '−∞'} – ${r.maxValue ?? '+∞'}` + suffix;
+      case 'ValueEquals':
+      case 'NotEquals':
+      case 'Contains':
+      case 'InList':
+      case 'ColumnRange':  return describeCheck(r.checkType, r.expectedValue, r.minValue, r.maxValue) + suffix;
       case 'FileContent':  return r.extractorPredicateType
         ? `${r.extractorLocator} ${r.extractorPredicateType} ${r.extractorPredicateValue}`
         : (r.extractorLocator ?? 'filename match');

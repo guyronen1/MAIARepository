@@ -1,6 +1,7 @@
 using Maia.Core.Entities;
 using Maia.Core.Enums;
 using Maia.Core.Interfaces;
+using Maia.Core.Scanning;
 using System.Text.RegularExpressions;
 using Maia.Infrastructure.DataAccess;
 using Maia.Infrastructure.Scanning;
@@ -161,15 +162,44 @@ public class ScanRulesConfigController(
     }
 
     /// <summary>
+    /// Value validation for the table-rule kinds added 2026-10-14 (NotEquals, Contains,
+    /// InList) — 400 <c>CheckValueRequired</c> / <c>InvalidInList</c>, so a rule the scan
+    /// would silently skip can't be saved. InList is normalised to "1, 2, 3". The
+    /// unused range bounds are nulled so stale UI values can't leak. ValueEquals and
+    /// ColumnRange keep their existing (scan-time) behaviour.
+    /// </summary>
+    private IActionResult? ApplyAndValidateTableCheck(ScanCheckRule rule, CheckType checkType)
+    {
+        if (checkType is not (CheckType.NotEquals or CheckType.Contains or CheckType.InList)) return null;
+
+        if (checkType == CheckType.InList)
+        {
+            if (!DbCheckKinds.TryParseInList(rule.ExpectedValue, out var values))
+                return BadRequest(new { error = "InvalidInList",
+                    message = $"In List needs 1–{DbCheckKinds.MaxInListItems} comma-separated numbers, e.g. '1, 2, 3'." });
+            rule.ExpectedValue = DbCheckKinds.FormatInList(values);
+        }
+        else if (string.IsNullOrWhiteSpace(rule.ExpectedValue))
+            return BadRequest(new { error = "CheckValueRequired",
+                message = checkType == CheckType.Contains
+                    ? "Contains needs the text to search for."
+                    : "Not Equal needs the value the column should have." });
+
+        rule.MinValue = null;
+        rule.MaxValue = null;
+        return null;
+    }
+
+    /// <summary>
     /// Composite scan rule (Phase 1 — DB table rules): validates and normalises the
     /// request's extra AND'd conditions. Mirrors
     /// <c>FixPolicyConfigController.ValidateCompositePayload</c>: parse → per-item
     /// checks naming the offending order → stable sort → re-pack to 1..N. Returns a
     /// 400 on inconsistent config, else null with <paramref name="normalised"/> set
     /// (empty when the request carries no conditions).
-    ///   • ConditionsNotSupported — parent isn't a Database ValueEquals/ColumnRange rule
-    ///   • ConditionKindMismatch  — a condition's Kind isn't ValueEquals/ColumnRange
-    ///   • ConditionIncomplete    — missing column, ExpectedValue (ValueEquals) or bounds (ColumnRange)
+    ///   • ConditionsNotSupported — parent isn't a Database table rule (<see cref="DbCheckKinds.IsTableCheck"/>)
+    ///   • ConditionKindMismatch  — a condition's Kind isn't a table-rule kind
+    ///   • ConditionIncomplete    — missing column, ExpectedValue (InList: not numbers) or bounds (ColumnRange)
     /// </summary>
     private IActionResult? ApplyAndValidateConditions(
         UpsertScanCheckRuleRequest req, CheckType checkType, out List<ScanCheckRuleCondition> normalised)
@@ -177,31 +207,36 @@ public class ScanRulesConfigController(
         normalised = [];
         if (req.Conditions is not { Count: > 0 }) return null;
 
-        if (checkType is not (CheckType.ValueEquals or CheckType.ColumnRange))
+        if (!DbCheckKinds.IsTableCheck(checkType))
             return BadRequest(new { error = "ConditionsNotSupported",
                 message = checkType == CheckType.SqlQuery
                     ? "SqlQuery rules cannot have conditions — put the compound logic in the query's WHERE/JOIN."
-                    : $"Conditions are supported on Database ValueEquals / ColumnRange rules only in this version (rule is {checkType})." });
+                    : $"Conditions are supported on Database table rules only in this version (rule is {checkType})." });
 
         var parsed = new List<ScanCheckRuleCondition>(req.Conditions.Count);
         foreach (var c in req.Conditions)
         {
             if (!Enum.TryParse<CheckType>(c.Kind, ignoreCase: true, out var kind)
-                || kind is not (CheckType.ValueEquals or CheckType.ColumnRange))
+                || !DbCheckKinds.IsTableCheck(kind))
                 return BadRequest(new { error = "ConditionKindMismatch",
-                    message = $"Condition at order {c.ConditionOrder} has Kind '{c.Kind}'; a Database rule accepts ValueEquals or ColumnRange." });
+                    message = $"Condition at order {c.ConditionOrder} has Kind '{c.Kind}'; a Database rule accepts ValueEquals, NotEquals, Contains, InList or ColumnRange." });
 
             if (string.IsNullOrWhiteSpace(c.TargetField))
                 return BadRequest(new { error = "ConditionIncomplete",
                     message = $"Condition at order {c.ConditionOrder} has no column (TargetField)." });
 
-            if (kind == CheckType.ValueEquals && string.IsNullOrWhiteSpace(c.ExpectedValue))
+            if (!DbCheckKinds.HasRequiredValue(kind, c.ExpectedValue, c.MinValue, c.MaxValue))
                 return BadRequest(new { error = "ConditionIncomplete",
-                    message = $"Condition at order {c.ConditionOrder} ({c.TargetField}) is ValueEquals but has no ExpectedValue." });
+                    message = kind switch
+                    {
+                        CheckType.ColumnRange => $"Condition at order {c.ConditionOrder} ({c.TargetField}) is ColumnRange but has neither MinValue nor MaxValue.",
+                        CheckType.InList      => $"Condition at order {c.ConditionOrder} ({c.TargetField}) is InList but its value isn't 1–{DbCheckKinds.MaxInListItems} comma-separated numbers.",
+                        _                     => $"Condition at order {c.ConditionOrder} ({c.TargetField}) is {kind} but has no ExpectedValue.",
+                    } });
 
-            if (kind == CheckType.ColumnRange && !c.MinValue.HasValue && !c.MaxValue.HasValue)
-                return BadRequest(new { error = "ConditionIncomplete",
-                    message = $"Condition at order {c.ConditionOrder} ({c.TargetField}) is ColumnRange but has neither MinValue nor MaxValue." });
+            var expected = kind == CheckType.InList && DbCheckKinds.TryParseInList(c.ExpectedValue, out var listValues)
+                ? DbCheckKinds.FormatInList(listValues)
+                : c.ExpectedValue;
 
             // Null the fields the kind doesn't use so stale UI values can't leak.
             parsed.Add(new ScanCheckRuleCondition
@@ -209,7 +244,7 @@ public class ScanRulesConfigController(
                 ConditionOrder = c.ConditionOrder,
                 Kind           = kind,
                 TargetField    = c.TargetField.Trim(),
-                ExpectedValue  = kind == CheckType.ValueEquals ? c.ExpectedValue : null,
+                ExpectedValue  = DbCheckKinds.UsesExpectedValue(kind) ? expected : null,
                 MinValue       = kind == CheckType.ColumnRange ? c.MinValue : null,
                 MaxValue       = kind == CheckType.ColumnRange ? c.MaxValue : null,
                 PredicateType  = null,
@@ -235,9 +270,14 @@ public class ScanRulesConfigController(
         var ordered = conditions.OrderBy(c => c.ConditionOrder).ToList();
         return ordered.Count == 0
             ? "(none)"
-            : string.Join(" AND ", ordered.Select(c => c.Kind == CheckType.ValueEquals
-                ? $"{c.ConditionOrder}:ValueEquals {c.TargetField}={c.ExpectedValue}"
-                : $"{c.ConditionOrder}:{c.Kind} {c.TargetField}[{c.MinValue?.ToString() ?? "−∞"}, {c.MaxValue?.ToString() ?? "+∞"}]"));
+            : string.Join(" AND ", ordered.Select(c => c.Kind switch
+            {
+                CheckType.ValueEquals => $"{c.ConditionOrder}:ValueEquals {c.TargetField}={c.ExpectedValue}",
+                CheckType.NotEquals   => $"{c.ConditionOrder}:NotEquals {c.TargetField}<>{c.ExpectedValue}",
+                CheckType.Contains    => $"{c.ConditionOrder}:Contains {c.TargetField}~'{c.ExpectedValue}'",
+                CheckType.InList      => $"{c.ConditionOrder}:InList {c.TargetField} in ({c.ExpectedValue})",
+                _                     => $"{c.ConditionOrder}:{c.Kind} {c.TargetField}[{c.MinValue?.ToString() ?? "−∞"}, {c.MaxValue?.ToString() ?? "+∞"}]",
+            }));
     }
 
     /// <summary>
@@ -325,6 +365,7 @@ public class ScanRulesConfigController(
         };
         if (ApplyAndValidateFileContent(req, rule, checkType) is { } fcError) return fcError;
         if (ApplyAndValidateSqlQuery(req, rule, checkType, ProviderOf(activeSources[0])) is { } sqError) return sqError;
+        if (ApplyAndValidateTableCheck(rule, checkType) is { } tcError) return tcError;
         if (ApplyAndValidateConditions(req, checkType, out var conditions) is { } condError) return condError;
 
         // Conditions ride along on the header insert — one SaveChanges, EF fixes up CheckRuleId.
@@ -403,6 +444,7 @@ public class ScanRulesConfigController(
         rule.IsActive         = req.IsActive;
         if (ApplyAndValidateFileContent(req, rule, checkType) is { } fcError) return fcError;
         if (ApplyAndValidateSqlQuery(req, rule, checkType, ProviderOf(ruleSource)) is { } sqError) return sqError;
+        if (ApplyAndValidateTableCheck(rule, checkType) is { } tcError) return tcError;
         if (ApplyAndValidateConditions(req, checkType, out var conditions) is { } condError) return condError;
 
         // Conditions: replace-all (same as FixPolicyRuleSteps). Diffing per-condition
@@ -513,6 +555,7 @@ public class ScanRulesConfigController(
         };
         if (ApplyAndValidateFileContent(req, rule, checkType) is { } fcError) return fcError;
         if (ApplyAndValidateSqlQuery(req, rule, checkType, ProviderOf(source)) is { } sqError) return sqError;
+        if (ApplyAndValidateTableCheck(rule, checkType) is { } tcError) return tcError;
         if (ApplyAndValidateConditions(req, checkType, out var conditions) is { } condError) return condError;
 
         rule.Conditions = conditions;

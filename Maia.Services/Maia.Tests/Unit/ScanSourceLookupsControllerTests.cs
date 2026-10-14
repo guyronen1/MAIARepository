@@ -1,8 +1,11 @@
 using System.Text.Json;
 using Maia.API.Controllers;
+using Maia.Core.Interfaces;
+using Maia.Core.Results;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using Xunit;
 
 namespace Maia.Tests.Unit;
@@ -27,8 +30,9 @@ public sealed class ScanSourceLookupsControllerTests : IDisposable
 
     public void Dispose() { try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ } }
 
-    private static ScanSourceLookupsController Ctrl(Dictionary<string, string?> cfg) =>
+    private static ScanSourceLookupsController Ctrl(Dictionary<string, string?> cfg, ISourceSchemaReader? reader = null) =>
         new(new ConfigurationBuilder().AddInMemoryCollection(cfg).Build(),
+            reader ?? Mock.Of<ISourceSchemaReader>(),
             NullLogger<ScanSourceLookupsController>.Instance);
 
     private ScanSourceLookupsController RootedCtrl() =>
@@ -117,6 +121,62 @@ public sealed class ScanSourceLookupsControllerTests : IDisposable
     {
         var nf = Assert.IsType<NotFoundObjectResult>(Ctrl(new()).BrowseFolders(Path.Combine(_root, "nope")));
         Assert.Equal("FolderNotFound", Json(nf.Value).GetProperty("error").GetString());
+    }
+
+    // ── Source columns (reader mocked: the catalog SQL can't run on InMemory) ──
+
+    private static ScanSourceLookupsController ColumnsCtrl(TableColumnsResult result, out Mock<ISourceSchemaReader> reader)
+    {
+        reader = new Mock<ISourceSchemaReader>();
+        reader.Setup(r => r.GetColumnsAsync(It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync(result);
+        return Ctrl(new(), reader.Object);
+    }
+
+    [Fact]
+    public async Task Columns_ok_returns_the_column_list_and_passes_source_and_table_through()
+    {
+        var cols = new[]
+        {
+            new TableColumnInfo("FileId", "int", false, ColumnTypeCategory.Number),
+            new TableColumnInfo("Status", "nvarchar(50)", true, ColumnTypeCategory.String),
+        };
+        var ctrl = ColumnsCtrl(TableColumnsResult.Found(cols), out var reader);
+
+        var ok = Assert.IsType<OkObjectResult>(await ctrl.GetSourceColumns(7, "dbo.Files", default));
+
+        var arr = Json(ok.Value).EnumerateArray().ToArray();
+        Assert.Equal(new[] { "FileId", "Status" }, arr.Select(a => a.GetProperty("name").GetString()));
+        Assert.Equal("number", arr[0].GetProperty("typeCategory").GetString());
+        Assert.Equal("nvarchar(50)", arr[1].GetProperty("dataType").GetString());
+        Assert.True(arr[1].GetProperty("isNullable").GetBoolean());
+        reader.Verify(r => r.GetColumnsAsync(7, "dbo.Files", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Theory]
+    [InlineData(TableColumnsStatus.SourceNotFound)]
+    [InlineData(TableColumnsStatus.TableNotFound)]
+    public async Task Columns_missing_source_or_table_is_404_with_error_code(TableColumnsStatus status)
+    {
+        var nf = Assert.IsType<NotFoundObjectResult>(
+            await ColumnsCtrl(TableColumnsResult.Fail(status, "gone"), out _).GetSourceColumns(1, "dbo.Files", default));
+        var j = Json(nf.Value);
+        Assert.Equal(status.ToString(), j.GetProperty("error").GetString());
+        Assert.Equal("gone", j.GetProperty("message").GetString());
+    }
+
+    [Theory]
+    [InlineData(TableColumnsStatus.TableNotResolvable)]
+    [InlineData(TableColumnsStatus.TableRequired)]
+    [InlineData(TableColumnsStatus.NotDatabaseSource)]
+    [InlineData(TableColumnsStatus.ConnectionUnresolved)]
+    [InlineData(TableColumnsStatus.ConnectionFailed)]
+    [InlineData(TableColumnsStatus.SchemaReadFailed)]
+    public async Task Columns_dead_ends_are_400_never_403(TableColumnsStatus status)
+    {
+        var result = await ColumnsCtrl(TableColumnsResult.Fail(status, "why"), out _).GetSourceColumns(1, "x", default);
+        var bad = Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal(status.ToString(), Json(bad.Value).GetProperty("error").GetString());
     }
 
     [Fact]

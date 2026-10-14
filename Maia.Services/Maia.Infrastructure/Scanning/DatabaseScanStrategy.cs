@@ -4,6 +4,7 @@ using Maia.Core.Enums;
 using Maia.Core.Interfaces;
 using Maia.Core.Interfaces.UseCases;
 using Maia.Core.Results;
+using Maia.Core.Scanning;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -11,7 +12,8 @@ namespace Maia.Infrastructure.Scanning;
 
 /// <summary>
 /// Runs active database ScanCheckRules against their SourceTables.
-/// Supports ColumnRange and ValueEquals checks.
+/// Table rules support ColumnRange, ValueEquals, NotEquals, Contains and InList
+/// checks (see <see cref="DbCheckKinds"/>); SqlQuery runs operator-written SQL.
 /// When WatermarkColumn is set on a rule, each scan only reads rows whose
 /// WatermarkColumn value exceeds the last stored watermark — so the same row
 /// is never reported twice. The first scan processes all existing rows and
@@ -29,8 +31,9 @@ public sealed class DatabaseScanStrategy(
     ISqlQueryRunner               sqlRunner,
     ILogger<DatabaseScanStrategy> logger) : IScanStrategy
 {
-    private static readonly HashSet<CheckType> SupportedTypes =
-        [CheckType.ColumnRange, CheckType.ValueEquals, CheckType.SqlQuery];
+    // Value cap for a Contains rule's matched text in the message headline — the
+    // column is free text, often long; Detail Columns can carry the full value.
+    internal const int MaxContainsValueLength = 200;
 
     // Code-side cap for SqlQuery (can't inject TOP into an arbitrary query/proc).
     private const int MaxSqlQueryRows = 500;
@@ -78,13 +81,13 @@ public sealed class DatabaseScanStrategy(
     public async Task<ScanResult> ScanAsync(MonitoredJob job, ScanSource source, CancellationToken ct = default)
     {
         var rules = source.ScanCheckRules
-            .Where(r => r.IsActive && SupportedTypes.Contains(r.CheckType))
+            .Where(r => r.IsActive && DbCheckKinds.IsDatabaseCheck(r.CheckType))
             .ToList();
 
         if (rules.Count == 0)
             throw new InvalidOperationException(
                 $"Job '{job.Name}' has no active database ScanCheckRules. " +
-                "Add rules with CheckType 'ColumnRange' or 'ValueEquals'.");
+                "Add rules with CheckType 'ValueEquals', 'NotEquals', 'Contains', 'InList', 'ColumnRange' or 'SqlQuery'.");
 
         var missingTable = rules.Where(r => string.IsNullOrWhiteSpace(r.SourceTable)).ToList();
         if (missingTable.Count > 0)
@@ -150,7 +153,7 @@ public sealed class DatabaseScanStrategy(
             }
             else
             {
-                // Table rules (ColumnRange / ValueEquals): the watermark filter is pushed
+                // Table rules (ColumnRange / ValueEquals / NotEquals / Contains / InList): the watermark filter is pushed
                 // into the generated SQL; coarse open-failure dedup only when no watermark.
                 string? watermark = rule.WatermarkColumn is not null
                     ? await watermarks.GetDbWatermarkAsync(rule.CheckRuleId, ct)
@@ -248,7 +251,7 @@ public sealed class DatabaseScanStrategy(
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Table rules (ColumnRange / ValueEquals) are valid only when the parent check AND
+    /// Table rules (any <see cref="DbCheckKinds.IsTableCheck"/> kind) are valid only when the parent check AND
     /// every extra condition have the config their kind needs. One invalid condition
     /// skips the WHOLE rule (mirrors how an invalid parent is treated) — firing on the
     /// parent alone would silently widen the match, which is the one thing a composite
@@ -256,24 +259,22 @@ public sealed class DatabaseScanStrategy(
     /// </summary>
     internal static bool IsRuleValid(ScanCheckRule rule) => rule.CheckType switch
     {
-        CheckType.ColumnRange => (rule.MinValue.HasValue || rule.MaxValue.HasValue) && rule.Conditions.All(IsConditionValid),
-        CheckType.ValueEquals => !string.IsNullOrWhiteSpace(rule.ExpectedValue) && rule.Conditions.All(IsConditionValid),
         // SqlQuery: the query (SourceTable) + the value column (TargetField) are all
         // that's needed — Option A, every returned row is a failure (no predicate).
         // Conditions are ignored on SqlQuery (warned in the loop), so not validated.
-        CheckType.SqlQuery    => !string.IsNullOrWhiteSpace(rule.SourceTable) && !string.IsNullOrWhiteSpace(rule.TargetField),
-        _                     => false
+        CheckType.SqlQuery => !string.IsNullOrWhiteSpace(rule.SourceTable) && !string.IsNullOrWhiteSpace(rule.TargetField),
+        var kind when DbCheckKinds.IsTableCheck(kind) =>
+            DbCheckKinds.HasRequiredValue(kind, rule.ExpectedValue, rule.MinValue, rule.MaxValue)
+            && rule.Conditions.All(IsConditionValid),
+        _ => false
     };
 
-    /// <summary>Phase 1 condition kinds are the two DB column predicates; each needs
-    /// a column plus the value(s) its kind compares against.</summary>
+    /// <summary>Condition kinds are the table-rule column predicates; each needs a
+    /// column plus the value(s) its kind compares against.</summary>
     internal static bool IsConditionValid(ScanCheckRuleCondition c) =>
-        !string.IsNullOrWhiteSpace(c.TargetField) && c.Kind switch
-        {
-            CheckType.ValueEquals => !string.IsNullOrWhiteSpace(c.ExpectedValue),
-            CheckType.ColumnRange => c.MinValue.HasValue || c.MaxValue.HasValue,
-            _                     => false,
-        };
+        !string.IsNullOrWhiteSpace(c.TargetField)
+        && DbCheckKinds.IsTableCheck(c.Kind)
+        && DbCheckKinds.HasRequiredValue(c.Kind, c.ExpectedValue, c.MinValue, c.MaxValue);
 
     private static string RuleDescription(ScanCheckRule r)
     {
@@ -281,6 +282,9 @@ public sealed class DatabaseScanStrategy(
         {
             CheckType.ColumnRange => $"[{r.SourceTable}].[{r.TargetField}] ∈ [{r.MinValue?.ToString() ?? "−∞"}, {r.MaxValue?.ToString() ?? "+∞"}]",
             CheckType.ValueEquals => $"[{r.SourceTable}].[{r.TargetField}] = {r.ExpectedValue}",
+            CheckType.NotEquals   => $"[{r.SourceTable}].[{r.TargetField}] <> {r.ExpectedValue}",
+            CheckType.Contains    => $"[{r.SourceTable}].[{r.TargetField}] contains '{r.ExpectedValue}'",
+            CheckType.InList      => $"[{r.SourceTable}].[{r.TargetField}] in ({r.ExpectedValue})",
             CheckType.SqlQuery    => $"SqlQuery → [{r.TargetField}]",
             _                     => $"[{r.SourceTable}].[{r.TargetField}]"
         };
@@ -336,8 +340,7 @@ public sealed class DatabaseScanStrategy(
         // One extra "[Field=Value]" token per AND'd condition, appended AFTER the
         // parent's token (which therefore stays the FIRST token — the classifier /
         // coverage-heuristic contract is unchanged) and BEFORE the Description.
-        // ValueEquals conditions use the operator-typed ExpectedValue (canonical form,
-        // same reasoning as the parent); ColumnRange conditions use the actual value.
+        // See Token for which value each kind shows.
         var condTokens = ConditionTokens(rule, conditionValues);
 
         return rule.CheckType switch
@@ -356,6 +359,23 @@ public sealed class DatabaseScanStrategy(
                 // literal "Field=Value" pattern matches at runtime without wildcards.
                 $" [{rule.TargetField}={rule.ExpectedValue}]" + condTokens +
                 (rule.Description is not null ? $" — {rule.Description}" : ""),
+            // NotEquals / InList: the row's value is what's interesting (it varies), so
+            // the token carries it — same reasoning as ColumnRange.
+            CheckType.NotEquals =>
+                $"[{rule.SourceTable}].[{rule.TargetField}] = {value} differs from expected value {rule.ExpectedValue} ({rowId})" +
+                $" [{rule.TargetField}={value}]" + condTokens +
+                (rule.Description is not null ? $" — {rule.Description}" : ""),
+            CheckType.InList =>
+                $"[{rule.SourceTable}].[{rule.TargetField}] = {value} is in error list ({rule.ExpectedValue}) ({rowId})" +
+                $" [{rule.TargetField}={value}]" + condTokens +
+                (rule.Description is not null ? $" — {rule.Description}" : ""),
+            // Contains: the column is free text, so the token carries the operator's
+            // search text ("Field~text") — predictable, so a literal pattern classifies
+            // it — and the headline shows the matched value capped.
+            CheckType.Contains =>
+                $"[{rule.SourceTable}].[{rule.TargetField}] = {Shorten(value)} contains '{rule.ExpectedValue}' ({rowId})" +
+                $" {Token(CheckType.Contains, rule.TargetField, rule.ExpectedValue, null)}" + condTokens +
+                (rule.Description is not null ? $" — {rule.Description}" : ""),
             // Predictable, classifier-matchable shape; Description leads when set.
             CheckType.SqlQuery =>
                 $"{rule.Description ?? "SqlQuery match"}: [{rule.TargetField}] = {value} ({rowId})",
@@ -372,12 +392,31 @@ public sealed class DatabaseScanStrategy(
         for (var i = 0; i < conds.Count; i++)
         {
             var c = conds[i];
-            var shown = c.Kind == CheckType.ValueEquals
-                ? c.ExpectedValue
-                : (conditionValues is not null && i < conditionValues.Count ? conditionValues[i] : null) ?? "NULL";
-            sb.Append(" [").Append(c.TargetField).Append('=').Append(shown).Append(']');
+            var actual = conditionValues is not null && i < conditionValues.Count ? conditionValues[i] : null;
+            sb.Append(' ').Append(Token(c.Kind, c.TargetField, c.ExpectedValue, actual));
         }
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// One classifier token. ValueEquals → <c>[Field=ExpectedValue]</c> (the operator's
+    /// canonical form); Contains → <c>[Field~text]</c> (the searched text — the matched
+    /// value is free text); ColumnRange / NotEquals / InList → <c>[Field=actual]</c>
+    /// (the value varies, so the row's own value is the informative part).
+    /// </summary>
+    private static string Token(CheckType kind, string field, string? expectedValue, string? actualValue) => kind switch
+    {
+        CheckType.ValueEquals => $"[{field}={expectedValue}]",
+        CheckType.Contains    => $"[{field}~{expectedValue}]",
+        _                     => $"[{field}={actualValue ?? "NULL"}]",
+    };
+
+    private static string Shorten(object value)
+    {
+        var text = Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
+        return text.Length > MaxContainsValueLength
+            ? string.Concat(text.AsSpan(0, MaxContainsValueLength), "…")
+            : text;
     }
 
     // ── SQL helpers ───────────────────────────────────────────────────────────
@@ -741,23 +780,10 @@ public sealed class DatabaseScanStrategy(
         var p = new List<(string, object)>();
         string Bind(string name, object value) { p.Add((d.ParamName(name), value)); return d.Placeholder(name); }
 
-        string parentClause;
-        if (rule.CheckType == CheckType.ValueEquals)
-        {
-            parentClause = $"({d.QuoteIdentifier(rule.TargetField)} = {Bind("ExactVal", rule.ExpectedValue!)})";
-        }
-        else
-        {
-            // ColumnRange — wrap in parentheses so callers can safely AND
-            // additional conditions onto this clause without the precedence bug
-            // where (a OR b) AND c parses as a OR (b AND c). The watermark filter
-            // in QueryMatchingRowsAsync is exactly that "additional AND" case;
-            // unparenthesized, it would bypass the OR's left branch entirely.
-            var conditions = new List<string>();
-            if (rule.MinValue.HasValue) conditions.Add($"{d.QuoteIdentifier(rule.TargetField)} < {Bind("Min", rule.MinValue.Value)}");
-            if (rule.MaxValue.HasValue) conditions.Add($"{d.QuoteIdentifier(rule.TargetField)} > {Bind("Max", rule.MaxValue.Value)}");
-            parentClause = $"({string.Join(" OR ", conditions)})";
-        }
+        // The parent's check is condition #0 with unprefixed parameters; extra
+        // conditions use C{i}_-prefixed ones so the two can never collide.
+        var parentClause = Predicate(rule.CheckType, d.QuoteIdentifier(rule.TargetField),
+            rule.ExpectedValue, rule.MinValue, rule.MaxValue, prefix: "");
 
         if (rule.Conditions.Count == 0) return (parentClause, p);
 
@@ -765,20 +791,36 @@ public sealed class DatabaseScanStrategy(
         var conds = OrderedConditions(rule);
         for (var i = 0; i < conds.Count; i++)
         {
-            var c   = conds[i];
-            var col = d.QuoteIdentifier(c.TargetField);
-            if (c.Kind == CheckType.ValueEquals)
-            {
-                parts.Add($"({col} = {Bind($"C{i}_ExactVal", c.ExpectedValue!)})");
-            }
-            else
-            {
-                var cc = new List<string>();
-                if (c.MinValue.HasValue) cc.Add($"{col} < {Bind($"C{i}_Min", c.MinValue.Value)}");
-                if (c.MaxValue.HasValue) cc.Add($"{col} > {Bind($"C{i}_Max", c.MaxValue.Value)}");
-                parts.Add($"({string.Join(" OR ", cc)})");
-            }
+            var c = conds[i];
+            parts.Add(Predicate(c.Kind, d.QuoteIdentifier(c.TargetField), c.ExpectedValue, c.MinValue, c.MaxValue, prefix: $"C{i}_"));
         }
         return (string.Join(" AND ", parts), p);
+
+        // Every predicate is wrapped in parentheses so callers can safely AND more onto
+        // it — ColumnRange's OR would otherwise bind wrongly against the watermark filter
+        // QueryMatchingRowsAsync appends ((a OR b) AND c parsing as a OR (b AND c)).
+        string Predicate(CheckType kind, string col, string? expected, decimal? min, decimal? max, string prefix)
+        {
+            switch (kind)
+            {
+                case CheckType.ValueEquals:
+                    return $"({col} = {Bind(prefix + "ExactVal", expected!)})";
+                case CheckType.NotEquals:
+                    // Plain <> — a NULL column is unknown, not "different", so it is not flagged.
+                    return $"({col} <> {Bind(prefix + "ExactVal", expected!)})";
+                case CheckType.Contains:
+                    return $"({col} LIKE {Bind(prefix + "Like", d.ContainsPattern(expected!))} ESCAPE '{SqlDialect.LikeEscape}')";
+                case CheckType.InList:
+                    if (!DbCheckKinds.TryParseInList(expected, out var values))
+                        throw new InvalidOperationException($"InList value '{expected}' is not a comma-separated list of numbers.");
+                    return $"({col} IN ({string.Join(", ", values.Select((v, n) => Bind($"{prefix}In{n}", v)))}))";
+                default:
+                    // ColumnRange
+                    var cc = new List<string>();
+                    if (min.HasValue) cc.Add($"{col} < {Bind(prefix + "Min", min.Value)}");
+                    if (max.HasValue) cc.Add($"{col} > {Bind(prefix + "Max", max.Value)}");
+                    return $"({string.Join(" OR ", cc)})";
+            }
+        }
     }
 }

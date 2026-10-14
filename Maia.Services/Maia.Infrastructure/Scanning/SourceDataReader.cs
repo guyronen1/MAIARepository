@@ -100,7 +100,7 @@ public sealed class SourceDataReader(
     internal static ScanCheckRule? ResolveDbRule(JobFailure f, IEnumerable<ScanCheckRule> rules)
     {
         var dbRules = rules
-            .Where(r => r.CheckType is CheckType.ColumnRange or CheckType.ValueEquals or CheckType.SqlQuery)
+            .Where(r => DbCheckKinds.IsDatabaseCheck(r.CheckType))
             .ToList();
 
         if (f.ScanCheckRuleId is { } id && dbRules.FirstOrDefault(r => r.CheckRuleId == id) is { } byId)

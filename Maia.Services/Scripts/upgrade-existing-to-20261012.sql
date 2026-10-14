@@ -2,7 +2,7 @@
 -- MAIA upgrade-existing-to-20261012.sql
 -- Brings an EXISTING MAIA database (installed from schema-create.sql, the
 -- July 2026 deployment) up to the current schema - latest migration
--- 20261014145610_AddScanCheckRuleIdToJobFailure - without losing data.
+-- 20261014200000_AllowNewDbConditionKinds - without losing data.
 --
 -- For a NEW, empty database use schema-clean.sql + seed-metadata.sql instead.
 --
@@ -11,7 +11,8 @@
 --   2. 20261012162748_AddDetailColumnsToScanCheckRule        - ScanCheckRules.DetailColumns
 --   3. 20261012171955_AddScanCheckRuleConditions             - ScanCheckRuleConditions table
 --   3b. 20261014145610_AddScanCheckRuleIdToJobFailure        - JobFailures.ScanCheckRuleId
---   4. __EFMigrationsHistory - created + all 34 migrations marked applied, so the
+--   3c. 20261014200000_AllowNewDbConditionKinds              - condition Kind allow-list + NotEquals/Contains/InList
+--   4. __EFMigrationsHistory - created + all 35 migrations marked applied, so the
 --      next upgrade can be a plain `dotnet ef migrations script --idempotent`.
 --
 -- Idempotent: every step checks for its object first - safe to re-run, including
@@ -146,7 +147,7 @@ IF OBJECT_ID(N'CK_ScanCheckRuleConditions_Kind_Allowed') IS NULL
 BEGIN
     ALTER TABLE [dbo].[ScanCheckRuleConditions] WITH CHECK
         ADD CONSTRAINT [CK_ScanCheckRuleConditions_Kind_Allowed]
-        CHECK ([Kind] IN ('ValueEquals', 'ColumnRange', 'FileContent', 'ErrorKeyword'));
+        CHECK ([Kind] IN ('ValueEquals', 'ColumnRange', 'NotEquals', 'Contains', 'InList', 'FileContent', 'ErrorKeyword'));
     PRINT N'Added CK_ScanCheckRuleConditions_Kind_Allowed.';
 END
 GO
@@ -157,6 +158,20 @@ IF COL_LENGTH(N'dbo.JobFailures', N'ScanCheckRuleId') IS NULL
 BEGIN
     ALTER TABLE [dbo].[JobFailures] ADD [ScanCheckRuleId] int NULL;
     PRINT N'Added JobFailures.ScanCheckRuleId.';
+END
+GO
+
+-- ── 3c. AllowNewDbConditionKinds (2026-10-14) ───────────────────────────────
+-- A database that already has the 2026-10-12 constraint gets the widened list.
+IF EXISTS (SELECT 1 FROM sys.check_constraints
+           WHERE name = N'CK_ScanCheckRuleConditions_Kind_Allowed'
+             AND definition NOT LIKE N'%InList%')
+BEGIN
+    ALTER TABLE [dbo].[ScanCheckRuleConditions] DROP CONSTRAINT [CK_ScanCheckRuleConditions_Kind_Allowed];
+    ALTER TABLE [dbo].[ScanCheckRuleConditions] WITH CHECK
+        ADD CONSTRAINT [CK_ScanCheckRuleConditions_Kind_Allowed]
+        CHECK ([Kind] IN ('ValueEquals', 'ColumnRange', 'NotEquals', 'Contains', 'InList', 'FileContent', 'ErrorKeyword'));
+    PRINT N'Widened CK_ScanCheckRuleConditions_Kind_Allowed (NotEquals / Contains / InList).';
 END
 GO
 
@@ -207,13 +222,14 @@ FROM (VALUES
     (N'20260718182136_AddCompositeInvariantCheckConstraints'),
     (N'20261012162748_AddDetailColumnsToScanCheckRule'),
     (N'20261012171955_AddScanCheckRuleConditions'),
-    (N'20261014145610_AddScanCheckRuleIdToJobFailure')
+    (N'20261014145610_AddScanCheckRuleIdToJobFailure'),
+    (N'20261014200000_AllowNewDbConditionKinds')
 ) AS m (MigrationId)
 WHERE NOT EXISTS (SELECT 1 FROM [dbo].[__EFMigrationsHistory] h WHERE h.MigrationId = m.MigrationId);
 PRINT N'Migration history rows added: ' + CAST(@@ROWCOUNT AS nvarchar(10)) + N'.';
 GO
 
-PRINT N'Upgrade complete - schema is at 20261014145610_AddScanCheckRuleIdToJobFailure.';
+PRINT N'Upgrade complete - schema is at 20261014200000_AllowNewDbConditionKinds.';
 GO
 
 SET NOEXEC OFF;

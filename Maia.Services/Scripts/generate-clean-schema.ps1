@@ -82,10 +82,10 @@ ALTER TABLE [dbo].[FixPolicyRules] WITH CHECK
     CHECK ([ActionType] <> 'Composite' OR [ActionPayload] IS NULL);
 GO
 
--- Composite scan-rule condition kinds (migration AddScanCheckRuleConditions)
+-- Composite scan-rule condition kinds (migrations AddScanCheckRuleConditions + AllowNewDbConditionKinds)
 ALTER TABLE [dbo].[ScanCheckRuleConditions] WITH CHECK
     ADD CONSTRAINT [CK_ScanCheckRuleConditions_Kind_Allowed]
-    CHECK ([Kind] IN ('ValueEquals', 'ColumnRange', 'FileContent', 'ErrorKeyword'));
+    CHECK ([Kind] IN ('ValueEquals', 'ColumnRange', 'NotEquals', 'Contains', 'InList', 'FileContent', 'ErrorKeyword'));
 GO
 
 -- Mark every migration as applied so future upgrades are plain EF scripts.

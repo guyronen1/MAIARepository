@@ -1,21 +1,32 @@
 import { Component, inject, output, signal } from '@angular/core';
-import { Observable } from 'rxjs';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { HttpErrorResponse } from '@angular/common/http';
+import { Observable, Subject, catchError, map, of, switchMap, timer } from 'rxjs';
 import { FormsModule } from '@angular/forms';
-import { ConfigService, ConnectionInfo, DbProvider, UpsertScanRuleRequest, CreateScanRuleResponse, ScanRuleConditionDto } from '../../../../core/services/config.service';
+import { ConfigService, ConnectionInfo, DbProvider, UpsertScanRuleRequest, CreateScanRuleResponse, ScanRuleConditionDto, SourceColumnInfo } from '../../../../core/services/config.service';
 import { NotificationService } from '../../../../core/services/notification.service';
+import { AuthService } from '../../../../core/services/auth.service';
 import { ScanSource, ScanCheckRule } from '../../../../core/models';
 import { DrawerComponent } from '../../../../shared/drawer/drawer.component';
+import { DB_CHECK_KINDS, ColumnCategory, WATERMARK_COLUMN_CATEGORIES, checkValueError, columnCategoriesForKind, dbCheckKindLabel, usesExpectedValue, valuePlaceholder } from '../../../../core/util/db-check-kinds.util';
+import { columnRef, findColumn, splitColumnList } from '../../../../core/util/source-columns.util';
+import { ColumnPickerComponent } from './column-picker.component';
 
-/** Top-level shape of a Database rule. The per-check kind (ValueEquals / ColumnRange)
- *  is chosen on each condition row, so the header select only distinguishes
+/** Wait after the last Source Table keystroke before looking its columns up. */
+export const COLUMNS_DEBOUNCE_MS = 400;
+
+/** One column lookup: what to load (null table = clear, use free text) and whether to debounce. */
+interface ColumnsRequest { sourceId: number; table: string | null; debounce: boolean; }
+interface ColumnsOutcome { columns: SourceColumnInfo[] | null; hint: string | null; }
+
+/** Top-level shape of a Database rule. The per-check kind (Equals / Not equal /
+ *  Contains / In list / Outside range) is chosen on each condition row, so the header select only distinguishes
  *  "column conditions on one table" from "free SqlQuery". */
 const RULE_MODES = [
   { value: 'Table',    label: 'Column conditions' },
   { value: 'SqlQuery', label: 'SqlQuery' },
 ] as const;
 type RuleMode = typeof RULE_MODES[number]['value'];
-/** Kinds a composite condition may have (Phase 1: DB column predicates only). */
-const CONDITION_KINDS = ['ValueEquals', 'ColumnRange'];
 const FILE_FORMATS    = ['Xml'];
 const PREDICATE_TYPES = ['Equals', 'NotEquals', 'Contains', 'NotContains'];
 const SEVERITIES      = ['Low', 'Medium', 'High', 'Critical'];
@@ -29,7 +40,7 @@ const SEVERITIES      = ['Low', 'Medium', 'High', 'Critical'];
 @Component({
   selector: 'app-scan-rule-drawer',
   standalone: true,
-  imports: [FormsModule, DrawerComponent],
+  imports: [FormsModule, DrawerComponent, ColumnPickerComponent],
   template: `
     <app-drawer [open]="isOpen()" [ariaLabel]="'Scan rule'" (close)="isOpen.set(false)">
       <ng-container drawer-title>
@@ -153,9 +164,17 @@ const SEVERITIES      = ['Low', 'Medium', 'High', 'Critical'];
           } @else {
             <div class="form-group">
               <label>Source Table * @if (isOracle()) { <span class="info" data-tip="Oracle names are case-insensitive here, as in SQL*Plus: Status means STATUS and hr.orders means HR.ORDERS. Only a name created with quotes in mixed case needs them — type it as &quot;MixedCase&quot;. The same applies to every column field below.">ⓘ</span>}</label>
-              <input [(ngModel)]="form.sourceTable" [placeholder]="isOracle() ? 'SCHEMA.TABLE' : 'dbo.Files'" />
+              <input [ngModel]="form.sourceTable" (ngModelChange)="onSourceTableChange($event)" [placeholder]="isOracle() ? 'SCHEMA.TABLE' : 'dbo.Files'" />
               @if (isOracle()) { <span class="field-hint">Oracle — names are case-insensitive (<code>Status</code> = <code>STATUS</code>).</span> }
+              @if (columnsLoading()) {
+                <span class="field-hint">Loading the table's columns…</span>
+              } @else if (columnsHint(); as hint) {
+                <span class="field-hint cols-hint">{{ hint }}</span>
+              }
             </div>
+            @if (staleColumns().length) {
+              <div class="soft-warn span2">⚠ Not a column of <code>{{ form.sourceTable }}</code>: <strong>{{ staleColumns().join(', ') }}</strong>. Pick an existing column; the scan fails on a missing one. Saving is still allowed.</div>
+            }
             <!-- Conditions: line 1 is the rule's own check (CheckType / TargetField /
                  ExpectedValue or Min-Max on the rule itself); lines 2+ are the extra
                  AND'd conditions. Same row layout for all so they read as one list. -->
@@ -165,11 +184,12 @@ const SEVERITIES      = ['Low', 'Medium', 'High', 'Critical'];
                 <div class="cond-row cond-main">
                   <span class="cond-order">1.</span>
                   <select [ngModel]="form.checkType" (ngModelChange)="onCheckTypeChange($event)" class="cond-kind" aria-label="Check 1 kind">
-                    @for (k of conditionKinds; track k) { <option [ngValue]="k">{{ k }}</option> }
+                    @for (k of conditionKinds; track k) { <option [ngValue]="k">{{ kindLabel(k) }}</option> }
                   </select>
-                  <input [(ngModel)]="form.targetField" class="cond-col" placeholder="Column *" aria-label="Check 1 column" />
-                  @if (form.checkType === 'ValueEquals') {
-                    <input [(ngModel)]="form.expectedValue" class="cond-val" placeholder="= value" aria-label="Check 1 expected value" />
+                  <app-column-picker class="compact" [(value)]="form.targetField" [columns]="columns()" [allowed]="kindCategories(form.checkType)"
+                                     [provider]="provider()" [required]="true" placeholder="Column *" ariaLabel="Check 1 column" />
+                  @if (usesValue(form.checkType)) {
+                    <input [(ngModel)]="form.expectedValue" class="cond-val" [placeholder]="valuePlaceholder(form.checkType)" aria-label="Check 1 expected value" />
                   } @else {
                     <span class="cond-range">
                       <input type="number" [(ngModel)]="form.minValue" class="cond-val" placeholder="min (−∞)" aria-label="Check 1 min" />
@@ -182,11 +202,12 @@ const SEVERITIES      = ['Low', 'Medium', 'High', 'Critical'];
                   <div class="cond-row">
                     <span class="cond-order">{{ i + 2 }}.</span>
                     <select [ngModel]="c.kind" (ngModelChange)="setConditionKind(c, $event)" class="cond-kind" [attr.aria-label]="'Check ' + (i + 2) + ' kind'">
-                      @for (k of conditionKinds; track k) { <option [ngValue]="k">{{ k }}</option> }
+                      @for (k of conditionKinds; track k) { <option [ngValue]="k">{{ kindLabel(k) }}</option> }
                     </select>
-                    <input [(ngModel)]="c.targetField" class="cond-col" placeholder="Column *" [attr.aria-label]="'Check ' + (i + 2) + ' column'" />
-                    @if (c.kind === 'ValueEquals') {
-                      <input [(ngModel)]="c.expectedValue" class="cond-val" placeholder="= value" [attr.aria-label]="'Check ' + (i + 2) + ' expected value'" />
+                    <app-column-picker class="compact" [(value)]="c.targetField" [columns]="columns()" [allowed]="kindCategories(c.kind)"
+                                       [provider]="provider()" [required]="true" placeholder="Column *" [ariaLabel]="'Check ' + (i + 2) + ' column'" />
+                    @if (usesValue(c.kind)) {
+                      <input [(ngModel)]="c.expectedValue" class="cond-val" [placeholder]="valuePlaceholder(c.kind)" [attr.aria-label]="'Check ' + (i + 2) + ' expected value'" />
                     } @else {
                       <span class="cond-range">
                         <input type="number" [(ngModel)]="c.minValue" class="cond-val" placeholder="min (−∞)" [attr.aria-label]="'Check ' + (i + 2) + ' min'" />
@@ -202,32 +223,51 @@ const SEVERITIES      = ['Low', 'Medium', 'High', 'Critical'];
                 }
               </div>
               <button type="button" class="btn btn-ghost btn-sm cond-add" (click)="addCondition()">+ Add condition</button>
-              <span class="field-hint">All lines are ANDed on the same row; for OR, create separate rules. <code>ValueEquals</code>: column = value. <code>ColumnRange</code>: column outside [min, max].</span>
+              <span class="field-hint">All lines are ANDed on the same row; for OR, create separate rules. <strong>Equals</strong> / <strong>Not equal</strong>: column = / ≠ value (Not equal skips empty (NULL) values). <strong>Contains</strong>: the text appears anywhere in the column. <strong>In list</strong>: column is one of the numbers, e.g. <code>1, 2, 3</code>. <strong>Outside range</strong>: column outside [min, max].</span>
             </div>
             <div class="form-group">
               <label>Source ID Column <span class="text-muted">(row identity)</span></label>
-              <input [(ngModel)]="form.sourceIdColumn" placeholder="Id" />
+              <app-column-picker [(value)]="form.sourceIdColumn" [columns]="columns()" [provider]="provider()" placeholder="Id" ariaLabel="Source ID Column" />
             </div>
             <div class="form-group">
               <label>Reference ID Column <span class="text-muted">(parent / FK key)</span></label>
-              <input [(ngModel)]="form.referenceIdColumn" placeholder="OrderId" />
+              <app-column-picker [(value)]="form.referenceIdColumn" [columns]="columns()" [provider]="provider()" placeholder="OrderId" ariaLabel="Reference ID Column" />
             </div>
             <div class="form-group span2">
               <label>File Path Column <span class="info" data-tip="Optional. Column on the source row holding the input file path → the {sourceFilePath} placeholder. No auto-JOIN — put any JOIN into Source Table and use alias.Column here.">ⓘ</span></label>
-              <input [(ngModel)]="form.filePathColumn" placeholder="e.g. FilePath  or  j.FilePath" />
+              <app-column-picker [(value)]="form.filePathColumn" [columns]="columns()" [allowed]="stringColumns" [provider]="provider()"
+                                 placeholder="e.g. FilePath  or  j.FilePath" ariaLabel="File Path Column" />
               <span class="field-hint">Input file path → <code>{{'{'}}sourceFilePath{{'}'}}</code>. <code>alias.Column</code> allowed.</span>
             </div>
             <div class="form-group span2">
               <label>Detail Columns <span class="text-muted">(shown on the failure)</span> <span class="info" data-tip="Optional. Comma-separated columns on the source row whose values are appended to the failure's error message, one Column: value line each — e.g. the row's original error text. alias.Column allowed when Source Table has a JOIN. Classification patterns can match these values.">ⓘ</span></label>
-              <input [(ngModel)]="form.detailColumns" placeholder="UpdateDate, Details" />
-              <span class="field-hint">Comma-separated columns appended to the error message.</span>
+              @if (columns(); as cols) {
+                <!-- Multi-select as chips + an add dropdown; still writes the same CSV. -->
+                <div class="detail-picker">
+                  @for (d of detailList(); track $index; let i = $index) {
+                    <span class="detail-chip" [class.is-stale]="isStaleColumn(d)" [attr.title]="isStaleColumn(d) ? d + ' is not a column of this table' : null">
+                      {{ d }}@if (isStaleColumn(d)) { <span class="chip-note">(not in table)</span> }
+                      <button type="button" class="chip-x" (click)="removeDetailColumn(i)" [attr.aria-label]="'Remove ' + d">✕</button>
+                    </span>
+                  }
+                  <select class="detail-add" (change)="addDetailColumn($any($event.target))" aria-label="Add a detail column">
+                    <option value="">+ Add column…</option>
+                    @for (col of detailOptions(); track col.name) { <option [value]="colRef(col)">{{ col.name }} · {{ col.dataType }}</option> }
+                  </select>
+                </div>
+                <span class="field-hint">Columns appended to the error message, in this order.</span>
+              } @else {
+                <input [(ngModel)]="form.detailColumns" placeholder="UpdateDate, Details" />
+                <span class="field-hint">Comma-separated columns appended to the error message.</span>
+              }
             </div>
             <!-- Watermark Column sits last so it reads directly into the
                  "Start scanning from now" checkbox that depends on it. -->
             <div class="form-group span2">
               <label>Watermark Column <span class="text-muted">(scan cursor)</span> <span class="info" data-tip="Incremental scanning: each scan only processes rows whose value here exceeds the last one seen. Blank → every tick re-reads all matching rows.">ⓘ</span></label>
-              <input [(ngModel)]="form.watermarkColumn" placeholder="UpdateDate" />
-              <span class="field-hint">Scan cursor: only rows above the last seen value are processed.</span>
+              <app-column-picker [(value)]="form.watermarkColumn" [columns]="columns()" [allowed]="watermarkColumns" [provider]="provider()"
+                                 placeholder="UpdateDate" ariaLabel="Watermark Column" />
+              <span class="field-hint">Scan cursor: only rows above the last seen value are processed{{ columns() ? ' (date and number columns)' : '' }}.</span>
             </div>
           }
         }
@@ -322,6 +362,13 @@ const SEVERITIES      = ['Low', 'Medium', 'High', 'Critical'];
     .cond-controls { display: flex; gap: 2px; justify-content: flex-end; }
     .cond-row .btn-icon { padding: 2px 6px; font-size: 13px; line-height: 1.2; }
     .cond-add { align-self: flex-start; margin-top: 4px; }
+    .detail-picker { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .detail-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); font-size: 12px; }
+    .detail-chip.is-stale { background: var(--warn-bg); border-color: var(--warn-border); color: var(--warn-text); }
+    .chip-note { font-size: 11px; }
+    .chip-x { border: 0; background: none; color: var(--text-muted); cursor: pointer; padding: 0 4px; font-size: 11px; line-height: 1; }
+    .chip-x:hover { color: var(--text); }
+    .form-group select.detail-add { font-size: 12px; padding: 4px 6px; }
     .drawer-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
     .edit-error { margin-top: 10px; padding: 8px 10px; border-radius: var(--radius-sm); background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; font-size: 12px; }
   `],
@@ -329,9 +376,13 @@ const SEVERITIES      = ['Low', 'Medium', 'High', 'Critical'];
 export class ScanRuleDrawerComponent {
   private svc = inject(ConfigService);
   private notify = inject(NotificationService);
+  private auth = inject(AuthService);
 
   readonly ruleModes      = RULE_MODES;
-  readonly conditionKinds = CONDITION_KINDS;
+  readonly conditionKinds = DB_CHECK_KINDS;
+  readonly kindLabel        = dbCheckKindLabel;
+  readonly usesValue        = usesExpectedValue;
+  readonly valuePlaceholder = valuePlaceholder;
   readonly fileFormats    = FILE_FORMATS;
   readonly predicateTypes = PREDICATE_TYPES;
   readonly severities     = SEVERITIES;
@@ -355,6 +406,119 @@ export class ScanRuleDrawerComponent {
   private connectionsLoading = false;
 
   isOracle(): boolean { return this.isDbSource() && this.provider() === 'Oracle'; }
+
+  // ── Column dropdowns (DB table rules) ───────────────────────────────────────
+  // The Source Table's columns, read live from the source's own database
+  // (`GET /config/scan-sources/{id}/columns`, Admin). null = free-text inputs: SqlQuery
+  // rule, no table yet, not an admin, a JOIN / alias in Source Table, or a failed
+  // lookup (then `columnsHint` says why). Nothing here ever blocks a save.
+
+  readonly kindCategories   = columnCategoriesForKind;
+  readonly watermarkColumns = WATERMARK_COLUMN_CATEGORIES;
+  readonly stringColumns: readonly ColumnCategory[] = ['string'];
+
+  columns        = signal<SourceColumnInfo[] | null>(null);
+  columnsHint    = signal<string | null>(null);
+  columnsLoading = signal(false);
+  /** Successful lookups per (sourceId, table) for the drawer's lifetime. Failures are
+   *  not cached — a connection that was down may be back on the next open. */
+  private columnsCache = new Map<string, SourceColumnInfo[]>();
+  private columnsRequests = new Subject<ColumnsRequest>();
+
+  constructor() {
+    // switchMap: a newer request (another keystroke, re-open, mode switch) cancels the
+    // pending debounce / HTTP call, so a slow answer for an old table can't land last.
+    this.columnsRequests.pipe(
+      switchMap(r => (r.debounce ? timer(COLUMNS_DEBOUNCE_MS) : of(0)).pipe(switchMap(() => this.fetchColumns(r)))),
+      takeUntilDestroyed(),
+    ).subscribe(o => {
+      this.columns.set(o.columns);
+      this.columnsHint.set(o.hint);
+      this.columnsLoading.set(false);
+    });
+  }
+
+  private columnsApply(): boolean {
+    return this.isDbSource() && this.form.checkType !== 'SqlQuery' && this.auth.hasAtLeast('Administrator');
+  }
+
+  private requestColumns(debounce: boolean): void {
+    const table = this.columnsApply() ? this.form.sourceTable?.trim() || null : null;
+    const sourceId = this.source()?.scanSourceId ?? 0;
+    const cached = table ? this.columnsCache.get(this.cacheKey(sourceId, table)) : undefined;
+    // No table / cached → settle now (no flicker, no debounce); else show "loading".
+    this.columnsLoading.set(!!table && !cached);
+    this.columnsRequests.next({ sourceId, table, debounce: debounce && !!table && !cached });
+  }
+
+  private cacheKey(sourceId: number, table: string): string { return `${sourceId}|${table.toLowerCase()}`; }
+
+  private fetchColumns(r: ColumnsRequest): Observable<ColumnsOutcome> {
+    if (!r.table) return of({ columns: null, hint: null });
+    const key = this.cacheKey(r.sourceId, r.table);
+    const cached = this.columnsCache.get(key);
+    if (cached) return of({ columns: cached, hint: null });
+    return this.svc.getSourceColumns(r.sourceId, r.table).pipe(
+      map(cols => { this.columnsCache.set(key, cols); return { columns: cols, hint: null }; }),
+      catchError((e: HttpErrorResponse) => of({ columns: null, hint: this.columnsFailureHint(e, r.table!) })),
+    );
+  }
+
+  private columnsFailureHint(e: HttpErrorResponse, table: string): string {
+    if (e?.error?.error === 'TableNotResolvable')
+      return 'Not a single table (JOIN or alias) — type the column names.';
+    // No { error } body: the request never reached the column lookup. A bare 404 is an
+    // API build without the endpoint (not restarted since the update); status 0 = no API.
+    if (!e?.error?.error && e?.status === 404)
+      return 'The running MAIA API has no column lookup yet (restart / update Maia.API) — type the column names.';
+    if (e?.status === 0)
+      return 'The MAIA API did not answer — type the column names.';
+    const why = e?.error?.message as string | undefined;
+    return `Couldn't load the columns of ${table}${why ? `: ${why}` : ''} — type the column names.`;
+  }
+
+  onSourceTableChange(value: string | null): void {
+    this.form.sourceTable = value;
+    this.requestColumns(true);
+  }
+
+  colRef(c: SourceColumnInfo): string { return columnRef(c.name, this.provider()); }
+
+  /** A saved column reference the loaded table doesn't have. False in free-text mode. */
+  isStaleColumn(ref: string | null | undefined): boolean {
+    const cols = this.columns();
+    return !!cols && !!ref?.trim() && !findColumn(cols, ref, this.provider());
+  }
+
+  /** Every column field's value that isn't in the table (deduped, in form order). */
+  staleColumns(): string[] {
+    if (!this.columns()) return [];
+    const refs = [this.form.targetField, ...this.conditions().map(c => c.targetField),
+                  this.form.sourceIdColumn, this.form.referenceIdColumn, this.form.filePathColumn,
+                  ...this.detailList(), this.form.watermarkColumn];
+    return [...new Set(refs.map(r => r?.trim() ?? '').filter(r => r && this.isStaleColumn(r)))];
+  }
+
+  detailList(): string[] { return splitColumnList(this.form.detailColumns); }
+
+  /** Columns not yet in Detail Columns (any type — detail values are rendered as text). */
+  detailOptions(): SourceColumnInfo[] {
+    const chosen = this.detailList();
+    return (this.columns() ?? []).filter(c => !chosen.some(d => findColumn([c], d, this.provider())));
+  }
+
+  addDetailColumn(select: HTMLSelectElement): void {
+    const ref = select.value;
+    select.value = '';                       // back to "+ Add column…"
+    if (!ref) return;
+    this.form.detailColumns = [...this.detailList(), ref].join(', ');
+  }
+
+  removeDetailColumn(index: number): void {
+    const list = this.detailList();
+    list.splice(index, 1);
+    this.form.detailColumns = list.length ? list.join(', ') : null;
+  }
 
   /** Mirrors the backend's 400 OracleQueryNotSelect — warn before the round trip. */
   oracleQueryNotSelect(): boolean {
@@ -453,16 +617,16 @@ export class ScanRuleDrawerComponent {
    *  onCheckTypeChange). → Table: back to ValueEquals as the line-1 default unless
    *  the rule already is a table kind (then nothing changes). */
   onRuleModeChange(mode: RuleMode): void {
-    if (mode === 'SqlQuery') { this.onCheckTypeChange('SqlQuery'); return; }
-    if (this.form.checkType === 'SqlQuery') this.onCheckTypeChange('ValueEquals');
+    if (mode === 'SqlQuery') { this.onCheckTypeChange('SqlQuery'); this.requestColumns(false); return; }
+    if (this.form.checkType === 'SqlQuery') { this.onCheckTypeChange('ValueEquals'); this.requestColumns(false); }
   }
 
-  /** Line-1 kind select (ValueEquals / ColumnRange) — and the SqlQuery hop from the header. */
+  /** Line-1 kind select (any DB check kind) — and the SqlQuery hop from the header. */
   onCheckTypeChange(next: string): void {
     this.form.checkType = next;
     if (next === 'SqlQuery') this.form.conditions = [];
     // Line 1 (the rule's own check) swaps its value fields like any condition row.
-    if (next === 'ValueEquals') { this.form.minValue = null; this.form.maxValue = null; }
+    if (usesExpectedValue(next)) { this.form.minValue = null; this.form.maxValue = null; }
     else if (next === 'ColumnRange') { this.form.expectedValue = null; }
   }
 
@@ -490,18 +654,22 @@ export class ScanRuleDrawerComponent {
    *  ride along (the backend nulls them too — this just keeps the form honest). */
   setConditionKind(c: ScanRuleConditionDto, kind: string): void {
     c.kind = kind;
-    if (kind === 'ValueEquals') { c.minValue = null; c.maxValue = null; }
+    if (usesExpectedValue(kind)) { c.minValue = null; c.maxValue = null; }
     else { c.expectedValue = null; }
   }
-  /** Client-side guard mirroring the backend's ConditionIncomplete 400. Numbers
-   *  match the drawer's lines: line 1 is the rule's own check, so condition
-   *  order N is shown as line N + 1. */
+  /** Client-side guard mirroring the backend's CheckValueRequired / InvalidInList /
+   *  ConditionIncomplete 400s. Numbers match the drawer's lines: line 1 is the rule's
+   *  own check, so condition order N is shown as line N + 1. */
   private conditionsError(): string | null {
+    if (this.isDbSource() && this.form.checkType !== 'SqlQuery') {
+      const e = checkValueError(this.form.checkType, this.form.expectedValue, this.form.minValue, this.form.maxValue);
+      if (e) return `Line 1 (${this.form.targetField}): ${e}.`;
+    }
     for (const c of this.conditions()) {
       const n = c.conditionOrder + 1;
       if (!c.targetField?.trim()) return `Line ${n}: column is required.`;
-      if (c.kind === 'ValueEquals' && !(c.expectedValue ?? '').toString().trim()) return `Line ${n} (${c.targetField}): expected value is required.`;
-      if (c.kind === 'ColumnRange' && c.minValue == null && c.maxValue == null) return `Line ${n} (${c.targetField}): set a min or a max.`;
+      const e = checkValueError(c.kind, c.expectedValue, c.minValue, c.maxValue);
+      if (e) return `Line ${n} (${c.targetField}): ${e}.`;
     }
     return null;
   }
@@ -530,6 +698,10 @@ export class ScanRuleDrawerComponent {
       })),
     } : this.blank(source.scanTypeId);
     this.loadProvider();
+    // Never show the previous rule's / source's columns while this one loads.
+    this.columns.set(null);
+    this.columnsHint.set(null);
+    this.requestColumns(false);
     this.isOpen.set(true);
   }
 

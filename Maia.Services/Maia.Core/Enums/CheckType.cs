@@ -8,5 +8,8 @@ public enum CheckType
     ResponseContains = 3,  // ApiEndpoint: response body contains TargetField text
     ValueEquals      = 4,  // Database: column value exactly equals ExpectedValue → flag as error
     FileContent      = 5,  // FileContent: match files by TargetField (filename pattern), extract + test a value
-    SqlQuery         = 6   // Database: run operator-written SQL/EXEC (SourceTable); every returned row is a failure
+    SqlQuery         = 6,  // Database: run operator-written SQL/EXEC (SourceTable); every returned row is a failure
+    NotEquals        = 7,  // Database: column value <> ExpectedValue → flag (NULL rows are not flagged)
+    Contains         = 8,  // Database: column LIKE '%ExpectedValue%' (text matched literally) → flag
+    InList           = 9   // Database: column IN (ExpectedValue's comma-separated numbers) → flag
 }

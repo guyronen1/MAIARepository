@@ -8,6 +8,11 @@ export interface JobType    { jobTypeId: number; name: string; description: stri
 /** Engine behind a connection. 'Unknown' = an unrecognised `{Name}_ProviderName` (a source save is a 400). */
 export type DbProvider = 'SqlServer' | 'Oracle' | 'Unknown';
 export interface ConnectionInfo { name: string; provider: DbProvider; }
+/** Coarse type family of a source column, computed by the API (backend `ColumnTypeCategory`). */
+export type ColumnTypeCategory = 'string' | 'number' | 'date' | 'other';
+/** One column of a Database source's table (`GET …/scan-sources/{id}/columns`), in table order.
+ *  `name` is the catalog spelling; `dataType` is for display (`nvarchar(50)`, `NUMBER(10,2)`). */
+export interface SourceColumnInfo { name: string; dataType: string; isNullable: boolean; typeCategory: ColumnTypeCategory; }
 export interface ErrorType  {
   errorTypeId: number; code: string; displayName: string;
   description?: string | null; severity: string; isActive?: boolean;
@@ -121,7 +126,7 @@ export interface UpsertScanRuleRequest {
 /** Write shape of one composite-scan-rule condition (no id — replaced wholesale). */
 export interface ScanRuleConditionDto {
   conditionOrder: number;
-  /** 'ValueEquals' | 'ColumnRange' (Phase 1). */
+  /** 'ValueEquals' | 'NotEquals' | 'Contains' | 'InList' | 'ColumnRange' (see db-check-kinds.util). */
   kind:           string;
   /** Column on the source row. */
   targetField:    string;
@@ -174,6 +179,12 @@ export class ConfigService {
   /** ConnectionStrings keys from the API's appsettings with each one's engine
    *  (`{Name}_ProviderName`; names only, never values). Admin. */
   getConnections(): Observable<ConnectionInfo[]> { return this.http.get<ConnectionInfo[]>(`${this.base}/connection-names`); }
+  /** Columns of `table` on a Database source's own database, read live from its catalog.
+   *  Admin. 400 `TableNotResolvable` = not a single table (JOIN / alias) → use free text. */
+  getSourceColumns(sourceId: number, table: string): Observable<SourceColumnInfo[]> {
+    return this.http.get<SourceColumnInfo[]>(`${this.base}/scan-sources/${sourceId}/columns`,
+      { params: new HttpParams().set('table', table) });
+  }
   /** Sub-folders of `path` on the MAIA server; omit `path` for the roots. Admin. */
   browseFolders(path?: string | null): Observable<FolderListing> {
     const params = path ? new HttpParams().set('path', path) : undefined;

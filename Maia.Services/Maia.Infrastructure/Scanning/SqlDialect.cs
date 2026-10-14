@@ -5,7 +5,7 @@ namespace Maia.Infrastructure.Scanning;
 
 /// <summary>
 /// The engine-specific pieces of the SQL that <see cref="DatabaseScanStrategy"/>
-/// generates for table rules (ColumnRange / ValueEquals): identifier quoting, bind
+/// generates for table rules (ColumnRange / ValueEquals / NotEquals / Contains / InList): identifier quoting, bind
 /// placeholders, value-to-text projections and the row-capped query shape. Picked per
 /// scan source from its connection's <see cref="DbProvider"/>. The SQL Server dialect
 /// reproduces the pre-Oracle T-SQL byte-for-byte; SqlQuery rules don't go through here
@@ -66,8 +66,35 @@ internal abstract class SqlDialect
     /// <paramref name="where"/> (the View Source row lookup).</summary>
     public abstract string SelectAllWhereQuery(string table, string where, int maxRows);
 
+    /// <summary>Escape character for <see cref="ContainsPattern"/>; the caller appends
+    /// <c>ESCAPE '\'</c> to the LIKE.</summary>
+    public const char LikeEscape = '\\';
+
+    /// <summary>
+    /// The bound LIKE value for a Contains check: the operator's text with the engine's
+    /// LIKE metacharacters escaped (so it matches literally) between two <c>%</c>.
+    /// The text is always a parameter — never spliced into the SQL.
+    /// </summary>
+    public string ContainsPattern(string text)
+    {
+        var sb = new System.Text.StringBuilder("%");
+        foreach (var ch in text)
+        {
+            if (ch == LikeEscape || IsLikeMetaChar(ch)) sb.Append(LikeEscape);
+            sb.Append(ch);
+        }
+        return sb.Append('%').ToString();
+    }
+
+    /// <summary>Characters LIKE treats as wildcards: <c>%</c> and <c>_</c> everywhere;
+    /// SQL Server adds the <c>[…]</c> character class. (Oracle rejects an escape before
+    /// any other character — ORA-01424 — so only these may be escaped.)</summary>
+    protected virtual bool IsLikeMetaChar(char ch) => ch is '%' or '_';
+
     private sealed class SqlServerDialect : SqlDialect
     {
+        protected override bool IsLikeMetaChar(char ch) => ch is '%' or '_' or '[';
+
         public override string QuoteIdentifier(string identifier) => "[" + identifier.Replace("]", "]]") + "]";
         protected override string QuoteTablePart(string part) => QuoteIdentifier(part.Trim('[', ']'));
 
@@ -119,7 +146,7 @@ internal abstract class SqlDialect
     /// NUMBER columns. Uses <c>ROWNUM</c> rather than <c>FETCH FIRST</c> so it runs on
     /// 11g as well as 12c+.
     /// </summary>
-    private sealed class OracleDialect : SqlDialect
+    internal sealed class OracleDialect : SqlDialect
     {
         // An identifier Oracle would accept unquoted. Unquoted names are stored upper-case,
         // so "Status" means STATUS — quoting it as-is ("Status") would look for a
@@ -133,7 +160,15 @@ internal abstract class SqlDialect
         /// (spaces etc.) → quoted exactly. Oracle identifiers can never contain a
         /// double quote, so one left inside is refused rather than escaped.
         /// </summary>
-        public override string QuoteIdentifier(string identifier)
+        public override string QuoteIdentifier(string identifier) => "\"" + CatalogName(identifier) + "\"";
+
+        /// <summary>
+        /// The exact name Oracle stores for <paramref name="identifier"/> — what
+        /// <see cref="QuoteIdentifier"/> quotes, and what the data dictionary
+        /// (<c>ALL_TAB_COLUMNS.OWNER / TABLE_NAME</c>) holds: plain → upper-case,
+        /// "Quoted" → exact.
+        /// </summary>
+        public static string CatalogName(string identifier)
         {
             var s = identifier.Trim();
             if (s.Length >= 2 && s[0] == '"' && s[^1] == '"')
@@ -145,7 +180,7 @@ internal abstract class SqlDialect
             }
             if (s.Length == 0 || s.Contains('"'))
                 throw new InvalidOperationException($"'{identifier}' is not a valid Oracle identifier.");
-            return "\"" + s + "\"";
+            return s;
         }
 
         public override string QuoteColumnRef(string columnRef)

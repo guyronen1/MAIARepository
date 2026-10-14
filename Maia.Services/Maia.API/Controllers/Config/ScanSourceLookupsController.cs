@@ -1,3 +1,5 @@
+using Maia.Core.Interfaces;
+using Maia.Core.Results;
 using Maia.Core.Scanning;
 using Maia.Infrastructure.Scanning;
 using Microsoft.AspNetCore.Authorization;
@@ -6,18 +8,21 @@ using Microsoft.AspNetCore.Mvc;
 namespace Maia.API.Controllers;
 
 /// <summary>
-/// Pickers for the Scan Source drawer: the configured connection-string KEYS (never
-/// values) for Database sources, and a server-side folder browser for FileSystem /
-/// FileContent sources. Server-side because the folder must be readable by the API /
-/// worker host, and a browser can't hand back a full local path anyway. Admin-only —
-/// source create/update is Admin, and listing the host's folders is more sensitive
-/// than the Operator config reads. Directories only, never files.
+/// Pickers for the Scan Source / Scan Rule drawers: the configured connection-string
+/// KEYS (never values) for Database sources, a server-side folder browser for
+/// FileSystem / FileContent sources, and the column list of a Database source's table
+/// for the scan-rule column dropdowns. Server-side because the folder must be readable
+/// by the API / worker host, and a browser can't hand back a full local path anyway.
+/// Admin-only — source create/update is Admin, and listing the host's folders or a
+/// source database's schema is more sensitive than the Operator config reads.
+/// Directories only, never files.
 /// </summary>
 [ApiController]
 [Route("api/config")]
 [Authorize(Policy = "RequireAdmin")]
 public class ScanSourceLookupsController(
     IConfiguration                        config,
+    ISourceSchemaReader                   schemaReader,
     ILogger<ScanSourceLookupsController>  logger) : ControllerBase
 {
     private const int MaxFolders = 500;
@@ -106,6 +111,28 @@ public class ScanSourceLookupsController(
             parent = null;
 
         return Ok(new FolderListing(full, parent, folders, roots, truncated));
+    }
+
+    /// <summary>
+    /// Columns of <paramref name="table"/> on the Database source's own database
+    /// (resolved like the scan: ConnectionName, engine from <c>{Name}_ProviderName</c>),
+    /// as <c>[{ name, dataType, isNullable, typeCategory }]</c> in table order. Dead ends
+    /// are 400/404 with <c>{ error, message }</c>, never 403 — the client toasts a plain
+    /// 403 as "no permission", which is reserved for the role check.
+    /// <c>TableNotResolvable</c> (a JOIN / alias / three-part name) tells the drawer to
+    /// keep free-text column inputs.
+    /// </summary>
+    [HttpGet("scan-sources/{sourceId:int}/columns")]
+    public async Task<IActionResult> GetSourceColumns(int sourceId, [FromQuery] string? table, CancellationToken ct)
+    {
+        var result = await schemaReader.GetColumnsAsync(sourceId, table, ct);
+        var body = new { error = result.Status.ToString(), message = result.Message };
+        return result.Status switch
+        {
+            TableColumnsStatus.Ok => Ok(result.Columns),
+            TableColumnsStatus.SourceNotFound or TableColumnsStatus.TableNotFound => NotFound(body),
+            _ => BadRequest(body),
+        };
     }
 
     private string[] ConfiguredRoots() =>

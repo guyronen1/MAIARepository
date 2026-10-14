@@ -125,6 +125,9 @@ public static class ServiceCollectionExtensions
         // "View Source" popup - live read of a failure's source row / log / data file.
         services.AddScoped<ISourceDataReader, SourceDataReader>();
 
+        // Scan-rule drawer column dropdowns - catalog read of a DB source's table.
+        services.AddScoped<ISourceSchemaReader, SourceSchemaReader>();
+
         // Save-time guard for SqlScript fix payloads (layer-1 write block). Stateless.
         services.AddSingleton<ISqlFixScopeValidator, SqlFixScopeValidator>();
 

@@ -387,6 +387,59 @@ public class ScanSourceCrudTests : IAsyncLifetime
         Assert.Contains(_audit.Rows, a => a.EventType == "ScanRuleUpdated" && a.Detail!.Contains("→ '(none)'"));
     }
 
+    // ── New DB check kinds: NotEquals / Contains / InList (2026-10-14) ──────────
+
+    [Theory]
+    [InlineData("NotEquals", null,    "CheckValueRequired")]
+    [InlineData("Contains",  "   ",   "CheckValueRequired")]
+    [InlineData("InList",    "1, x",  "InvalidInList")]
+    [InlineData("InList",    null,    "InvalidInList")]
+    public async Task New_kind_without_a_usable_value_is_rejected(string kind, string? expected, string error)
+    {
+        var sid = await DbSourceAsync();
+        var r = await _rules.CreateScanRuleForSource(sid, DbRule(kind, "Status", expected), default);
+        Assert.Equal(error, ErrorOf(r));
+    }
+
+    [Fact]
+    public async Task InList_value_is_normalised_and_unused_bounds_dropped()
+    {
+        var sid = await DbSourceAsync();
+        var r = await _rules.CreateScanRuleForSource(sid, DbRule("InList", "Code", "1,2 ,  3", min: 1m, max: 9m), default);
+        Assert.IsType<OkObjectResult>(r);
+
+        var rule = await _db.ScanCheckRules.AsNoTracking().FirstAsync(x => x.ScanSourceId == sid);
+        Assert.Equal(Maia.Core.Enums.CheckType.InList, rule.CheckType);
+        Assert.Equal("1, 2, 3", rule.ExpectedValue);
+        Assert.Null(rule.MinValue); Assert.Null(rule.MaxValue);
+    }
+
+    [Fact]
+    public async Task New_kinds_are_accepted_as_parent_and_as_conditions_and_audited()
+    {
+        var sid = await DbSourceAsync();
+        var r = await _rules.CreateScanRuleForSource(sid, DbRule("Contains", "Details", "timeout", conditions:
+        [
+            new ScanRuleConditionDto(1, "NotEquals", "Region", "EU"),
+            new ScanRuleConditionDto(2, "InList",    "Code",   "5,7"),
+        ]), default);
+        Assert.IsType<OkObjectResult>(r);
+
+        var conds = await _db.ScanCheckRuleConditions.AsNoTracking().OrderBy(c => c.ConditionOrder).ToListAsync();
+        Assert.Equal("5, 7", conds[1].ExpectedValue);
+        Assert.Contains(_audit.Rows, a => a.EventType == "ScanRuleCreated"
+            && a.Detail!.Contains("1:NotEquals Region<>EU AND 2:InList Code in (5, 7)"));
+    }
+
+    [Fact]
+    public async Task Incomplete_new_kind_condition_is_rejected_ConditionIncomplete()
+    {
+        var sid = await DbSourceAsync();
+        var r = await _rules.CreateScanRuleForSource(sid,
+            DbRule("ValueEquals", "Status", "5", conditions: [new ScanRuleConditionDto(1, "InList", "Code", "a,b")]), default);
+        Assert.Equal("ConditionIncomplete", ErrorOf(r));
+    }
+
     // ── Fakes ─────────────────────────────────────────────────────────────────────
 
     private sealed class CapturingAudit : IAuditRepository

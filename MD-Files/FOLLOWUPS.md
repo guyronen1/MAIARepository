@@ -236,3 +236,34 @@ Context: `GET /api/data/failures/{id}/source` + `SourceViewerComponent` (see DEC
 - **Oracle row lookup is unverified live.** The SQL is unit-tested (`SELECT * … WHERE ("KEY" = :p_Id) AND ROWNUM <= 5`); add it to the Oracle live-verification list above.
 - **Access tier.** It is open to `RequireUser` by choice. If source rows turn out to hold data Users shouldn't see, switch the action to `RequireOperator` and gate the button on `canAct()`.
 - **Not deployed / not exercised through the running API.** It was verified via a scratch harness calling `SourceDataReader` against `MaiaDB_Test` (DB row, FS log, FileContent XML), because a running `Maia.API` was holding `bin/Debug`. Restart the API and click through it once.
+
+## Scan-rule drawer: more DB check types + column picker (requested 2026-10-14, both items shipped 2026-10-14)
+
+Scope: **Database** scan rules on a **table** (`ValueEquals` / `ColumnRange` shape), not SqlQuery. Coordinate with the Oracle work (`SqlDialect`), because each new predicate needs a SQL Server and an Oracle rendering.
+
+1. ~~**New check types: Not Equal, Contains (strings), In List (numbers).**~~ **SHIPPED 2026-10-14** (see DECISIONS → "Database check kinds NotEquals / Contains / InList"). Backend 461 tests green, frontend 110 green. SQL Server predicates checked against `B2B_Test`. **Still owed: an Oracle live run** of Contains / InList / NotEquals, which falls under the Oracle live-verification item above.
+   - **Decided 2026-10-14 (operator):**
+     - "Include for numbers" = **In List**, i.e. `col IN (1, 2, 3)`. Not Inside Range.
+     - **Contains** = `col LIKE '%xxx%'`.
+     - **Not Equal ignores NULL rows**: plain `col <> @v`, so a NULL column is never flagged.
+   - **Enum:** append `NotEquals = 7`, `Contains = 8`, `InList = 9` to `CheckType`. Don't renumber; the column is stored as a string name, so `ScanCheckRules` needs no migration. All three reuse `ExpectedValue`; for InList it holds a comma-separated list. No new columns.
+   - **SQL** (`DatabaseScanStrategy.BuildFilterClause`, shared with `QueryFilteredMaxAsync`, so the watermark baseline and "Start scanning from now" follow automatically):
+     - NotEquals → `col <> @v` (NULL rows are deliberately not flagged; pin that with a test).
+     - Contains → `col LIKE '%' + @v + '%'`. The operator's text is passed as a parameter, with its own `%`/`_`/`[` escaped (`ESCAPE` clause) so it matches literally. Oracle needs its own escaping. Case sensitivity follows the column collation, so document that.
+     - InList → `col IN (@p0, @p1, …)`, one parameter per item, never string-built.
+   - **Validation** (`ScanRulesConfigController`, 400s): Contains needs non-empty text. InList needs 1..N numbers (reject non-numeric items, cap the count). NotEquals needs a value.
+   - **Message and classifier token** (`BuildRowMessageHead`): the token is `[Field=<actual row value>]`, like ColumnRange, because the operator's value isn't what the row holds. The parent token stays first, so the classifier contract is unchanged.
+   - **Coverage markers / Flow view** (`coverage-match.util.ts` `classPatternForScanRule`): treat the new kinds like ColumnRange (pattern = column name). Keep the "coverage gap ⇔ matcher `'gap'`" invariant and extend `coverage-match.util.spec.ts`.
+   - **As extra conditions:** allow the new kinds in `ScanCheckRuleCondition` as well. This needs a migration that widens `CK_ScanCheckRuleConditions_Kind_Allowed`, plus `schema-clean.sql` and the upgrade script (local DBs are script-managed). Widen the `ConditionsNotSupported` / `ConditionKindMismatch` checks to accept them as parents too.
+   - **UI** (`scan-rule-drawer.component.ts`): add them to `CONDITION_KINDS` (main row and condition rows), with a value input per kind: text for NotEquals/Contains, `5, 7, 9` with a hint for InList. Add matching client-side guards.
+   - **Tests:** strategy SQL + message tests per kind (incl. Oracle dialect), controller 400s, drawer spec, coverage util spec.
+
+2. ~~**Column dropdowns loaded from the source table.**~~ **SHIPPED 2026-10-14** (see DECISIONS → "Scan-rule column dropdowns"). `GET /api/config/scan-sources/{sourceId}/columns?table=` (Admin, in `AuthorizationMatrixTests`) → `ISourceSchemaReader`. Backend 559 tests green, frontend 126 green.
+   - **Verified live** (scratch harness calling the real `SourceSchemaReader` against `MaiaDB_Test`, because the running `Maia.API` holds `bin`): `B2BTest` → `dbo.Files`, `Files`, `[dbo].[Files]`, `dbo.files` all list the 27 columns with the right types / categories; `dbo.Event` too; a missing table → `TableNotFound`; a JOIN → `TableNotResolvable`; unknown source → `SourceNotFound`; `OracleTest` → `ConnectionFailed` (ORA-12154, alias `ORCL` doesn't resolve on this machine).
+   - **Still owed:**
+     - **Not exercised through the HTTP API or the browser.** Restart `Maia.API`, open a DB table rule as admin and click through: acceptance 1–4 (dbo.Files lists columns, Contains offers only strings, a JOIN keeps free text, a dead connection shows the hint and still saves). Acceptance 5 (User/Operator 403) is covered by the auth matrix.
+     - **Oracle catalog query unverified live** (`ALL_TAB_COLUMNS` with owner/table binds, the `CURRENT_SCHEMA` default and the synonym fallback are unit-tested only). Add it to the Oracle live-verification list above.
+     - **SQL Server synonyms** resolve to `TableNotFound` (`OBJECT_ID` returns the synonym, which has no `sys.columns`). Follow `sys.synonyms.base_object_name` if anyone scans through one; until then free text still works.
+   - **Next steps (out of scope here):**
+     - A **table dropdown** for Source Table itself (`…/scan-sources/{id}/tables`, same reader seam: `sys.objects` / `ALL_TABLES` + `ALL_VIEWS`).
+     - **Columns for SqlQuery rules** from the query's result shape: `sp_describe_first_result_set` on SQL Server; on Oracle, describe a `WHERE 1=0` wrap through `DbDataReader.GetColumnSchema()`. Must stay read-only: no execution of an `EXEC`.
