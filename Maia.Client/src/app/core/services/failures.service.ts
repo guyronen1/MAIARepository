@@ -2,7 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { environment } from '../../../environments/environment';
-import { JobFailure, FailureStatus, PagedResult } from '../models';
+import { JobFailure, FailureStatus, PagedResult, SourceData } from '../models';
 
 export interface DashboardStats {
   totalFailures:        number;
@@ -46,6 +46,11 @@ export class FailuresService {
 
   getFailureStatus(failureId: number): Observable<FailureStatus> {
     return this.http.get<FailureStatus>(`${this.base}/failures/${failureId}/status`);
+  }
+
+  /** Live source row / log / data file behind a failure ("View Source"). */
+  getFailureSource(failureId: number): Observable<SourceData> {
+    return this.http.get<SourceData>(`${this.base}/failures/${failureId}/source`);
   }
 
   /**

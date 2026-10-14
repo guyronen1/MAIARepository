@@ -122,6 +122,9 @@ public static class ServiceCollectionExtensions
         // config controllers (insert-only; see IScanWatermarkSeeder).
         services.AddScoped<IScanWatermarkSeeder, ScanWatermarkSeeder>();
 
+        // "View Source" popup - live read of a failure's source row / log / data file.
+        services.AddScoped<ISourceDataReader, SourceDataReader>();
+
         // Save-time guard for SqlScript fix payloads (layer-1 write block). Stateless.
         services.AddSingleton<ISqlFixScopeValidator, SqlFixScopeValidator>();
 

@@ -147,6 +147,7 @@ public class OperatorActionHistoryTests : IAsyncLifetime
             Mock.Of<IMonitoredJobRepository>(),
             Mock.Of<IScanRunHistoryRepository>(),
             Mock.Of<IWorkerControlService>(),
+            Mock.Of<ISourceDataReader>(),
             _factory);
 
         var result = await controller.GetOperatorActions(

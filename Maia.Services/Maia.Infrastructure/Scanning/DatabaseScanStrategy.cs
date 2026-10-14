@@ -193,6 +193,7 @@ public sealed class DatabaseScanStrategy(
                     JobTypeId      = job.JobTypeId,          // identity from the job
                     MonitoredJobId = job.MonitoredJobId,
                     ScanSourceId   = source.ScanSourceId,    // which source produced it
+                    ScanCheckRuleId = rule.CheckRuleId,      // which rule (View Source lookup)
                     StepName       = stepName,
                     SourceId       = row.SourceIdValue ?? row.RowKey,
                     ReferenceId    = row.ReferenceIdValue,   // null when rule.ReferenceIdColumn unset

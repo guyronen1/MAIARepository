@@ -1,4 +1,4 @@
-import { Component, OnDestroy, computed, effect, inject, input, signal } from '@angular/core';
+import { Component, OnDestroy, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { DatePipe, PercentPipe } from '@angular/common';
 import { FailuresService } from '../../core/services/failures.service';
 import { RecommendationsService } from '../../core/services/recommendations.service';
@@ -9,7 +9,9 @@ import { AssistantService } from '../../core/services/assistant.service';
 import { FailureStatus, FixExecution, Recommendation } from '../../core/models';
 import { PluralizePipe } from '../../core/pipes/pluralize.pipe';
 import { confidenceBand } from '../../core/util/confidence.util';
+import { parseErrorMessage } from '../../core/util/error-message.util';
 import { StatusBadgeComponent } from '../../shared/status-badge/status-badge.component';
+import { SourceViewerComponent } from '../../shared/source-viewer/source-viewer.component';
 
 /**
  * Pure detail-content for a single failure. Input-driven — the host (currently
@@ -21,12 +23,23 @@ import { StatusBadgeComponent } from '../../shared/status-badge/status-badge.com
 @Component({
   selector: 'app-failure-detail',
   standalone: true,
-  imports: [DatePipe, PercentPipe, PluralizePipe, StatusBadgeComponent],
+  imports: [DatePipe, PercentPipe, PluralizePipe, StatusBadgeComponent, SourceViewerComponent],
   template: `
     <div class="detail-root">
       @if (loading()) {
         <div class="loading-overlay" style="height:300px"><span class="spinner"></span> Loading…</div>
       } @else if (failure()) {
+        @if (assistant.available()) {
+          <!-- Top of the drawer: opens the knowledge-assistant drawer with this
+               failure in the composer; the operator edits and sends (nothing is
+               asked yet). -->
+          <div class="detail-toolbar">
+            <button class="btn btn-ghost btn-sm" type="button" (click)="askAssistant()"
+                    [title]="'Ask ' + assistant.assistantName() + ' about this failure'">
+              ✦ Ask {{ assistant.assistantName() }}
+            </button>
+          </div>
+        }
         <!-- Stage pipeline -->
         <div class="card">
           <div class="stage-pipeline">
@@ -61,12 +74,11 @@ import { StatusBadgeComponent } from '../../shared/status-badge/status-badge.com
               <h3>Failure Details</h3>
               <div class="header-actions">
                 <app-status-badge [status]="failure()!.status" />
-                @if (assistant.available()) {
-                  <!-- Opens the knowledge-assistant drawer with this failure in the
-                       composer; the operator edits and sends (nothing is asked yet). -->
-                  <button class="btn btn-ghost btn-sm" type="button" (click)="askAssistant()"
-                          [title]="'Ask ' + assistant.assistantName() + ' about this failure'">
-                    ✦ Ask {{ assistant.assistantName() }}
+                @if (canViewSource()) {
+                  <!-- Live source row / log / data file in a modal over the drawer. -->
+                  <button class="btn btn-ghost btn-sm" type="button" (click)="sourceOpen.set(true)"
+                          title="Open the source data this failure was detected in">
+                    🔎 View Source
                   </button>
                 }
                 @if (canAct() && (failure()!.status === 'AwaitingManualAction' || failure()!.status === 'ManualRequired')) {
@@ -103,9 +115,34 @@ import { StatusBadgeComponent } from '../../shared/status-badge/status-badge.com
               <dt>Stage</dt>      <dd><span class="badge badge-info">{{ failure()!.stage }}</span></dd>
             </dl>
             @if (failure()!.errorMessage) {
+              <!-- Line 1 is the failure message; DB rules' Detail Columns follow as
+                   "Column: value" lines, shown as a field table (display-only — the
+                   stored text is what the classifier matched). -->
               <div class="error-message-box">
-                <label>Error Message</label>
-                <pre dir="auto">{{ failure()!.errorMessage }}</pre>
+                <div class="em-label-row">
+                  <label>Error Message</label>
+                  @if (parsedMessage().fields.length) {
+                    <button type="button" class="em-raw-toggle" (click)="showRawMessage.set(!showRawMessage())"
+                            [attr.aria-pressed]="showRawMessage()">{{ showRawMessage() ? 'Show fields' : 'Show raw' }}</button>
+                  }
+                </div>
+                @if (showRawMessage() || !parsedMessage().fields.length) {
+                  <pre dir="auto">{{ failure()!.errorMessage }}</pre>
+                } @else {
+                  <pre dir="auto">{{ parsedMessage().head }}</pre>
+                  <table class="em-fields" aria-label="Error message fields">
+                    <tbody>
+                      @for (f of parsedMessage().fields; track $index) {
+                        @if (f.wide) {
+                          <tr class="em-wide-name"><th scope="row" colspan="2">{{ f.name }}</th></tr>
+                          <tr class="em-wide-value"><td colspan="2" dir="auto" [class.em-muted]="f.muted">{{ f.value }}</td></tr>
+                        } @else {
+                          <tr><th scope="row">{{ f.name }}</th><td dir="auto" [class.em-muted]="f.muted">{{ f.value }}</td></tr>
+                        }
+                      }
+                    </tbody>
+                  </table>
+                }
               </div>
             }
           </div>
@@ -307,6 +344,7 @@ import { StatusBadgeComponent } from '../../shared/status-badge/status-badge.com
           </div>
         }
       }
+      <app-source-viewer [open]="sourceOpen()" [failureId]="failureId()" (closed)="sourceOpen.set(false)" />
     </div>
   `,
   styles: [`
@@ -343,12 +381,29 @@ import { StatusBadgeComponent } from '../../shared/status-badge/status-badge.com
       margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);
       label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: 8px; }
       pre { font-family: 'Fira Code', monospace; font-size: 11px; color: var(--danger); background: var(--danger-bg); border-radius: var(--radius-sm); padding: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+      .em-label-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px;
+        label { margin-bottom: 0; }
+      }
+      .em-raw-toggle { background: none; border: none; padding: 0; font-size: 11px; font-weight: 600; color: var(--primary); cursor: pointer; text-decoration: underline; }
+      .em-raw-toggle:hover { color: var(--primary-dark); }
+      /* Detail Columns: name | value, names in the accent colour so they read as
+         labels; long values get their own full-width row under the name. */
+      .em-fields { width: 100%; margin-top: 8px; border-collapse: collapse; table-layout: auto; font-size: 12px;
+        th, td { padding: 5px 8px; border-bottom: 1px solid var(--border-light); text-align: start; vertical-align: top; }
+        th { width: 1%; white-space: nowrap; font-weight: 600; color: var(--primary); font-family: 'Fira Code', ui-monospace, Menlo, Consolas, monospace; font-size: 11px; }
+        td { color: var(--text); font-family: 'Fira Code', ui-monospace, Menlo, Consolas, monospace; font-size: 11px; white-space: pre-wrap; word-break: break-word; }
+        td.em-muted { color: var(--text-dim); font-style: italic; }
+        tr.em-wide-name th { border-bottom: none; padding-bottom: 0; }
+        tr.em-wide-value td { padding-top: 2px; }
+        tr:last-child th, tr:last-child td { border-bottom: none; }
+      }
     }
 
     /* Card-header right side: status badge + optional Mark Resolved button.
        Inline-flex keeps them on one row aligned right; gap matches the
        drawer's rest-of-app spacing. */
     .header-actions { display: inline-flex; align-items: center; gap: 8px; }
+    .detail-toolbar { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: -8px; }
 
     /* Prominent banner when a fix failed to execute — sits above the detail
        grid so the operator can't miss it. Red family matches the error box. */
@@ -445,6 +500,18 @@ export class FailureDetailComponent implements OnDestroy {
    *  failure detail but no action controls (cosmetic; the API enforces too). */
   canAct = computed(() => this.auth.hasAtLeast('Operator'));
 
+  /** "View Source" — any signed-in user; API-endpoint failures have nothing stored to open. */
+  canViewSource = computed(() => {
+    const t = this.failure()?.scanType;
+    return !!t && t !== 'ApiEndpoint';
+  });
+  sourceOpen = signal(false);
+  // A different failure (↑/↓, row click) never inherits an open source popup.
+  private closeSourceOnNav = effect(() => {
+    this.failureId();
+    untracked(() => this.sourceOpen.set(false));
+  });
+
   /** Cache of composite policy step lists, keyed by ruleId. Lazy-fetched on
    *  failure load and on every silent refresh — but cached per ruleId so a
    *  poll tick doesn't re-fetch what we already have. Steps are static once
@@ -461,6 +528,10 @@ export class FailureDetailComponent implements OnDestroy {
 
   loading = signal(true);
   failure = signal<FailureStatus | null>(null);
+  /** Headline + Detail Columns fields of the error message (display-only split). */
+  parsedMessage = computed(() => parseErrorMessage(this.failure()?.errorMessage));
+  /** Operator toggle back to the stored text; kept while navigating ↑/↓. */
+  showRawMessage = signal(false);
 
   // Live polling cadence while the drawer is open. Matches the dashboard
   // service's interval so the operator sees status updates from background

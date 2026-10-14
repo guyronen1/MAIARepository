@@ -1,3 +1,4 @@
+using Maia.Core.Scanning;
 using Maia.Infrastructure.Scanning;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -119,12 +120,7 @@ public class ScanSourceLookupsController(
             .Where(d => d.DriveType is DriveType.Fixed or DriveType.Network && d.IsReady)
             .Select(d => d.RootDirectory.FullName);
 
-    /// <summary>Trailing-separator compare so "C:\data" doesn't admit "C:\database".</summary>
-    private static bool IsUnder(string full, string root)
-    {
-        static string WithSep(string p) => Path.EndsInDirectorySeparator(p) ? p : p + Path.DirectorySeparatorChar;
-        return WithSep(full).StartsWith(WithSep(root), StringComparison.OrdinalIgnoreCase);
-    }
+    private static bool IsUnder(string full, string root) => PathBoundary.IsUnder(full, root);
 
     public sealed record ConnectionEntry(string Name, string Provider);
     public sealed record FolderEntry(string Name, string FullPath);

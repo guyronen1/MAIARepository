@@ -187,6 +187,7 @@ CREATE TABLE [JobFailures] (
     [ErrorTypeId] int NULL,
     [MonitoredJobId] int NULL,
     [ScanSourceId] int NOT NULL,
+    [ScanCheckRuleId] int NULL,
     [StepName] nvarchar(200) NULL,
     [SourceId] nvarchar(500) NULL,
     [ReferenceId] nvarchar(500) NULL,
@@ -549,5 +550,6 @@ INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion]) VALUES
     (N'20260627220102_ReinstateReferenceIdColumns', N'8.0.0'),
     (N'20260718182136_AddCompositeInvariantCheckConstraints', N'8.0.0'),
     (N'20261012162748_AddDetailColumnsToScanCheckRule', N'8.0.0'),
-    (N'20261012171955_AddScanCheckRuleConditions', N'8.0.0');
+    (N'20261012171955_AddScanCheckRuleConditions', N'8.0.0'),
+    (N'20261014145610_AddScanCheckRuleIdToJobFailure', N'8.0.0');
 GO

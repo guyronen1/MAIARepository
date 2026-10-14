@@ -36,6 +36,7 @@ public sealed class AuthorizationMatrixTests : IAsyncLifetime
         new("GET", "/api/data/recommendations", Tier.User),
         new("GET", "/api/data/failures", Tier.User),
         new("GET", "/api/data/failures/1/status", Tier.User),
+        new("GET", "/api/data/failures/1/source", Tier.User),
         new("GET", "/api/data/monitored-jobs", Tier.User),
         new("GET", "/api/data/worker-status", Tier.User),
         new("GET", "/api/data/analytics/failures-over-time", Tier.User),

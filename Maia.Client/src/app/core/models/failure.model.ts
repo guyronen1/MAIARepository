@@ -51,9 +51,51 @@ export interface FailureStatus {
   stage:            FailureStage;
   errorTypeCode:    string | null;
   monitoredJobName: string | null;
+  /** The detecting source's ScanType (FileSystem / Database / ApiEndpoint /
+   *  FileContent); null when the source is gone. Gates "View Source". */
+  scanType:         string | null;
   recommendations:  Recommendation[];
   /** Fix-execution history, chronological. Empty until a fix has run. */
   executions:       FixExecution[];
+}
+
+/** One column of a source row; `value` null = SQL NULL. */
+export interface SourceColumn {
+  name:      string;
+  value:     string | null;
+  truncated: boolean;
+}
+
+/**
+ * GET /data/failures/{id}/source — the LIVE source data behind a failure
+ * (may have changed since detection). `kind` picks which fields are set.
+ */
+export interface SourceData {
+  kind:     'DbRows' | 'File' | 'Unavailable';
+  scanType: string;
+  /** Unavailable: why. DbRows: optional note (key not unique). */
+  reason:   string | null;
+
+  connectionName:   string | null;
+  provider:         string | null;
+  /** Table name, or "query" for a SqlQuery rule. */
+  table:            string | null;
+  keyColumn:        string | null;
+  keyValue:         string | null;
+  rows:             SourceColumn[][];
+  highlightColumns: string[];
+
+  path:            string | null;
+  sizeBytes:       number | null;
+  lastModified:    string | null;
+  content:         string | null;
+  /** True when `content` is a window of a larger file. */
+  truncated:       boolean;
+  /** 1-based file line number of the first line of `content`. */
+  windowStartLine: number;
+  /** 1-based file line numbers of the matched text. */
+  matchLines:      number[];
+  format:          'xml' | 'text' | null;
 }
 
 export interface PagedResult<T> {

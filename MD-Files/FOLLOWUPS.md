@@ -151,7 +151,7 @@ Full rationale in `DECISIONS.md` → "UI/UX pass — P0–P2 batch". ~21 commits
 Context: `ScanCheckRule.DetailColumns` appends source-row values to `JobFailure.ErrorMessage` (see `DECISIONS.md` → "Detail Columns"). Natural next steps, deliberately not bundled:
 
 - **`{col:Name}` fix-payload placeholders.** Detail values exist only inside the message text today. A fix (e.g. a SqlScript or ApiCall) that wants the row's `Details` or `UpdateDate` can't reach them. Would need the values persisted structurally (a `JobFailureDetails` child table or a JSON column on `JobFailures`) and a new token family in `IPlaceholderResolver`. Keep the SqlScript write-guard semantics: these are NOT row identifiers and must not satisfy the `{sourceId}`/`{referenceId}` WHERE requirement.
-- **Structured rendering in the drawer.** The drawer shows the raw `<pre>`; a key/value table for the detail lines (parse on `\n` + first `: `) would read better for long values. Cosmetic; only worth it once operators use ≥3 detail columns routinely.
+- **Structured rendering in the drawer — PROMOTED 2026-10-14** to *UI improvements requested 2026-10-14*, item 2 (operator asked for it). The drawer shows the raw `<pre>`; a key/value table for the detail lines (parse on `\n` + first `: `) would read better for long values.
 - **Per-column "show in list" toggle.** Today the failures-list cell collapses the whole message to one ellipsized line. If an operator wants e.g. `Details` visible in the list without opening the drawer, that needs a column-level flag or a dedicated list column — decide after seeing real usage.
 
 ## Scan-source folder picker follow-ons (opened 2026-10-12, not started)
@@ -189,3 +189,50 @@ Context: Database scan sources can target Oracle (`ConnectionStrings:{Name}_Prov
   - (b) The new watermark is the **lexical** max of the CONVERT strings. An int watermark column with `9` and `10` in one batch stores `9`, so `10`+ is re-reported next tick.
   - Fix for both: add `ORDER BY <watermark> ASC` to the outer query and take the last non-null value, as the Oracle dialect does.
 - **Oracle fix executors.** SqlScript / StoredProcedure are SQL Server-only and refuse Oracle connections. Oracle-side fixes would first need an Oracle write-guard (ScriptDom is T-SQL-only). Scan = read-strict; fix = scope-strict.
+
+## UI improvements requested 2026-10-14 (not started)
+
+1. ~~**Fix-option drawer: show the execution steps as table rows, like the scan-rule conditions editor.**~~ **SHIPPED 2026-10-14** (frontend only; spec rewritten, 16 green). Opening a policy keeps its stored Fix Category unless the resulting ActionType changes. A stored `Composite` with a single step opens as one row and re-saves as a single action, and that step's description is dropped.
+   - **Today** (`features/config/monitored-jobs/drawers/fix-option-drawer.component.ts`): the operator picks a top-level **Execution Type**, and `Composite` is one of the choices. Picking it reveals a separate "Steps" editor made of boxed blocks (type select, payload, then a description under each).
+   - **Wanted:** drop `Composite` from the picker. Every fix is a list of step rows, using the same layout as the scan-rule drawer's "Conditions" editor (`cond-row`: order · type · payload · ↑ ↓ ✕). Row 1 is always shown (the main action), and **+ Add Step** sits below the last row. Each row carries its own execution type, so nothing needs choosing above the list.
+   - **Save mapping** (backend contract unchanged):
+     - 1 row → `ActionType` = that row's type, and its payload goes on the policy itself.
+     - 2+ rows → `ActionType = Composite`, and the rows become `Steps` (StepOrder 1..N); the header payload stays empty, which satisfies the CHECK that forbids a payload on a `Composite` header.
+   - **On load:** a `Composite` policy expands into its steps. A single-action policy becomes one row.
+   - **Manual:** steps can't be `Manual` (DB CHECK + `ValidateCompositePayload`). Offer `Manual` only on row 1 and disable **+ Add Step** while it's selected, so a Manual policy is always a single row.
+   - **Keep:** the per-row "scope to the failing row" shortcut for SqlScript, the SqlScript textarea, the optional per-step Description (an inline cell or a second line inside the row), and the payload placeholders and token legend.
+   - **Acceptance:**
+     1. Creating a 1-row policy saves a non-Composite rule with its payload on the header.
+     2. Adding a second row saves `Composite` + 2 steps.
+     3. Deleting back to 1 row saves as single-action.
+     4. Existing Composite policies open as their step rows.
+     5. Manual blocks + Add Step.
+     6. `fix-option-drawer.component.spec.ts` updated.
+
+2. ~~**Failure drawer: show the error message's fields as a key/value table.**~~ **SHIPPED 2026-10-14** (frontend only). The parser is `core/util/error-message.util.ts` (spec: 7 green), and values over 60 chars or multi-line get a full-width row. A **Show raw / Show fields** toggle brings back the stored text. Not built: splitting the first line's `[Field=Value]` condition tokens into rows (left optional). Still owed: styles are over the per-component SCSS budget (warning only, `failure-detail` 6.47 kB, `fix-option-drawer` 4.50 kB).
+   - **Today** (`features/failures/failure-detail.component.ts`): `JobFailure.ErrorMessage` is one raw `<pre>`. For DB rules with Detail Columns, the message is the rule-derived first line followed by `Column: value` lines (see DECISIONS → "Detail Columns"), and these are hard to read when values are long.
+   - **Wanted:**
+     - Show the first line as the failure message.
+     - Show the rest as a two-column table (field name | value), with field names in a different colour (muted/accent token, readable in both light and dark themes).
+     - When a value is long, let it span both columns (`colspan`, name on its own line above) so it uses the full drawer width instead of wrapping in a narrow cell.
+   - **Parsing (display-only; never change what is stored, because the classifier matches on `ErrorMessage`):**
+     - Split on `\n` and cut each line at its first `": "` to get name and value.
+     - A line without `": "` continues the previous value.
+     - A message with no field lines renders exactly as today.
+     - `SQL NULL` values and the `(column not in result set)` marker render as text, styled muted.
+   - **Optional:** also break the first line's `[Field=Value]` condition tokens into rows. Keep a "raw" toggle/copy that shows the original text.
+   - **Supersedes** the "Structured rendering in the drawer" bullet under *Detail Columns follow-ons*.
+   - **Acceptance:**
+     1. A DB failure with `DetailColumns = UpdateDate, Details` shows message + 2 table rows.
+     2. A long `Details` value spans the drawer width.
+     3. An FS keyword failure (single line) looks unchanged.
+     4. The ✦ Ask prefill still sends the raw message.
+
+## View Source follow-ons (opened 2026-10-14)
+
+Context: `GET /api/data/failures/{id}/source` + `SourceViewerComponent` (see DECISIONS → "View Source popup").
+
+- **Store the matched line's position on FS failures** (byte offset = watermark + offset in chunk). Today the viewer re-finds the excerpt by text, so repeated identical lines all highlight and it scrolls to the last one.
+- **Oracle row lookup is unverified live.** The SQL is unit-tested (`SELECT * … WHERE ("KEY" = :p_Id) AND ROWNUM <= 5`); add it to the Oracle live-verification list above.
+- **Access tier.** It is open to `RequireUser` by choice. If source rows turn out to hold data Users shouldn't see, switch the action to `RequireOperator` and gate the button on `canAct()`.
+- **Not deployed / not exercised through the running API.** It was verified via a scratch harness calling `SourceDataReader` against `MaiaDB_Test` (DB row, FS log, FileContent XML), because a running `Maia.API` was holding `bin/Debug`. Restart the API and click through it once.

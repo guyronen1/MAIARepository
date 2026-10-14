@@ -10,6 +10,13 @@ public class JobFailure
     public int? ErrorTypeId { get; set; }
     public int? MonitoredJobId { get; set; }
     public int ScanSourceId { get; set; }
+
+    /// <summary>The ScanCheckRule that produced this failure. Deliberately no FK:
+    /// deleting a rule must not be blocked by its history, so a stale id just means
+    /// "rule no longer exists". Null on failures detected before the column existed
+    /// (the View Source reader falls back to matching the rule by StepName).</summary>
+    public int? ScanCheckRuleId { get; set; }
+
     public string? StepName { get; set; }
     public string? SourceId { get; set; }
 

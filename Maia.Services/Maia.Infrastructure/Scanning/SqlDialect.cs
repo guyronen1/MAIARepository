@@ -62,6 +62,10 @@ internal abstract class SqlDialect
     /// <summary>MAX(watermark) as text over the rule-filtered rows.</summary>
     public abstract string FilteredMaxQuery(string watermarkColumn, string table, string where);
 
+    /// <summary>Every column of up to <paramref name="maxRows"/> rows matching
+    /// <paramref name="where"/> (the View Source row lookup).</summary>
+    public abstract string SelectAllWhereQuery(string table, string where, int maxRows);
+
     private sealed class SqlServerDialect : SqlDialect
     {
         public override string QuoteIdentifier(string identifier) => "[" + identifier.Replace("]", "]]") + "]";
@@ -103,6 +107,9 @@ internal abstract class SqlDialect
 
         public override string FilteredMaxQuery(string watermarkColumn, string table, string where)
             => $"SELECT CONVERT(NVARCHAR(50), MAX({watermarkColumn}), 121) FROM {table} WHERE {where}";
+
+        public override string SelectAllWhereQuery(string table, string where, int maxRows)
+            => $"SELECT TOP {maxRows} * FROM {table} WHERE {where}";
     }
 
     /// <summary>
@@ -184,5 +191,8 @@ internal abstract class SqlDialect
 
         public override string FilteredMaxQuery(string watermarkColumn, string table, string where)
             => $"SELECT TO_CHAR(MAX({watermarkColumn})) FROM {table} WHERE {where}";
+
+        public override string SelectAllWhereQuery(string table, string where, int maxRows)
+            => $"SELECT * FROM {table} WHERE ({where}) AND ROWNUM <= {maxRows}";
     }
 }

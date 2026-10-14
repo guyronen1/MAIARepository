@@ -199,6 +199,7 @@ public sealed class FileSystemScanStrategy(
                             JobTypeId      = job.JobTypeId,          // identity from the job
                             MonitoredJobId = job.MonitoredJobId,
                             ScanSourceId   = source.ScanSourceId,    // which source produced it
+                            ScanCheckRuleId = rule.CheckRuleId,      // which rule matched
                             StepName       = Path.GetFileName(file),
                             SourceId       = Path.GetFileName(file),
                             ErrorMessage   = $"[{keyword}] {Path.GetFileName(file)}: {excerpt}",

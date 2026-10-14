@@ -389,3 +389,30 @@ The dashboard's "Recent Failures" panel showed the last 10 failures by **detecti
 - **Scan-only.** `SqlScriptExecutor` / `StoredProcedureExecutor` refuse a non-SQL-Server connection with an explicit message ("prefix the payload with a SQL Server connection or resolve manually"). A failure from an Oracle source defaults to that source's connection, and a T-SQL fix must never be sent to Oracle.
 - **TNS alias resolution:** ODP.NET Core does not read the registry / ORACLE_HOME like the unmanaged client, and IIS's working directory is system32. Startup sets `OracleConfiguration.TnsAdmin` from `Oracle:TnsAdmin` → `TNS_ADMIN` env → `%ORACLE_HOME%\network\admin` (if it has tnsnames.ora), logs the folder used, and warns when Oracle connections exist but none was found. EZConnect (`host:port/service`) needs no file.
 - **UI:** `/connection-names` returns `{ name, provider }`. The source drawer labels Oracle options (`Billing — Oracle`) and flags an unrecognised provider (`ConnectionProviderUnknown` 400 on save). The scan-rule drawer looks up the source's connection once and switches to Oracle guidance (title chip, SELECT-only SqlQuery placeholder/tip, `SCHEMA.TABLE` placeholder + case-insensitivity hint).
+
+## "View Source" popup — live source data behind a failure (2026-10-14)
+
+**What:** `🔎 View Source` on the failure drawer's Failure Details card opens `SourceViewerComponent` (`shared/source-viewer/`), a modal over the drawer, fed by `GET /api/data/failures/{id}/source` → `ISourceDataReader` (`Maia.Infrastructure/Scanning/SourceDataReader.cs`).
+- **Database:** every column of the source row(s), with the rule's target / condition / key columns highlighted.
+- **FileSystem:** the log file, scrolled to the matched line.
+- **FileContent:** the data file; XML is pretty-printed.
+
+Decisions:
+- **Live read, not a snapshot.** It shows the current row or file, which may have changed since detection, and the footer says so. A snapshot would mean `SELECT *` in every scan and storing whole rows and files on `JobFailures`. Live is what operators asked for: "open the source".
+- **Open to every signed-in user (`RequireUser`)**, like `/failures/{id}/status`, by the user's explicit choice. Source rows and logs can hold business data, so tightening it is a one-line policy change.
+- **The row is located through the producing rule's `SourceIdColumn`.**
+  - Without one, `SourceId` is a one-off `ROW_NUMBER` and the reader returns `Unavailable` with "set a Source ID Column" rather than guessing.
+  - Lookup is a native compare first (`[key] = @Id`, which stays a seek on an int key). On a conversion error or no hit it retries on the text form the scan stored (`CAST(key AS NVARCHAR(100))`), at most 5 rows. Several hits trigger a "key is not unique" note.
+  - A `SourceTable` that contains whitespace (a JOIN) is refused.
+- **`JobFailures.ScanCheckRuleId` (int, nullable, NO FK)** records the producing rule (migration `20261014145610_AddScanCheckRuleIdToJobFailure`, set by all three detecting strategies).
+  - There is no FK because deleting a rule must not be blocked by its failure history.
+  - Legacy rows (null), and rows whose rule was deleted, fall back to matching the rule by the `StepName` the scan wrote: the table, or the SqlQuery Description / `SqlQuery #id` label. A candidate with a `SourceIdColumn` wins.
+- **SqlQuery rules re-run the rule's query** (same 500-row cap and 60s timeout as the scan), then keep the rows whose key column `ToString()` equals `SourceId`. Accepted cost: one query run per click, including an `EXEC` on SQL Server.
+- **Files must sit under the source's current `LogFolder`** (`PathBoundary.IsUnder`, now shared with the folder browser).
+  - The path always comes from the stored failure, never from the request. The guard covers a source whose folder was re-pointed since detection.
+  - Files open with `FileShare.ReadWrite | Delete` so live logs aren't locked.
+- **Size cap: `SourceViewer:MaxBytes`, default 1 MB.** A larger log returns a window centred on the last match, or the end of the file when nothing matches. Lines over 20k chars are cut.
+- **Matched-line detection.** No line number is stored, so the FS matcher re-finds the excerpt in `ErrorMessage` (`[kw] file: excerpt` → line whose trimmed text starts with the excerpt), falling back to the rule keyword. FileContent highlights lines that hold an extracted identifier.
+- **XML is parsed with DTDs prohibited and no resolver** (no XXE). A file that doesn't parse is shown raw.
+- **Dead ends are a 200 with `kind = "Unavailable"` and a reason**, not an error status. This covers a missing rule or key column, a deleted row, a rolled file, a connection error and API-endpoint sources. Only an unknown failure id is 404.
+- **Modal keyboard handling:** a window capture-phase listener takes Esc (closes only the modal) and swallows ↑/↓ so the failures list can't switch the failure underneath. The modal is anchored below the top bar, because the drawer's stacking context (z 50) can't lift it above.

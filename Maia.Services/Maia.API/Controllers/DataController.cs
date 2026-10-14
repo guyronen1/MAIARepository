@@ -22,6 +22,7 @@ public class DataController(
     IMonitoredJobRepository        monitoredJobs,
     IScanRunHistoryRepository      scanRuns,
     IWorkerControlService          workerControl,
+    ISourceDataReader              sourceData,
     IDbContextFactory<MaiaDbContext> dbFactory) : ControllerBase
 {
     private const int MaxPageSize = 200;
@@ -81,8 +82,15 @@ public class DataController(
         // single summary row is written by ExecuteFixesUseCase. Ordered
         // chronologically (FixId is a monotonic shadow of ExecutedAt).
         List<object> executions;
+        string? scanType;
         await using (var db = await dbFactory.CreateDbContextAsync(ct))
         {
+            // Source's scan type — the drawer offers "View Source" for all but ApiEndpoint.
+            scanType = await db.ScanSources
+                .Where(s => s.ScanSourceId == f.ScanSourceId)
+                .Select(s => s.ScanTypeDefinition!.Name)
+                .FirstOrDefaultAsync(ct);
+
             // Clean EF projection first (no enum.ToString() / object-cast inside
             // the expression tree — those can fail provider translation), then
             // shape to the response objects in memory.
@@ -131,6 +139,7 @@ public class DataController(
             Stage            = stage,
             ErrorTypeCode    = f.ErrorType?.Code,
             MonitoredJobName = f.MonitoredJob?.Name,
+            ScanType         = scanType,
             Recommendations  = f.Recommendations.Select(r => new
             {
                 r.RecommendationId,
@@ -152,6 +161,21 @@ public class DataController(
             }).ToList(),
             Executions       = executions,
         });
+    }
+
+    /// <summary>
+    /// "View Source": the live source data behind a failure — the source row (all
+    /// columns) for a Database failure, the log file for FileSystem, the data file for
+    /// FileContent. Expected dead ends (no Source ID column, file rolled, connection
+    /// down) are a 200 with <c>kind = "Unavailable"</c> and a reason, not an error.
+    /// </summary>
+    [HttpGet("failures/{failureId:int}/source")]
+    public async Task<IActionResult> GetFailureSource(int failureId, CancellationToken ct)
+    {
+        var result = await sourceData.ReadAsync(failureId, ct);
+        return result is null
+            ? NotFound(new { Message = $"JobFailure {failureId} not found." })
+            : Ok(result);
     }
 
     /// <summary>

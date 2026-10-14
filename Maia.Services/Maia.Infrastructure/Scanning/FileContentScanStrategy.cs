@@ -177,6 +177,7 @@ public sealed class FileContentScanStrategy(
                         JobTypeId      = job.JobTypeId,                  // identity from the job
                         MonitoredJobId = job.MonitoredJobId,
                         ScanSourceId   = source.ScanSourceId,           // which source produced it
+                        ScanCheckRuleId = rule.CheckRuleId,             // which rule matched
                         StepName       = fileName,                      // matches FS convention
                         SourceId       = sourceId,
                         ErrorMessage   = BuildMessage(rule, primary, fileName),
