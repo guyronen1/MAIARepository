@@ -2,7 +2,7 @@ import { Component, computed, inject, input, output, signal } from '@angular/cor
 import { Observable } from 'rxjs';
 import { FormsModule } from '@angular/forms';
 import {
-  ConfigService, FixPolicyRule, ErrorType, UpsertFixPolicyRuleRequest,
+  ConfigService, FixPolicyRule, FixPolicyStepDto, ErrorType, UpsertFixPolicyRuleRequest,
 } from '../../../../core/services/config.service';
 import { MonitoredJob } from '../../../../core/models';
 import { DrawerComponent } from '../../../../shared/drawer/drawer.component';
@@ -12,8 +12,9 @@ import { DrawerComponent } from '../../../../shared/drawer/drawer.component';
 interface EffectiveClassRule { ruleId: number; pattern: string; errorTypeCode: string; }
 
 /**
- * Fix Option drawer — the largest editor: execution-type-driven category,
- * composite step editor, coverage/reachability warnings, the "scope to failing
+ * Fix Option drawer — the largest editor: execution steps as rows (one row =
+ * single action, 2+ = Composite; category derived from the result),
+ * coverage/reachability warnings, the "scope to failing
  * row" SqlScript shortcut, and two-pronged duplicate detection. Extracted from
  * JobConfigComponent. Parent calls {@link openFor} (edit or new, with optional
  * ErrorType prefill for gap-clicks / deep-links) and reloads on {@link saved}.
@@ -89,23 +90,15 @@ interface EffectiveClassRule { ruleId: number; pattern: string; errorTypeCode: s
             }
           }
         </div>
-        <div class="form-group">
+        <div class="form-group span2">
           <label>Action Description *</label>
           <input [(ngModel)]="form.actionToApply" placeholder="e.g. Retry DTSX job via management API" />
         </div>
         <div class="form-group">
-          <label>Execution Type *</label>
-          <select [ngModel]="form.actionType" (ngModelChange)="setFixRuleActionType($event)">
-            <option [ngValue]="''" disabled>Select execution type…</option>
-            @for (a of orderedActionTypes(); track a) { <option [ngValue]="a">{{ a }}</option> }
-          </select>
-        </div>
-        <div class="form-group">
           <label>Fix Category</label>
-          <!-- Read-only — derived automatically from Execution Type.
-               Manual execution type locks both to Manual; any other
-               execution type auto-assigns the natural category. -->
-          <input [value]="form.fixCategory || 'Derived from execution type'" readonly />
+          <!-- Read-only — derived from the steps: one step → that type's natural
+               category (Manual → Manual); several steps → Composite's category. -->
+          <input [value]="form.fixCategory || 'Derived from the steps'" readonly />
         </div>
         <div class="form-group">
           <label>Behaviour</label>
@@ -120,65 +113,58 @@ interface EffectiveClassRule { ruleId: number; pattern: string; errorTypeCode: s
             </label>
           </div>
         </div>
-        @if (form.actionType && form.actionType !== 'Manual' && form.actionType !== 'Composite') {
-          <div class="form-group span2">
-            <label>Action Payload</label>
-            @if (form.actionType === 'ApiCall') {
-              <input [ngModel]="form.actionPayload" (ngModelChange)="form.actionPayload = $event; syncFixRuleSignal()" placeholder="http://jobs.internal/api/jobs/{failureId}/retry" />
-              <span class="field-hint">Use {{'{'}}failureId{{'}'}} as a placeholder — replaced at runtime.</span>
-            } @else if (form.actionType === 'StoredProcedure') {
-              <input [ngModel]="form.actionPayload" (ngModelChange)="form.actionPayload = $event; syncFixRuleSignal()" placeholder="dbo.sp_RetryJob  or  ConnName|dbo.sp_RetryJob" />
-            } @else if (form.actionType === 'SqlScript') {
-              <textarea [ngModel]="form.actionPayload" (ngModelChange)="form.actionPayload = $event; syncFixRuleSignal()" rows="4" placeholder="UPDATE dbo.Files SET FileStatusCode = 0 WHERE Id = '{sourceId}'"></textarea>
-              <span class="field-hint">Runs against the job's configured connection. Key the source row on <code>'{{'{'}}sourceId{{'}'}}'</code> (quoted) — <em>not</em> <code>{{'{'}}failureId{{'}'}}</code> (MAIA's internal id). A fix must be scoped to the failing row or it won't save.</span>
-              @if (sqlFixNeedsScopeShortcut(form.actionPayload)) {
-                <button type="button" class="link-btn scope-shortcut" (click)="scopeFixPayloadToSourceId()">+ scope to the failing row — add <code>{{ scopeClauseFor(form.actionPayload) }} {{ fixScopeColumn }} = '{{'{'}}sourceId{{'}'}}'</code></button>
-              }
-            } @else if (form.actionType === 'CopyFile') {
-              <input [ngModel]="form.actionPayload" (ngModelChange)="form.actionPayload = $event; syncFixRuleSignal()" placeholder="{sourceFilePath}|{inputFolder}\\reprocess\\{sourceFileName}" />
-              <span class="field-hint">Format <code>SOURCE|DEST</code>. Atomic copy, overwrite by default. <code>{{'{'}}sourceFilePath{{'}'}}</code> needs Input File Extraction (FS) or File Path Column (DB) on a scan rule.</span>
-            } @else {
-              <input [ngModel]="form.actionPayload" (ngModelChange)="form.actionPayload = $event; syncFixRuleSignal()" placeholder="powershell.exe C:\\scripts\\fix.ps1 {failureId}" />
+        <!-- Execution steps: one row per action, same row layout as the scan-rule
+             conditions editor. Each row carries its own execution type. One row is
+             saved as a single-action policy (payload on the policy); two or more as
+             ActionType=Composite with the rows as Steps. Manual is single-row only. -->
+        <div class="form-group span2 step-block">
+          <label>Execution Steps * <span class="text-muted">(run in order)</span></label>
+          <div class="step-editor">
+            @for (step of stepRows; track $index; let i = $index) {
+              <div class="step-row" [class.step-main]="stepRows.length === 1">
+                <span class="step-order">{{ i + 1 }}.</span>
+                <select [ngModel]="step.actionType" (ngModelChange)="setStepType(i, $event)" class="step-type" [attr.aria-label]="'Step ' + (i + 1) + ' execution type'">
+                  <option [ngValue]="''" disabled>Execution type…</option>
+                  @for (a of stepTypes; track a) { <option [ngValue]="a">{{ a }}</option> }
+                  @if (stepRows.length === 1) { <option [ngValue]="'Manual'">Manual</option> }
+                </select>
+                @if (step.actionType === 'Manual') {
+                  <span class="step-manual">No automated action — the operator performs the fix after approving.</span>
+                } @else if (step.actionType === 'SqlScript') {
+                  <textarea [ngModel]="step.actionPayload" (ngModelChange)="step.actionPayload = $event; syncFixRuleSignal()" [rows]="stepRows.length === 1 ? 4 : 2" class="step-payload" [placeholder]="payloadPlaceholderFor(step.actionType)" [attr.aria-label]="'Step ' + (i + 1) + ' payload'"></textarea>
+                } @else {
+                  <input [ngModel]="step.actionPayload" (ngModelChange)="step.actionPayload = $event; syncFixRuleSignal()" class="step-payload" [placeholder]="payloadPlaceholderFor(step.actionType)" [disabled]="!step.actionType" [attr.aria-label]="'Step ' + (i + 1) + ' payload'" />
+                }
+                <div class="step-controls">
+                  @if (stepRows.length === 1) {
+                    <span class="step-main-tag" title="A fix always has at least one step">main</span>
+                  } @else {
+                    <button type="button" class="btn btn-ghost btn-icon" title="Move up" (click)="moveStep(i, -1)" [disabled]="i === 0">↑</button>
+                    <button type="button" class="btn btn-ghost btn-icon" title="Move down" (click)="moveStep(i, +1)" [disabled]="i === stepRows.length - 1">↓</button>
+                    <button type="button" class="btn btn-ghost btn-icon" title="Remove step" (click)="removeStep(i)">✕</button>
+                  }
+                </div>
+                @if (step.actionType === 'SqlScript' && sqlFixNeedsScopeShortcut(step.actionPayload)) {
+                  <button type="button" class="link-btn step-sub" (click)="scopeStepToSourceId(step)">+ scope to the failing row — add <code>{{ scopeClauseFor(step.actionPayload) }} {{ fixScopeColumn }} = '{{'{'}}sourceId{{'}'}}'</code></button>
+                }
+                @if (stepRows.length > 1) {
+                  <input [(ngModel)]="step.description" class="step-desc step-sub" placeholder="Step description (optional)" [attr.aria-label]="'Step ' + (i + 1) + ' description'" />
+                }
+              </div>
             }
           </div>
-        }
-        @if (form.actionType === 'Composite') {
-          <div class="form-group span2">
-            <label>Steps *</label>
-            <div class="steps-editor">
-              @for (step of form.steps ?? []; track $index; let i = $index) {
-                <div class="step-block">
-                  <div class="step-row">
-                    <span class="step-order">{{ i + 1 }}.</span>
-                    <select [(ngModel)]="step.actionType" class="step-type">
-                      <option value="SqlScript">SqlScript</option>
-                      <option value="Script">Script</option>
-                      <option value="CopyFile">CopyFile</option>
-                      <option value="ApiCall">ApiCall</option>
-                      <option value="StoredProcedure">StoredProcedure</option>
-                    </select>
-                    @if (step.actionType === 'SqlScript') {
-                      <textarea [ngModel]="step.actionPayload" (ngModelChange)="step.actionPayload = $event; syncFixRuleSignal()" rows="2" class="step-payload step-payload-sql" [placeholder]="payloadPlaceholderFor(step.actionType)"></textarea>
-                    } @else {
-                      <input [ngModel]="step.actionPayload" (ngModelChange)="step.actionPayload = $event; syncFixRuleSignal()" class="step-payload" [placeholder]="payloadPlaceholderFor(step.actionType)" />
-                    }
-                    <div class="step-controls">
-                      <button type="button" class="btn btn-ghost btn-icon" title="Move up" (click)="moveStep(i, -1)" [disabled]="i === 0">↑</button>
-                      <button type="button" class="btn btn-ghost btn-icon" title="Move down" (click)="moveStep(i, +1)" [disabled]="i === (form.steps?.length ?? 0) - 1">↓</button>
-                      <button type="button" class="btn btn-ghost btn-icon" title="Remove step" (click)="removeStep(i)">✕</button>
-                    </div>
-                  </div>
-                  @if (step.actionType === 'SqlScript' && sqlFixNeedsScopeShortcut(step.actionPayload)) {
-                    <button type="button" class="link-btn step-scope" (click)="scopeStepToSourceId(step)">+ scope to the failing row — add <code>{{ scopeClauseFor(step.actionPayload) }} {{ fixScopeColumn }} = '{{'{'}}sourceId{{'}'}}'</code></button>
-                  }
-                  <input [(ngModel)]="step.description" class="step-desc" placeholder="Description (optional)" />
-                </div>
-              }
-              <button type="button" class="btn btn-ghost btn-sm step-add" (click)="addStep()">+ Add Step</button>
-            </div>
+          <button type="button" class="btn btn-ghost btn-sm step-add" (click)="addStep()" [disabled]="!canAddStep()"
+                  [title]="canAddStep() ? '' : 'A Manual fix has no automated steps'">+ Add Step</button>
+          @if (stepRows.length > 1) {
             <span class="field-hint">Steps run in order. Any step failure routes the failure to <strong>ManualRequired</strong>; subsequent steps still run (best-effort). One log row per step.</span>
-          </div>
-        }
+          }
+          @if (usesStepType('SqlScript')) {
+            <span class="field-hint">SqlScript runs against the job's configured connection. Key the source row on <code>'{{'{'}}sourceId{{'}'}}'</code> (quoted) — <em>not</em> <code>{{'{'}}failureId{{'}'}}</code> (MAIA's internal id). A fix must be scoped to the failing row or it won't save.</span>
+          }
+          @if (usesStepType('CopyFile')) {
+            <span class="field-hint">CopyFile format <code>SOURCE|DEST</code>. Atomic copy, overwrite by default. <code>{{'{'}}sourceFilePath{{'}'}}</code> needs Input File Extraction (FS) or File Path Column (DB) on a scan rule.</span>
+          }
+        </div>
         @if (fixRuleSourcePathWarning()) {
           <div class="form-group span2">
             <div class="dup-warn">⚠ This payload uses <code>{{'{'}}sourceFilePath{{'}'}}</code>, but no scan rule on <strong>{{ j.displayName ?? j.name }}</strong> captures a file path. Set <strong>Input File Extraction</strong> (FS) or <strong>File Path Column</strong> (DB) on a scan rule, or the fix fails at runtime with an empty source path.</div>
@@ -215,8 +201,8 @@ interface EffectiveClassRule { ruleId: number; pattern: string; errorTypeCode: s
       <div class="drawer-foot">
         <button class="btn btn-ghost" (click)="isOpen.set(false)">Cancel</button>
         <button class="btn btn-primary" (click)="save()"
-                [disabled]="saving() || !form.actionType"
-                [title]="!form.actionType ? 'Select an execution type first' : ''">
+                [disabled]="saving() || !stepsValid()"
+                [title]="!stepsValid() ? 'Pick an execution type for every step first' : ''">
           @if (saving()) { <span class="spinner"></span> } {{ editingFixRule() ? 'Save Changes' : 'Add Fix Option' }}
         </button>
       </div>
@@ -233,8 +219,6 @@ interface EffectiveClassRule { ruleId: number; pattern: string; errorTypeCode: s
     }
     .form-group input[readonly] { background: var(--surface-2, #f8fafc); color: var(--text-muted); cursor: default; border-style: dashed; }
     .field-hint { font-size: 11px; color: var(--text-dim); }
-    .scope-shortcut { align-self: flex-start; margin-top: 6px; font-size: 12px; }
-    .step-scope { margin: 4px 0 0 32px; font-size: 11px; }
     .drawer-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
     .drawer-context-banner { display: flex; align-items: center; gap: 8px; background: var(--primary-light); border: 1px solid var(--primary); border-radius: var(--radius-sm); padding: 8px 12px; font-size: 12px; color: var(--primary-dark); margin-bottom: 14px; }
@@ -255,16 +239,21 @@ interface EffectiveClassRule { ruleId: number; pattern: string; errorTypeCode: s
     .dup-warn.save-error { background: var(--danger-bg); border-color: var(--danger); color: var(--danger); margin-top: 12px; }
     .dup-warn.reachability-warn { margin-top: 6px; }
 
-    .steps-editor { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
-    .step-block { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
-    .step-row { display: grid; grid-template-columns: 24px 110px 1fr auto; gap: 6px; align-items: start; }
-    .step-row .step-order { font-weight: 600; color: var(--text-dim); text-align: right; align-self: center; }
-    .step-row select.step-type, .step-row input.step-payload { font-size: 12px; padding: 4px 6px; min-width: 0; }
-    .step-row textarea.step-payload { font-size: 12px; padding: 4px 6px; min-width: 0; font-family: ui-monospace, Menlo, Consolas, monospace; resize: vertical; }
-    .step-block input.step-desc { font-size: 12px; padding: 4px 6px; margin-left: 32px; }
-    .step-controls { display: flex; gap: 2px; align-self: center; }
+    .step-block { padding-top: 4px; border-top: 1px dashed var(--border); }
+    .step-editor { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+    .step-row { display: grid; grid-template-columns: 22px 130px 1fr 88px; gap: 6px; align-items: center; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+    .step-row.step-main { background: var(--surface-2); }
+    .step-row .step-order { font-weight: 600; color: var(--text-dim); text-align: right; }
+    .step-row select.step-type, .step-row input.step-payload, .step-row input.step-desc { font-size: 12px; padding: 4px 6px; min-width: 0; width: 100%; }
+    .step-row textarea.step-payload { font-size: 12px; padding: 4px 6px; min-width: 0; width: 100%; font-family: ui-monospace, Menlo, Consolas, monospace; resize: vertical; }
+    .step-row .step-sub { grid-column: 2 / 4; justify-self: start; }
+    .step-row input.step-desc { justify-self: stretch; }
+    .step-row .link-btn.step-sub { font-size: 11px; }
+    .step-manual { font-size: 12px; color: var(--text-muted); font-style: italic; }
+    .step-main-tag { font-size: 10px; font-weight: 600; letter-spacing: .02em; color: var(--text-dim); border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; }
+    .step-controls { display: flex; gap: 2px; justify-content: flex-end; }
     .step-row .btn-icon { padding: 2px 6px; font-size: 13px; line-height: 1.2; }
-    .step-add { align-self: flex-start; margin-top: 2px; }
+    .step-add { align-self: flex-start; margin-top: 4px; }
 
     .token-legend { margin-top: 6px; font-size: 12px; border: 1px solid var(--border-light); border-radius: var(--radius-sm); background: var(--surface-2); }
     .token-legend > summary { cursor: pointer; padding: 6px 10px; font-weight: 600; color: var(--text-muted); user-select: none; }
@@ -296,18 +285,15 @@ export class FixOptionDrawerComponent {
   fixRuleSaveConflict = signal<{ message: string; conflictingPolicyId: number } | null>(null);
   fixRuleSaveError    = signal<string | null>(null);
 
-  // Part 3 — soft guidance: order ActionType options with the most natural
-  // choices for the current FixCategory first, all types still available.
-  orderedActionTypes = computed((): string[] => {
-    const cat = this.formSignal().fixCategory;
-    if (!cat || cat === 'Manual') return ['SqlScript', 'ApiCall', 'CopyFile', 'Script', 'StoredProcedure', 'Composite', 'Manual'];
-    const orderMap: Record<string, string[]> = {
-      'DbFix':      ['SqlScript', 'StoredProcedure', 'Composite', 'ApiCall', 'Script', 'CopyFile', 'Manual'],
-      'FileRepair': ['CopyFile', 'Script', 'Composite', 'ApiCall', 'SqlScript', 'StoredProcedure', 'Manual'],
-      'Retry':      ['ApiCall', 'Script', 'Composite', 'SqlScript', 'StoredProcedure', 'CopyFile', 'Manual'],
-    };
-    return orderMap[cat] ?? ['SqlScript', 'ApiCall', 'CopyFile', 'Script', 'StoredProcedure', 'Composite', 'Manual'];
-  });
+  /** Execution types a step row can take. `Manual` is offered separately and only
+   *  while there is a single row (steps can't be Manual — DB CHECK + backend 400);
+   *  `Composite` is never picked — it is what two or more rows save as. */
+  readonly stepTypes = ['SqlScript', 'StoredProcedure', 'ApiCall', 'Script', 'CopyFile'];
+
+  /** The editor's working list. Row 1 always exists. {@link applyStepsToForm}
+   *  maps it onto the request: 1 row → that ActionType with the payload on the
+   *  policy; 2+ rows → ActionType=Composite, null payload, rows as Steps. */
+  stepRows: FixPolicyStepDto[] = [this.blankStep()];
 
   /** Two-pronged duplicate detection — same key shape as the backend 409. */
   fixRuleDuplicateConflict = computed<FixPolicyRule | null>(() => {
@@ -369,20 +355,29 @@ export class FixOptionDrawerComponent {
         jobTypeId: rule.jobTypeId, errorTypeId: rule.errorTypeId, monitoredJobId: rule.monitoredJobId,
         actionToApply: rule.actionToApply, fixCategory, actionType,
         actionPayload: rule.actionPayload, isAutoHealEligible: rule.isAutoHealEligible, enabled: rule.enabled,
-        steps: (rule.steps ?? []).map(s => ({ stepOrder: s.stepOrder, actionType: s.actionType,
-                                              actionPayload: s.actionPayload, description: s.description })),
+        steps: [],
       };
+      this.loaded = { actionType, fixCategory };
+      const steps = [...(rule.steps ?? [])].sort((a, b) => a.stepOrder - b.stepOrder);
+      this.stepRows = actionType === 'Composite' && steps.length > 0
+        ? steps.map((s, i) => ({ stepOrder: i + 1, actionType: s.actionType,
+                                 actionPayload: s.actionPayload ?? '', description: s.description }))
+        : [{ ...this.blankStep(), actionType: actionType === 'Composite' ? '' : actionType,
+             actionPayload: actionType === 'Composite' ? '' : (rule.actionPayload ?? '') }];
     } else {
       // New rule defaults to THIS job (per-job override) — the common case.
       this.form = { ...this.blank(), jobTypeId: this.jobTypeId(), monitoredJobId: job.monitoredJobId };
       if (prefill?.errorTypeId) this.form.errorTypeId = prefill.errorTypeId;
+      this.loaded = { actionType: '', fixCategory: '' };
+      this.stepRows = [this.blankStep()];
     }
-    this.formSignal.set({ ...this.form });
+    this.syncFixRuleSignal();
     this.isOpen.set(true);
   }
 
   save() {
-    if (!this.form.actionType || !this.form.actionToApply || !this.form.errorTypeId) return;
+    this.applyStepsToForm();
+    if (!this.stepsValid() || !this.form.actionToApply || !this.form.errorTypeId) return;
     this.saving.set(true);
     this.fixRuleSaveConflict.set(null);
     this.fixRuleSaveError.set(null);
@@ -408,28 +403,55 @@ export class FixOptionDrawerComponent {
     });
   }
 
-  setFixRuleActionType(next: string) {
-    const prev = this.form.actionType;
-    this.form.actionType = next;
-    if (next === 'Manual') {
-      this.form.fixCategory   = 'Manual';
-      this.form.actionPayload = null;
-      this.form.steps         = [];
-    } else {
-      if (next === 'Composite') {
-        this.form.actionPayload = null;
-      } else {
-        if (next !== prev) this.form.actionPayload = null;
-      }
-      if (prev === 'Composite') {
-        this.form.steps = [];
-      }
-      // Fix Category is read-only so it must always reflect the current execution type.
-      this.form.fixCategory = this.defaultCategoryFor(next);
-    }
+  /** Change one row's execution type. A changed type clears that row's payload
+   *  (a SqlScript payload is not a valid Script payload). */
+  setStepType(index: number, next: string) {
+    const step = this.stepRows[index];
+    if (!step) return;
+    if (next !== step.actionType) step.actionPayload = '';
+    step.actionType = next;
     this.fixRuleSaveError.set(null);
     this.syncFixRuleSignal();
   }
+
+  /** Manual means "no automated action", so it can't be combined with steps. */
+  canAddStep(): boolean {
+    return !this.stepRows.some(s => s.actionType === 'Manual');
+  }
+
+  /** Every row has an execution type (and Manual only ever as the sole row). */
+  stepsValid(): boolean {
+    if (this.stepRows.length === 0 || this.stepRows.some(s => !s.actionType)) return false;
+    return this.stepRows.length === 1 || this.canAddStep();
+  }
+
+  usesStepType(actionType: string): boolean {
+    return this.stepRows.some(s => s.actionType === actionType);
+  }
+
+  /** Project the rows onto the request shape the backend expects. Fix Category is
+   *  read-only, so it is re-derived here from the resulting ActionType. */
+  private applyStepsToForm() {
+    const rows = this.stepRows;
+    if (rows.length > 1) {
+      this.form.actionType    = 'Composite';
+      this.form.actionPayload = null;
+      this.form.steps         = rows.map((s, i) => ({ stepOrder: i + 1, actionType: s.actionType,
+                                                      actionPayload: s.actionPayload, description: s.description?.trim() || null }));
+    } else {
+      const only = rows[0];
+      this.form.actionType    = only?.actionType ?? '';
+      this.form.actionPayload = only && only.actionType !== 'Manual' && only.actionPayload ? only.actionPayload : null;
+      this.form.steps         = [];
+    }
+    // An untouched type keeps the stored category; a changed one re-derives it.
+    this.form.fixCategory = !this.form.actionType ? ''
+      : this.form.actionType === this.loaded.actionType ? this.loaded.fixCategory
+      : this.defaultCategoryFor(this.form.actionType);
+  }
+
+  /** ActionType/FixCategory as opened (after Manual normalisation); blank for a new rule. */
+  private loaded = { actionType: '', fixCategory: '' };
 
   // Reverse of the order-map above: execution type → most natural fix category.
   private defaultCategoryFor(actionType: string): string {
@@ -442,7 +464,10 @@ export class FixOptionDrawerComponent {
     return map[actionType] ?? 'Retry';
   }
 
-  syncFixRuleSignal() { this.formSignal.set({ ...this.form }); }
+  syncFixRuleSignal() {
+    this.applyStepsToForm();
+    this.formSignal.set({ ...this.form });
+  }
 
   pickClassificationRuleById(ruleId: number | null) {
     if (ruleId == null) return;
@@ -464,25 +489,22 @@ export class FixOptionDrawerComponent {
   }
 
   addStep() {
-    const steps = this.form.steps ?? [];
-    steps.push({ stepOrder: steps.length + 1, actionType: 'SqlScript', actionPayload: '', description: null });
-    this.form.steps = steps;
+    if (!this.canAddStep()) return;
+    this.stepRows.push({ ...this.blankStep(), stepOrder: this.stepRows.length + 1 });
     this.syncFixRuleSignal();
   }
   removeStep(index: number) {
-    const steps = this.form.steps ?? [];
-    steps.splice(index, 1);
-    steps.forEach((s, i) => s.stepOrder = i + 1);
-    this.form.steps = steps;
+    if (this.stepRows.length <= 1) return;   // a fix always keeps its first row
+    this.stepRows.splice(index, 1);
+    this.stepRows.forEach((s, i) => s.stepOrder = i + 1);
     this.syncFixRuleSignal();
   }
   moveStep(index: number, delta: number) {
-    const steps = this.form.steps ?? [];
+    const rows = this.stepRows;
     const target = index + delta;
-    if (target < 0 || target >= steps.length) return;
-    [steps[index], steps[target]] = [steps[target], steps[index]];
-    steps.forEach((s, i) => s.stepOrder = i + 1);
-    this.form.steps = steps;
+    if (target < 0 || target >= rows.length) return;
+    [rows[index], rows[target]] = [rows[target], rows[index]];
+    rows.forEach((s, i) => s.stepOrder = i + 1);
     this.syncFixRuleSignal();
   }
   payloadPlaceholderFor(actionType: string): string {
@@ -501,6 +523,10 @@ export class FixOptionDrawerComponent {
              actionType: '', actionPayload: null, isAutoHealEligible: false, enabled: true, steps: [] };
   }
 
+  private blankStep(): FixPolicyStepDto {
+    return { stepOrder: 1, actionType: '', actionPayload: '', description: null };
+  }
+
   // ── SqlScript "scope to failing row" shortcut ─────────────────────────────
   sqlFixNeedsScopeShortcut(payload: string | null | undefined): boolean {
     const q = (payload ?? '').trim();
@@ -516,11 +542,6 @@ export class FixOptionDrawerComponent {
   private appendSourceIdScope(payload: string | null | undefined): string {
     const base = (payload ?? '').replace(/;\s*$/, '').trimEnd();   // drop a trailing ';'
     return `${base} ${this.scopeClauseFor(base)} ${this.fixScopeColumn} = '{sourceId}'`;
-  }
-
-  scopeFixPayloadToSourceId() {
-    this.form.actionPayload = this.appendSourceIdScope(this.form.actionPayload);
-    this.syncFixRuleSignal();
   }
 
   scopeStepToSourceId(step: { actionPayload: string }) {
