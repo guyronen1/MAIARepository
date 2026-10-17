@@ -2,6 +2,54 @@
 
 # Known follow-ups (not blocking)
 
+## ▶ Next session — prioritized task list (updated 2026-10-14)
+
+The open items from the sections below, ordered. Details and acceptance criteria stay in the linked sections. Strike items here when they ship.
+
+**P1 — Click through what shipped on 2026-10-14 (browser, admin login, API restarted).** Everything below is unit-tested; the HTTP endpoints were checked with curl. Nobody has used them in the browser yet.
+1. **View Source** (*View Source follow-ons*): open a DB failure (e.g. #5000 on `dbo.Event`), an FS log failure (#4998) and a FileContent XML failure (#2859).
+   - The rule's columns are highlighted.
+   - The log scrolls to the highlighted line.
+   - The XML is formatted.
+   - Esc closes only the popup, and ↑/↓ don't switch the failure behind it.
+   - Dark mode reads correctly.
+   - Also check **✦ Ask KAIA**, which now sits in a toolbar at the top of the drawer.
+2. **Scan-rule column dropdowns + NotEquals / Contains / InList** (*Scan-rule drawer* section, item 2, acceptance 1–4). Create one rule per new check kind against `B2B_Test` and let it scan.
+3. **Fix-option step rows** (*UI improvements 2026-10-14*, item 1): save a 1-step, 2-step and Manual policy, then reopen an existing Composite.
+4. **Per-user job visibility** (shipped 2026-10-17, *Per-user job visibility* at the end of this file). Restart `Maia.API` first. As admin, open `/config/users`, untick All jobs for an operator and tick one job. Sign in as that operator and check the dashboard, failures, recommendations, Monitored Jobs and the command palette. Then tick no jobs and check the "No monitored jobs are assigned to you" banner.
+
+**P2 — Redeploy IIS.** `C:\inetpub\Maia` dates from 2026-10-12 and lacks Oracle sources, the assistant drawer, View Source, the new check kinds and the column dropdowns.
+- Follow `DEPLOYMENT.md`.
+- The database needs `upgrade-existing-to-20261012.sql`, which now runs through `20261014200000_AllowNewDbConditionKinds` and includes `JobFailures.ScanCheckRuleId`. Rename the script to match the latest migration while there.
+- Turn on `KnowledgeAssistant:Enabled` + `knowledgeAssistantUrl` only if the KnowledgeAgent Api is deployed next to it.
+
+**P3 — Fix the SQL Server table-rule watermark bugs** (*Oracle follow-ons*, "latent bugs" (a) and (b)). This is the most valuable code task: without it, a busy table can silently skip or re-report rows.
+- Add `ORDER BY <watermark> ASC` to the outer `TOP 500` query.
+- Take the last non-null value as the new watermark, as the Oracle dialect already does.
+- Pin it with a test that has more than 500 matching rows and an int `9`/`10` watermark.
+
+**P4 — Oracle live verification, done as one batch on a machine that can reach an Oracle DB.** This machine can't: `ORCL` doesn't resolve (ORA-12154).
+- Scan acceptance 1–5 (*Oracle follow-ons*).
+- The new check kinds (*Scan-rule drawer* item 1).
+- The `ALL_TAB_COLUMNS` column lookup with its synonym fallback (item 2).
+- The View Source row lookup (`… WHERE ("KEY" = :p_Id) AND ROWNUM <= 5`).
+
+**P5 — Feature backlog. Pick by operator priority; nothing here is in progress.**
+- Composite scan rules **Phase 2**: FileContent multi-locator and FS multi-keyword. No migration needed (see top of file).
+- Scan-rule drawer: a **Source Table dropdown** and **columns for SqlQuery rules** (read-only describe), plus resolving **SQL Server synonyms** in the column lookup (*Scan-rule drawer* item 2, "Next steps" / "Still owed").
+- View Source: **store the matched line's byte offset** on FS failures, so repeated identical lines aren't all highlighted.
+- `{col:Name}` fix-payload placeholders (*Detail Columns follow-ons*).
+- Watermark tools: reset, configurable look-back, show the current value (*Start from now*, "Out of scope").
+- Folder picker: list `\\server` shares, and quick-pick chips for folders other sources already use (*Scan-source folder picker follow-ons*).
+- **[discuss first]** guided scan-configuration wizard (UI/UX item 8). **[deferred]** full RTL/Hebrew (UI/UX item 11).
+
+**P6 — Hygiene. Do it opportunistically, when you're in the file anyway.**
+- Per-component SCSS budgets are exceeded by `failure-detail` 6.47 kB, `fix-option-drawer` 4.50 kB, `dashboard`, `job-config` and `top-bar`. Raise the budget or extract shared styles.
+- **Modal stacking.** Modals opened inside a drawer (source viewer, folder picker) live in the drawer's z-50 stacking context, so they can't cover the top bar. The source viewer sits below the top bar to work around this. If more modals arrive, add a shell-level overlay host (CDK Overlay or a portal).
+- Four bespoke monitored-jobs drawers still don't use `DrawerComponent`.
+- `ConfigController`-family inline EF writes should move behind repositories (*audit #5/#6*).
+- The two hero KPI tiles are clickable when zero, and the P1.3 undo toast isn't built (*UI/UX P0–P2*).
+
 - **🏗️ ARCHITECTURE — heterogeneous scan rules under one MonitoredJob — DECIDED: Tier 2.5, SHIPPED.**
   **Decision (2026-06-09):** build a **`ScanSource`** entity (a typed observation point within a job: its own ScanType + scan config + scan rules), keep **leases 1:1 with MonitoredJob** (per-source leases deferred — operator confirmed no cadence-divergence need: B2B DB+log mix isn't a problem, no differing frequency requirements, no real-time recovery tension). Per-source `ScanRunHistory` rows (achievable under per-job leases). This delivers Option A's "roll up by operational concept, drill down to per-source detail" UX without the per-source lease machinery.
   **Phasing (all phases complete):** **(a)** schema + backfill — `ScanSources` table + `ScanSourceId` on 5 tables. **(b)** worker + `IScanStrategy` contract. **(c)** read-side rollup. **(d)** config UI/UX rework (dedicated per-job screen). **(e/cleanup — DONE 2026-06-17)** `ScanSourceId` enforced NOT NULL on all 5 tables (migration `Tier25CleanupColumns`), ALL 7 legacy `MonitoredJob` scan-config columns dropped including `ScanTypeId` (`LogFolder`, `SearchPatterns`, `ConnectionName`, `LogSourceUrl`, `InputFolder`, `IncludeSubfolders`, `ScanTypeId` — FK and index dropped in the same migration). Dead scan-config fields also removed from `UpsertMonitoredJobRequest` contract (2026-06-20). **Per-source leases remain cleanly deferrable** — re-key the lease FK + claim JOIN as an isolated later change if cadence divergence ever becomes real.
@@ -100,7 +148,7 @@ From the design/UX review; all items operator-approved. Items marked **[discuss 
 
 Full rationale in `DECISIONS.md` → "UI/UX pass — P0–P2 batch". ~21 commits, each built clean. Open items:
 
-- **~~⚠️ Two backend changes need an API restart to take effect / be tested.~~ PARTIALLY RESOLVED 2026-09-06.** The severity sort turned out to be **broken, not merely undeployed**: `4 - (int)j.ErrorType!.Severity` can't be translated because `Severity` persists as nvarchar via `HasConversion<string>()`, so EF emitted a raw subtract against a string column (`the data types nvarchar and nvarchar are incompatible in the subtract operator`). Fixed by ranking with nested ternaries (a switch *expression* is illegal inside an expression tree — CS8514). Ordering semantics unchanged. **Still open:** the generalized `GetResolutionMix` 24h/7d/30d window remains unverified, and `dotnet test Maia.Tests --filter FailuresSortTests` still hasn't been run — a **running `Maia.API` locks `API/bin`**, so `Maia.Tests` (which references `Maia.API`) can't rebuild while the app is up. Stop the API, then run it.
+- **~~⚠️ Two backend changes need an API restart to take effect / be tested.~~ PARTIALLY RESOLVED 2026-09-06.** The severity sort turned out to be **broken, not merely undeployed**: `4 - (int)j.ErrorType!.Severity` can't be translated because `Severity` persists as nvarchar via `HasConversion<string>()`, so EF emitted a raw subtract against a string column (`the data types nvarchar and nvarchar are incompatible in the subtract operator`). Fixed by ranking with nested ternaries (a switch *expression* is illegal inside an expression tree — CS8514). Ordering semantics unchanged. **`FailuresSortTests` now run green** (2026-10-14, part of the full 559-test suite). The workaround for a running `Maia.API` locking `API/bin` is `dotnet test Maia.Tests -c Release`, which builds to `bin/Release`. **Still open:** the generalized `GetResolutionMix` 24h/7d/30d window is unverified in the UI.
 - **Auto-heal "undo toast" deferred (P1.3).** The confirm-on-arm gate shipped; an undo-toast wasn't — `NotificationService` has no action-button support. Add if the toast channel is extended.
 - **Hero KPI tiles stay clickable on zero (P0.3).** The disabled-on-zero treatment (pointer-events/tabindex/aria-disabled) was applied to the **four secondary chips** only; the two hero tiles (Awaiting Action / Manual Required) mute on zero but remain clickable. Extend to the heroes if desired — one-liner each.
 - **P2.3 (relative timestamps in live lists + skeleton loaders) and P2.2 (RTL logical-property sweep) not started.** Dedup of consecutive-identical failures was **backed off** (the watermark already prevents replays; a presentational collapse could hide genuine repeats).
@@ -190,7 +238,7 @@ Context: Database scan sources can target Oracle (`ConnectionStrings:{Name}_Prov
   - Fix for both: add `ORDER BY <watermark> ASC` to the outer query and take the last non-null value, as the Oracle dialect does.
 - **Oracle fix executors.** SqlScript / StoredProcedure are SQL Server-only and refuse Oracle connections. Oracle-side fixes would first need an Oracle write-guard (ScriptDom is T-SQL-only). Scan = read-strict; fix = scope-strict.
 
-## UI improvements requested 2026-10-14 (not started)
+## UI improvements requested 2026-10-14 (both SHIPPED 2026-10-14)
 
 1. ~~**Fix-option drawer: show the execution steps as table rows, like the scan-rule conditions editor.**~~ **SHIPPED 2026-10-14** (frontend only; spec rewritten, 16 green). Opening a policy keeps its stored Fix Category unless the resulting ActionType changes. A stored `Composite` with a single step opens as one row and re-saves as a single action, and that step's description is dropped.
    - **Today** (`features/config/monitored-jobs/drawers/fix-option-drawer.component.ts`): the operator picks a top-level **Execution Type**, and `Composite` is one of the choices. Picking it reveals a separate "Steps" editor made of boxed blocks (type select, payload, then a description under each).
@@ -235,7 +283,10 @@ Context: `GET /api/data/failures/{id}/source` + `SourceViewerComponent` (see DEC
 - **Store the matched line's position on FS failures** (byte offset = watermark + offset in chunk). Today the viewer re-finds the excerpt by text, so repeated identical lines all highlight and it scrolls to the last one.
 - **Oracle row lookup is unverified live.** The SQL is unit-tested (`SELECT * … WHERE ("KEY" = :p_Id) AND ROWNUM <= 5`); add it to the Oracle live-verification list above.
 - **Access tier.** It is open to `RequireUser` by choice. If source rows turn out to hold data Users shouldn't see, switch the action to `RequireOperator` and gate the button on `canAct()`.
-- **Not deployed / not exercised through the running API.** It was verified via a scratch harness calling `SourceDataReader` against `MaiaDB_Test` (DB row, FS log, FileContent XML), because a running `Maia.API` was holding `bin/Debug`. Restart the API and click through it once.
+- **Browser click-through still owed (Next session P1.1).** Verified so far:
+  - A scratch harness called `SourceDataReader` against `MaiaDB_Test` (DB row, FS log, FileContent XML).
+  - Over HTTP after the API restart on 2026-10-14: `/status` returns `scanType`, and `/source` returns the `dbo.Event` row for #5000 and the 850 KB log for #4998.
+  - Not deployed to IIS (P2).
 
 ## Scan-rule drawer: more DB check types + column picker (requested 2026-10-14, both items shipped 2026-10-14)
 
@@ -267,3 +318,99 @@ Scope: **Database** scan rules on a **table** (`ValueEquals` / `ColumnRange` sha
    - **Next steps (out of scope here):**
      - A **table dropdown** for Source Table itself (`…/scan-sources/{id}/tables`, same reader seam: `sys.objects` / `ALL_TABLES` + `ALL_VIEWS`).
      - **Columns for SqlQuery rules** from the query's result shape: `sp_describe_first_result_set` on SQL Server; on Oracle, describe a `WHERE 1=0` wrap through `DbDataReader.GetColumnSchema()`. Must stay read-only: no execution of an `EXEC`.
+
+## Per-user job visibility (requested 2026-10-17, SHIPPED 2026-10-17)
+
+**Status:** built as planned below; see CLAUDE.md → Current Status and DECISIONS → "Per-user job visibility". 575 backend + 132 frontend tests green. Smoke-tested on real SQL Server (`MaiaDB_Test`, temporary :5199 instance); migration applied by hand to `MaiaDB_Test`.
+- **Differs from the plan:** the column is `Users.RestrictToAssignedJobs bit DEFAULT 0` (inverted), not `AllJobsAccess DEFAULT 1`, because an EF bool with a `true` store default silently inserts `true` for `false`. The API and UI still say `allJobs`. Linked classification-rule job names the user can't see collapse into `+N other jobs` instead of being dropped. The `/auth/me` hint became a shell banner, shown only when a user is limited and has zero jobs.
+- **Still owed:**
+  - Browser click-through (Next session P1.4).
+  - IIS: `upgrade-existing-to-20261012.sql` now includes step 3d `AddUserJobAccess` and the history row.
+  - Open points 6 below (assigning from the job side, auto-assigning new jobs, AD groups) are not built.
+- **Found while verifying (pre-existing, not caused by this):** `GET /api/data/scan-runs` with no filters times out (30 s, 500) for admins too, on the old code as well. No screen calls it today. Check `SqlScanRunHistoryRepository.GetPagedAsync`: the `Include(MonitoredJob, ScanSource)` plus the `COUNT` over the whole table, against the indexes.
+
+*Original plan, kept for the record:*
+
+Context: today every signed-in user sees every MonitoredJob's data. The operator wants each Operator / User limited to the jobs assigned to them, picked by an admin from a job checklist on the Users page (`/config/users`). The dashboard, failures, recommendations, operator actions, scan jobs, unconfigured page and config screens then show only those jobs. Nothing links users to jobs yet: the only user tables are `Users`, `Roles` and `UserSessions`.
+
+**Decided 2026-10-17 (operator):**
+- **Administrators always see every job.** Operators and Users are limited to their jobs.
+- **Each user has an "All jobs" flag** next to the checklist. Existing users are migrated with `AllJobs = on`, so rollout changes nothing until an admin narrows someone. New users created in the UI start with `AllJobs = off` and an empty checklist.
+- **Shared config stays read-only for limited users.** This already holds: every `/api/config` write is `RequireAdmin`, and Operators only have reads. For Operators, "manage" means acting on failures and recommendations and triggering scans.
+
+1. **Schema**
+   - New table `UserMonitoredJobs (UserId, MonitoredJobId)`: composite PK, both FKs `ON DELETE CASCADE`, index on `MonitoredJobId`.
+   - New column `Users.AllJobsAccess bit NOT NULL DEFAULT 1`. The default backfills existing users.
+   - EF migration `AddUserJobAccess`. Then regenerate `Scripts/schema-clean.sql` (`generate-clean-schema.ps1`), add an upgrade script or extend the current one, and apply it by hand to the local `MaiaDB_Test` (its schema is script-managed).
+
+2. **Backend: one scope service**
+   - Core: `IJobAccessScope`, scoped per request. It offers `Task<JobVisibility> GetAsync(ct)` and `Task<bool> CanSeeAsync(int? monitoredJobId, ct)`.
+     - `JobVisibility { bool Unrestricted; int UserId }`. A user is unrestricted when they are an Administrator or have `AllJobsAccess`.
+     - It is loaded lazily, once per request, from `ICurrentUserAccessor.UserId` plus the user row. It is **not stored in claims**, so an admin's change applies on the user's next request.
+   - Infrastructure: one extension, `IQueryable<T>.WhereJobVisible(vis, x => x.MonitoredJobId)`.
+     - It does nothing when the user is unrestricted.
+     - Otherwise it adds a correlated `db.UserMonitoredJobs.Any(u => u.UserId == vis.UserId && u.MonitoredJobId == x.MonitoredJobId)`. Correlated `Any()` is safe under the no-`ROW_NUMBER` invariant, and it avoids an OPENJSON id-list parameter.
+     - A failure with no job (`MonitoredJobId IS NULL`) is visible only to unrestricted users.
+   - **A limited user who requests an `{id}` outside their jobs gets 404**, not 403, so the response doesn't reveal that the item exists. The client already toasts plain 403s as "no permission".
+
+3. **Endpoints to filter**
+   - **Lists**: add an optional `JobVisibility` parameter to these repository methods:
+     - `SqlJobRepository.GetPagedAsync`, plus `GetIdsWithRecentFixFailureAsync` (its input ids are already filtered)
+     - `SqlRecommendationRepository.GetPagedAsync`
+     - `SqlMonitoredJobRepository.GetActiveWithRulesAsync` / `GetAllWithRulesAsync` / `GetActiveAsync`
+     - `SqlScanRunHistoryRepository.GetPagedAsync`: its single `monitoredJobId` filter becomes "the given job, if visible".
+   - **Inline queries**: apply `WhereJobVisible` by hand.
+     - `DataController` `worker-status`: filter the leases, history and job shells. `workerAlive`, `aliveWindowSeconds` and `isPaused` stay global.
+     - `dashboard-stats`: the `FixExecutionLogs` counts go through `Failure.MonitoredJobId`.
+     - The three `analytics/*` endpoints and `operator-actions`.
+     - `UnconfiguredController` `clusters` and `policy-gaps`.
+   - **`{id}` guards**: resolve each id to its job, then return 404 if the user can't see it.
+     - `failures/{id}/status`, `/source` and `/mark-resolved`. `/source` matters most because it returns live source rows and files.
+     - `recommendations/{id}/approve`, `/reject` and `/retry`, through `rec.Failure.MonitoredJobId`.
+     - `JobScan/{id}` and `JobScan/by-name/{name}`. `JobScan/scan-all` scans only the jobs the user can see.
+     - The config reads `monitored-jobs/{id}`, and `fix-policy-rules/{id}` when the policy is a per-job override.
+   - **Shared config stays fully visible (read-only)**: error types, job types, global classification rules, and JobType-default fix policies (`MonitoredJobId IS NULL`). Two parts of it are filtered:
+     - The classification-rules list's `LinkedJobNames`, which would otherwise reveal other jobs' names.
+     - Per-job override rows in the `fix-policy-rules` list.
+   - **Deliberately unchanged**:
+     - The worker, which is system-level.
+     - `admin/audit-log`, which is Admin-only and unfiltered.
+     - The global pipeline triggers (`JobScan/classify-pending`, `generate-suggestions`, `execute-fixes`, `run-pipeline`, `run-directory`, `classify-failures`) and the approve-time drain of `ExecuteFixesUseCase`. They process only work the system or another operator already decided, the same as a worker tick, and return counts, not data.
+
+4. **Users API** (Admin-only, `UsersController`)
+   - `GET /api/users` adds `allJobs` and `jobCount`.
+   - `GET /api/users/{id}/jobs` returns `{ allJobs, jobIds[] }`.
+   - `PUT /api/users/{id}/jobs` takes `{ allJobs, jobIds[] }` and replaces the whole set.
+     - An unknown job id returns 400 `UnknownJob`.
+     - For an Administrator target the call is stored but has no effect.
+     - It writes an audit row `UserJobAccessUpdated` (`EntityType="User"`) whose detail is a diff, e.g. `AllJobs: true → false, Jobs: (none) → B2B Import, Orders DB`.
+   - `POST /api/users` gains optional `allJobs` and `jobIds`.
+   - Add the new routes to `AuthorizationMatrixTests`.
+
+5. **Client**
+   - `features/config/users/users.component.ts`:
+     - A new **Jobs** table column showing `All` or `N jobs`.
+     - A new **Job access** section in the create / edit drawer: an `All jobs` checkbox above a filterable checklist of every MonitoredJob (`ConfigService.getAllJobs()`, inactive jobs tagged), with Select all and Clear.
+     - The checklist is disabled while `All jobs` is ticked or the role is Administrator. For admins it reads "Administrators see all jobs".
+   - `core/services/users.service.ts`: add `getJobs(id)` and `setJobs(id, …)`.
+   - Other screens need no logic change, because the server does the filtering. Add an empty state, "No jobs are assigned to you — ask an administrator", on the dashboard and failures list for a limited user with no jobs.
+   - Optional: `/auth/me` returns `jobScope: 'all' | 'assigned'`, so the top bar can show a subtle "Assigned jobs" hint.
+
+6. **Open points (decide when building)**
+   - **Assigning from the job side**: a users checklist on the job edit drawer. Also auto-assignment: admins create jobs and already see everything, so a new job stays invisible to limited users until someone ticks it.
+   - Whether the shared config pages should hide JobType defaults for JobTypes the user has no job in. Recommended: no.
+   - When AD login (v2) arrives, decide whether AD groups drive job access.
+
+**Acceptance:**
+1. After the migration, an existing operator still sees everything (`AllJobs = on`).
+2. An admin unticks All jobs for operator X and ticks job A. X then sees only job A on:
+   - dashboard KPIs, charts and Needs Attention
+   - the failures list, recommendations and operator actions
+   - scan jobs and the unconfigured page
+   - Monitored Jobs config (incl. the Flow view)
+   - the command palette
+3. X opening `/failures?selected=<a job-B failure>` gets 404, and so does X calling `/source` or approve on a job-B recommendation.
+4. X's Run All Scans scans only job A.
+5. An admin still sees all, and the admin's edit drawer shows the checklist disabled.
+6. The audit log shows `UserJobAccessUpdated` with the diff.
+7. The auth matrix and new integration tests are green: limited-operator lists, the 404 guards, and a check that `WhereJobVisible`'s `ToQueryString()` contains no `ROW_NUMBER`.

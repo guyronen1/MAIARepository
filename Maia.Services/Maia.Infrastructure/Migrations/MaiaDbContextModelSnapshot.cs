@@ -1275,6 +1275,11 @@ namespace Infrastructure.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<bool>("RestrictToAssignedJobs")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(false);
+
                     b.Property<int>("RoleId")
                         .HasColumnType("int");
 
@@ -1291,6 +1296,21 @@ namespace Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("Users", (string)null);
+                });
+
+            modelBuilder.Entity("Maia.Core.Entities.UserMonitoredJob", b =>
+                {
+                    b.Property<int>("UserId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("MonitoredJobId")
+                        .HasColumnType("int");
+
+                    b.HasKey("UserId", "MonitoredJobId");
+
+                    b.HasIndex("MonitoredJobId");
+
+                    b.ToTable("UserMonitoredJobs", (string)null);
                 });
 
             modelBuilder.Entity("Maia.Core.Entities.UserSession", b =>
@@ -1646,6 +1666,25 @@ namespace Infrastructure.Migrations
                     b.Navigation("Role");
                 });
 
+            modelBuilder.Entity("Maia.Core.Entities.UserMonitoredJob", b =>
+                {
+                    b.HasOne("Maia.Core.Entities.MonitoredJob", "MonitoredJob")
+                        .WithMany()
+                        .HasForeignKey("MonitoredJobId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Maia.Core.Entities.User", "User")
+                        .WithMany("JobAccess")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("MonitoredJob");
+
+                    b.Navigation("User");
+                });
+
             modelBuilder.Entity("Maia.Core.Entities.UserSession", b =>
                 {
                     b.HasOne("Maia.Core.Entities.User", "User")
@@ -1733,6 +1772,8 @@ namespace Infrastructure.Migrations
 
             modelBuilder.Entity("Maia.Core.Entities.User", b =>
                 {
+                    b.Navigation("JobAccess");
+
                     b.Navigation("Sessions");
                 });
 #pragma warning restore 612, 618

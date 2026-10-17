@@ -29,6 +29,23 @@ deferred (see Known follow-ups). Composite scan rules shipped Phase 1 (DB) on
 - **Composite scan rules** — ~~Phase 1 (DB multi-column AND)~~ **SHIPPED 2026-10-12**;
   Phase 2 (FileContent multi-locator + FS multi-keyword) open — see Known follow-ups.
 
+**Next:** see `FOLLOWUPS.md` → "▶ Next session — prioritized task list". In order: browser click-through of the 2026-10-14 features, IIS redeploy, the SQL Server table-rule watermark bugs, then an Oracle live-verification batch.
+
+**Last completed (2026-10-14) — operator-facing batch (all on `main`, pushed):**
+
+- **Oracle Database scan sources.** `{Name}_ProviderName = "Oracle"` next to the connection string selects the engine, and `SqlDialect` generates the table-rule SQL for it. Scan-only. Not yet run against a live Oracle.
+- **Knowledge assistant drawer.** KnowledgeAgent's `<knowledge-assistant>` is embedded as a right-hand drawer, gated on `KnowledgeAssistant:Enabled` plus `knowledgeAssistantUrl`. **✦ Ask KAIA** now sits in a toolbar at the top of the failure drawer.
+- **View Source popup.** It shows the **live** source behind a failure, read from the scanned DB or disk and never copied into MaiaDB:
+  - the full DB row, found by the rule's `SourceIdColumn`;
+  - the log file, scrolled to the matched line;
+  - the data file, with XML formatted.
+  - Endpoint: `GET /api/data/failures/{id}/source`. New column `JobFailures.ScanCheckRuleId` (no FK).
+- **Fix-option drawer as step rows.** The Composite choice is gone: 1 row saves as a single action, 2+ rows save as Composite.
+- **Error message as a field table** in the drawer, with a Show raw toggle.
+- **New DB check kinds NotEquals / Contains / InList,** usable as a rule's own check and as conditions (migration `AllowNewDbConditionKinds`).
+- **Scan-rule column dropdowns,** read live from the source table (Admin-only `GET /api/config/scan-sources/{id}/columns`).
+- **Tests:** 559 backend and 128 frontend, all green. Both migrations are applied by hand to `MaiaDB_Test`.
+
 **Last completed (2026-10-12) — Composite scan rules, Phase 1 (Database table rules):**
 
 - **One DB rule can now require several columns on the SAME row.** A `ValueEquals` /

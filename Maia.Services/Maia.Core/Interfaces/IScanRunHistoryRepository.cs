@@ -1,6 +1,7 @@
 using Maia.Core.Entities;
 using Maia.Core.Enums;
 using Maia.Core.Results;
+using Maia.Core.Security;
 
 namespace Maia.Core.Interfaces;
 
@@ -16,6 +17,7 @@ public interface IScanRunHistoryRepository
         DateTime?      toDate,
         int            page,
         int            pageSize,
+        JobVisibility? visibility = null,
         CancellationToken ct = default);
 
     /// <summary>

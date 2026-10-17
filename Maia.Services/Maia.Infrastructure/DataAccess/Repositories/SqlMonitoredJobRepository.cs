@@ -24,6 +24,17 @@ public sealed class SqlMonitoredJobRepository(IDbContextFactory<MaiaDbContext> f
             .ToListAsync(ct);
     }
 
+    public async Task<IReadOnlyDictionary<int, string>> GetNamesAsync(
+        IEnumerable<int> monitoredJobIds, CancellationToken ct = default)
+    {
+        var ids = monitoredJobIds.Distinct().ToList();
+        if (ids.Count == 0) return new Dictionary<int, string>();
+        await using var db = await factory.CreateDbContextAsync(ct);
+        return await db.MonitoredJobs
+            .Where(m => ids.Contains(m.MonitoredJobId))
+            .ToDictionaryAsync(m => m.MonitoredJobId, m => m.Name, ct);
+    }
+
     public async Task<List<MonitoredJob>> GetActiveWithRulesAsync(CancellationToken ct = default)
     {
         await using var db = await factory.CreateDbContextAsync(ct);

@@ -82,6 +82,8 @@ var authOptions = builder.Configuration.GetSection("Auth").Get<AuthOptions>() ??
 builder.Services.AddSingleton(authOptions);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserAccessor, HttpContextCurrentUserAccessor>();
+// Per-user job visibility (UserMonitoredJobs) — scoped so it resolves once per request.
+builder.Services.AddScoped<IJobAccessScope, Maia.Application.Security.JobAccessScope>();
 builder.Services
     .AddAuthentication(MaiaSessionAuthenticationHandler.SchemeName)
     .AddScheme<AuthenticationSchemeOptions, MaiaSessionAuthenticationHandler>(

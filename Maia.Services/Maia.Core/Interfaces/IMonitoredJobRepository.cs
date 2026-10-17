@@ -20,6 +20,10 @@ public interface IMonitoredJobRepository
     Task<List<ClassificationRule>> GetEffectiveRulesAsync(int monitoredJobId, CancellationToken ct = default);
 
     Task<List<MonitoredJob>> GetAllWithRulesAsync(CancellationToken ct = default);
+
+    /// <summary>Id → Name for the given job ids that exist (active or not). A cheap
+    /// lookup for validating id lists and writing readable audit text.</summary>
+    Task<IReadOnlyDictionary<int, string>> GetNamesAsync(IEnumerable<int> monitoredJobIds, CancellationToken ct = default);
     Task<MonitoredJob> SaveAsync(MonitoredJob job, CancellationToken ct = default);
     Task UpdateAsync(MonitoredJob job, CancellationToken ct = default);
     Task DeleteAsync(int monitoredJobId, CancellationToken ct = default);

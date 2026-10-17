@@ -110,6 +110,8 @@ public sealed class AuthorizationMatrixTests : IAsyncLifetime
         new("POST", "/api/users", Tier.Admin),
         new("PUT", "/api/users/1", Tier.Admin),
         new("POST", "/api/users/1/reset-password", Tier.Admin),
+        new("GET", "/api/users/1/jobs", Tier.Admin),
+        new("PUT", "/api/users/1/jobs", Tier.Admin),
     };
 
     private AuthTestFactory _factory = null!;

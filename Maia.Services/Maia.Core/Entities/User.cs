@@ -19,9 +19,16 @@ public class User
     /// is permitted. Set on the seeded bootstrap admin and on admin-initiated resets.</summary>
     public bool MustChangePassword { get; set; }
 
+    /// <summary>When true, a non-admin user sees and acts on only the jobs in
+    /// <see cref="JobAccess"/>. False (the default, and the backfill for users that
+    /// pre-date job assignment) = every job, the "All jobs" switch in the UI.
+    /// Stored inverted so the column's DB default is the CLR default (false).</summary>
+    public bool RestrictToAssignedJobs { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime? LastLoginAt { get; set; }
 
     public Role? Role { get; set; }
     public ICollection<UserSession> Sessions { get; set; } = [];
+    public ICollection<UserMonitoredJob> JobAccess { get; set; } = [];
 }

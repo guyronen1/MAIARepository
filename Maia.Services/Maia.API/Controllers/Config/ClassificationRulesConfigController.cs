@@ -20,6 +20,7 @@ public class ClassificationRulesConfigController(
     IDbContextFactory<MaiaDbContext>             dbFactory,
     IAuditRepository                             audit,
     ICurrentUserAccessor                         currentUser,
+    IJobAccessScope                              access,
     ILogger<ClassificationRulesConfigController> logger)
     : ConfigControllerBase(audit, currentUser, logger)
 {
@@ -143,10 +144,21 @@ public class ClassificationRulesConfigController(
         var links = await (from m in db.MonitoredJobRules
                            where m.IsActive
                            join j in db.MonitoredJobs on m.MonitoredJobId equals j.MonitoredJobId
-                           select new { m.RuleId, j.Name }).ToListAsync(ct);
+                           select new { m.RuleId, j.MonitoredJobId, j.Name }).ToListAsync(ct);
+        // Per-user job visibility: the rules are shared config, but names of jobs the
+        // caller can't see are not revealed — they collapse into one "+N other job(s)"
+        // entry, so a job-scoped rule never reads as a JobType default.
+        var visible = await access.GetVisibleJobIdsAsync(ct);
         var linkedJobsByRule = links
             .GroupBy(l => l.RuleId)
-            .ToDictionary(g => g.Key, g => g.Select(x => x.Name).OrderBy(n => n).ToList());
+            .ToDictionary(g => g.Key, g =>
+            {
+                var names = g.Where(l => visible is null || visible.Contains(l.MonitoredJobId))
+                             .Select(x => x.Name).OrderBy(n => n).ToList();
+                var hidden = g.Count() - names.Count;
+                if (hidden > 0) names.Add(hidden == 1 ? "+1 other job" : $"+{hidden} other jobs");
+                return names;
+            });
 
         return Ok(rules.Select(r => new
         {

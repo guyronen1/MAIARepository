@@ -1,5 +1,6 @@
 using Maia.API.Auth;
 using Maia.Core.Configuration;
+using Maia.Core.Enums;
 using Maia.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -21,7 +22,9 @@ public class AuthController(
     ICurrentUserAccessor  currentUser,
     AuthOptions           options,
     IWebHostEnvironment   env,
-    IConfiguration        config) : ControllerBase
+    IConfiguration        config,
+    IJobAccessScope       jobAccess,
+    IUserRepository       users) : ControllerBase
 {
     public sealed record LoginRequest(string Username, string Password);
     public sealed record ChangePasswordRequest(string CurrentPassword, string NewPassword);
@@ -50,13 +53,21 @@ public class AuthController(
 
         Response.Cookies.Append(options.CookieName, result.Token!, SessionCookie.Build(options));
 
+        // This request is still anonymous (the cookie was only just issued), so the job
+        // scope comes from the loaded user row rather than IJobAccessScope.
+        var user = result.User!;
+        var restricted = user.RoleId != (int)MaiaRole.Administrator && user.RestrictToAssignedJobs;
+        var assignedCount = restricted ? (await users.GetAssignedJobIdsAsync(user.UserId, ct)).Count : 0;
+
         return Ok(new
         {
-            username             = result.User!.Username,
-            role                 = result.User.Role?.Name,
+            username             = user.Username,
+            role                 = user.Role?.Name,
             mustChangePassword   = result.MustChangePassword,
             canSkipPasswordChange = SkipAllowed,
             knowledgeAssistantEnabled = AssistantEnabled,
+            jobScope             = restricted ? "assigned" : "all",
+            assignedJobCount     = assignedCount,
         });
     }
 
@@ -109,13 +120,17 @@ public class AuthController(
 
     /// <summary>Current identity for the SPA. Anonymous returns 200 with
     /// <c>authenticated:false</c> (not 401) so the client can branch without tripping
-    /// its 401-redirect interceptor.</summary>
+    /// its 401-redirect interceptor. <c>jobScope</c> ("all" | "assigned") and
+    /// <c>assignedJobCount</c> drive the "no jobs assigned to you" empty state — UX only;
+    /// the API filters every read by the same scope.</summary>
     [AllowAnonymous]
     [HttpGet("me")]
-    public IActionResult Me()
+    public async Task<IActionResult> Me(CancellationToken ct)
     {
         if (!currentUser.IsAuthenticated)
             return Ok(new { authenticated = false });
+
+        var assigned = await jobAccess.GetVisibleJobIdsAsync(ct);
 
         return Ok(new
         {
@@ -125,6 +140,8 @@ public class AuthController(
             mustChangePassword    = currentUser.MustChangePassword,
             canSkipPasswordChange = SkipAllowed,
             knowledgeAssistantEnabled = AssistantEnabled,
+            jobScope              = assigned is null ? "all" : "assigned",
+            assignedJobCount      = assigned?.Count ?? 0,
         });
     }
 }

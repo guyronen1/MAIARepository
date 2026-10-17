@@ -18,14 +18,20 @@ public class MonitoredJobsConfigController(
     IMonitoredJobRepository               jobRepo,
     IAuditRepository                      audit,
     ICurrentUserAccessor                  currentUser,
+    IJobAccessScope                       access,
     ILogger<MonitoredJobsConfigController> logger)
     : ConfigControllerBase(audit, currentUser, logger)
 {
+    // Reads are limited to the caller's visible jobs (per-user job visibility);
+    // writes are Admin-only, and Admins see every job.
     [HttpGet("monitored-jobs")]
     public async Task<IActionResult> GetAllJobs(CancellationToken ct)
     {
-        var jobs = await jobRepo.GetAllWithRulesAsync(ct);
-        return Ok(jobs.Select(MonitoredJobDto.From));
+        var jobs    = await jobRepo.GetAllWithRulesAsync(ct);
+        var visible = await access.GetVisibleJobIdsAsync(ct);
+        return Ok(jobs
+            .Where(j => visible is null || visible.Contains(j.MonitoredJobId))
+            .Select(MonitoredJobDto.From));
     }
 
     /// <summary>Full operational picture of one job for the dedicated config screen
@@ -36,7 +42,7 @@ public class MonitoredJobsConfigController(
     public async Task<IActionResult> GetJob(int id, CancellationToken ct)
     {
         var job = await jobRepo.GetByIdAsync(id, ct);
-        if (job is null) return NotFound();
+        if (job is null || !await access.CanSeeAsync(job.MonitoredJobId, ct)) return NotFound();
         return Ok(MonitoredJobDto.From(job));
     }
 

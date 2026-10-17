@@ -30,6 +30,7 @@ public class MaiaDbContext(DbContextOptions<MaiaDbContext> options) : DbContext(
     public DbSet<Role>                Roles               => Set<Role>();
     public DbSet<User>                Users               => Set<User>();
     public DbSet<UserSession>         UserSessions        => Set<UserSession>();
+    public DbSet<UserMonitoredJob>    UserMonitoredJobs   => Set<UserMonitoredJob>();
 
     protected override void OnModelCreating(ModelBuilder mb)
     {
@@ -57,6 +58,7 @@ public class MaiaDbContext(DbContextOptions<MaiaDbContext> options) : DbContext(
         ConfigureRole(mb);
         ConfigureUser(mb);
         ConfigureUserSession(mb);
+        ConfigureUserMonitoredJob(mb);
         SeedData(mb);
     }
 
@@ -702,6 +704,8 @@ public class MaiaDbContext(DbContextOptions<MaiaDbContext> options) : DbContext(
             e.Property(u => u.PasswordHash).IsRequired().HasMaxLength(500);
             e.Property(u => u.IsActive).HasDefaultValue(true);
             e.Property(u => u.MustChangePassword).HasDefaultValue(false);
+            // Default false = "All jobs" — backfills users that pre-date job assignment.
+            e.Property(u => u.RestrictToAssignedJobs).HasDefaultValue(false);
             e.Property(u => u.CreatedAt).IsRequired().HasDefaultValueSql("GETDATE()");
 
             e.HasOne(u => u.Role)
@@ -725,6 +729,28 @@ public class MaiaDbContext(DbContextOptions<MaiaDbContext> options) : DbContext(
             e.HasOne(s => s.User)
                 .WithMany(u => u.Sessions)
                 .HasForeignKey(s => s.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+    }
+
+    private static void ConfigureUserMonitoredJob(ModelBuilder mb)
+    {
+        mb.Entity<UserMonitoredJob>(e =>
+        {
+            e.ToTable("UserMonitoredJobs");
+            e.HasKey(a => new { a.UserId, a.MonitoredJobId });
+            // Reverse lookup ("who can see this job") + the FK index.
+            e.HasIndex(a => a.MonitoredJobId);
+
+            e.HasOne(a => a.User)
+                .WithMany(u => u.JobAccess)
+                .HasForeignKey(a => a.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // No navigation on MonitoredJob — the job stays a pure identity container.
+            e.HasOne(a => a.MonitoredJob)
+                .WithMany()
+                .HasForeignKey(a => a.MonitoredJobId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
     }

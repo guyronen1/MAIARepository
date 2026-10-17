@@ -4,6 +4,7 @@ using Maia.Core.Interfaces;
 using Maia.Core.Results;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Maia.Core.Security;
 
 namespace Maia.Infrastructure.DataAccess.Repositories;
 
@@ -136,12 +137,13 @@ public sealed class SqlRecommendationRepository(IDbContextFactory<MaiaDbContext>
     }
 
     public async Task<PagedResult<RecommendationListItem>> GetPagedAsync(
-        int page, int pageSize, CancellationToken ct = default)
+        int page, int pageSize, JobVisibility? visibility = null, CancellationToken ct = default)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
         var query = db.AIRecommendations
             .Include(r => r.Failure)
             .Include(r => r.ErrorType)
+            .WhereJobVisible(db, visibility, r => r.Failure!.MonitoredJobId)
             .OrderByDescending(r => r.RecommendedAt);
 
         var total = await query.CountAsync(ct);

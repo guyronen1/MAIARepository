@@ -27,7 +27,8 @@ public class JobScanController(
     IClassifyJobsUseCase         classify,
     IGenerateSuggestionsUseCase  suggest,
     IExecuteFixesUseCase         execute,
-    IScanRunHistoryRepository    historyRepo) : ControllerBase
+    IScanRunHistoryRepository    historyRepo,
+    IJobAccessScope              access) : ControllerBase
 {
     // Per-process identity for manual triggers — mirrors the worker's LeasedBy format
     // so audit queries can grep "host=...;runId=..." consistently across both paths.
@@ -39,7 +40,7 @@ public class JobScanController(
     public async Task<IActionResult> ScanById(int monitoredJobId, CancellationToken ct)
     {
         var job = await jobRepo.GetByIdAsync(monitoredJobId, ct);
-        if (job is null)
+        if (job is null || !await access.CanSeeAsync(job.MonitoredJobId, ct))
             return NotFound(new { Message = $"MonitoredJob {monitoredJobId} not found." });
 
         var leased = await leaseRepo.GetActivelyLeasedJobIdsAsync([monitoredJobId], ct);
@@ -55,7 +56,7 @@ public class JobScanController(
     public async Task<IActionResult> ScanByName(string name, CancellationToken ct)
     {
         var job = await jobRepo.GetByNameAsync(name, ct);
-        if (job is null)
+        if (job is null || !await access.CanSeeAsync(job.MonitoredJobId, ct))
             return NotFound(new { Message = $"MonitoredJob '{name}' not found." });
 
         var leased = await leaseRepo.GetActivelyLeasedJobIdsAsync([job.MonitoredJobId], ct);
@@ -66,14 +67,17 @@ public class JobScanController(
     }
 
     /// <summary>
-    /// Run the scan pipeline for ALL active MonitoredJobs immediately.
+    /// Run the scan pipeline for ALL active MonitoredJobs the caller can see, immediately.
     /// Jobs that are currently being scanned by the background worker (or another
     /// concurrent manual request) are skipped — Skipped=true in the response.
     /// </summary>
     [HttpPost("scan-all")]
     public async Task<IActionResult> ScanAll(CancellationToken ct)
     {
-        var jobs    = await jobRepo.GetActiveAsync(ct);
+        var visible = await access.GetVisibleJobIdsAsync(ct);
+        var jobs    = (await jobRepo.GetActiveAsync(ct))
+            .Where(j => visible is null || visible.Contains(j.MonitoredJobId))
+            .ToList();
         var leased  = await leaseRepo.GetActivelyLeasedJobIdsAsync(jobs.Select(j => j.MonitoredJobId), ct);
         var results = new List<object>();
 

@@ -67,7 +67,7 @@ public class PolicyGapStatusTests : IAsyncLifetime
         AddClassifiedFailure(5, JobStatus.Failed, GapErrorType);
         await _db.SaveChangesAsync();
 
-        var controller = new UnconfiguredController(_factory, Mock.Of<IUnconfiguredClusterAnalyzer>());
+        var controller = new UnconfiguredController(_factory, Mock.Of<IUnconfiguredClusterAnalyzer>(), TestJobAccessScope.All);
         var result = await controller.GetPolicyGaps("all");
 
         var ok   = Assert.IsType<OkObjectResult>(result);

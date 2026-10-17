@@ -1,5 +1,6 @@
 using Maia.Core.Analysis;
 using Maia.Core.Enums;
+using Maia.Core.Interfaces;
 using Maia.Infrastructure.DataAccess;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -24,7 +25,8 @@ namespace Maia.API.Controllers;
 [Authorize(Policy = "RequireUser")]   // operational reads
 public class UnconfiguredController(
     IDbContextFactory<MaiaDbContext> dbFactory,
-    IUnconfiguredClusterAnalyzer   analyzer) : ControllerBase
+    IUnconfiguredClusterAnalyzer   analyzer,
+    IJobAccessScope                access) : ControllerBase
 {
     /// <summary>Default lookback; "all" disables the window.</summary>
     private static DateTime? ResolveWindow(string? window)
@@ -39,7 +41,9 @@ public class UnconfiguredController(
         var since = ResolveWindow(window);
         await using var db = await dbFactory.CreateDbContextAsync(ct);
 
-        var q = db.JobFailures.Where(f => f.Status == JobStatus.Failed && f.ErrorTypeId == null);
+        var q = db.JobFailures
+            .WhereJobVisible(db, await access.GetAsync(ct), f => f.MonitoredJobId)   // per-user job visibility
+            .Where(f => f.Status == JobStatus.Failed && f.ErrorTypeId == null);
         if (since is not null) q = q.Where(f => f.DetectedAt >= since);
 
         var failures = await q
@@ -73,7 +77,8 @@ public class UnconfiguredController(
         // override→default scope — exactly the key DefaultFixEngine uses at
         // execution time, so the gap list agrees with what actually fails.
         var recsQ = db.AIRecommendations
-            .Join(db.JobFailures, r => r.FailureId, f => f.FailureId, (r, f) => new { r, f })
+            .Join(db.JobFailures.WhereJobVisible(db, await access.GetAsync(ct), f => f.MonitoredJobId),   // per-user job visibility
+                  r => r.FailureId, f => f.FailureId, (r, f) => new { r, f })
             // Only OPEN failures are real gaps — a Resolved / AwaitingManualAction /
             // ManualRequired failure has already been actioned and needs no policy.
             // Mirrors Case A's `Status == Failed` discipline (the gap list used to

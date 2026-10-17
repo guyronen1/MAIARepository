@@ -30,4 +30,15 @@ public interface IUserRepository
     /// excluding <paramref name="excludingUserId"/> — the last-admin lockout guard.
     /// The admin role id is passed in so the repository stays policy-free.</summary>
     Task<int> CountActiveAdminsExceptAsync(int excludingUserId, int adminRoleId, CancellationToken ct = default);
+
+    /// <summary>The MonitoredJob ids assigned to the user (UserMonitoredJobs).</summary>
+    Task<IReadOnlySet<int>> GetAssignedJobIdsAsync(int userId, CancellationToken ct = default);
+
+    /// <summary>Assigned-job count per user id, for the admin list. Users with no
+    /// assignments are absent from the map.</summary>
+    Task<IReadOnlyDictionary<int, int>> GetAssignedJobCountsAsync(CancellationToken ct = default);
+
+    /// <summary>Set the user's <see cref="User.RestrictToAssignedJobs"/> flag and replace
+    /// the whole assignment set with <paramref name="jobIds"/>, in one transaction.</summary>
+    Task SetJobAccessAsync(int userId, bool restrictToAssignedJobs, IReadOnlyCollection<int> jobIds, CancellationToken ct = default);
 }

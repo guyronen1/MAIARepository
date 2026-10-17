@@ -1,5 +1,6 @@
 ﻿using Maia.Core.Entities;
 using Maia.Core.Results;
+using Maia.Core.Security;
 
 namespace Maia.Core.Interfaces;
 
@@ -46,7 +47,8 @@ public interface IRecommendationRepository
     /// </summary>
     Task MarkExecutedAsync(int recommendationId, CancellationToken ct = default);
 
-    Task<PagedResult<RecommendationListItem>> GetPagedAsync(int page, int pageSize, CancellationToken ct = default);
+    /// <summary>Paged list, newest first. <paramref name="visibility"/> = per-user job filter (null = every job).</summary>
+    Task<PagedResult<RecommendationListItem>> GetPagedAsync(int page, int pageSize, JobVisibility? visibility = null, CancellationToken ct = default);
     Task<bool> ExistsForFailureAsync(int failureId, CancellationToken ct = default);
 
     /// <summary>

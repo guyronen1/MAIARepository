@@ -23,16 +23,21 @@ public class DataController(
     IScanRunHistoryRepository      scanRuns,
     IWorkerControlService          workerControl,
     ISourceDataReader              sourceData,
-    IDbContextFactory<MaiaDbContext> dbFactory) : ControllerBase
+    IDbContextFactory<MaiaDbContext> dbFactory,
+    IJobAccessScope                access) : ControllerBase
 {
     private const int MaxPageSize = 200;
+
+    // Per-user job visibility: every read below is limited to the jobs the caller may
+    // see (Admins / "All jobs" users: everything). A single failure outside that set
+    // is a 404, same as a missing one. See IJobAccessScope.
     [HttpGet("recommendations")]
     public async Task<IActionResult> GetRecommendations(
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 50,
         CancellationToken ct = default)
     {
-        var paged = await recommendations.GetPagedAsync(page, pageSize, ct);
+        var paged = await recommendations.GetPagedAsync(page, pageSize, await access.GetAsync(ct), ct);
         var dtos  = paged.Items.Select(RecommendationDto.From).ToList();
         return Ok(new { paged.TotalCount, paged.TotalPages, paged.Page, paged.PageSize, Items = dtos });
     }
@@ -41,7 +46,7 @@ public class DataController(
     public async Task<IActionResult> GetFailureStatus(int failureId, CancellationToken ct)
     {
         var f = await jobs.GetByIdAsync(failureId, ct);
-        if (f is null)
+        if (f is null || !await access.CanSeeAsync(f.MonitoredJobId, ct))
             return NotFound(new { Message = $"JobFailure {failureId} not found." });
 
         var hasRecommendation = f.Recommendations.Any();
@@ -172,6 +177,18 @@ public class DataController(
     [HttpGet("failures/{failureId:int}/source")]
     public async Task<IActionResult> GetFailureSource(int failureId, CancellationToken ct)
     {
+        // Live source rows/files are the most sensitive read here — check the job first.
+        if (await access.GetVisibleJobIdsAsync(ct) is not null)
+        {
+            await using var db = await dbFactory.CreateDbContextAsync(ct);
+            var owner = await db.JobFailures
+                .Where(f => f.FailureId == failureId)
+                .Select(f => new { f.MonitoredJobId })
+                .FirstOrDefaultAsync(ct);
+            if (owner is null || !await access.CanSeeAsync(owner.MonitoredJobId, ct))
+                return NotFound(new { Message = $"JobFailure {failureId} not found." });
+        }
+
         var result = await sourceData.ReadAsync(failureId, ct);
         return result is null
             ? NotFound(new { Message = $"JobFailure {failureId} not found." })
@@ -242,7 +259,7 @@ public class DataController(
         [FromQuery] string? dir      = null,
         CancellationToken   ct       = default)
     {
-        var paged = await jobs.GetPagedAsync(page, pageSize, view, sort, dir, ct);
+        var paged = await jobs.GetPagedAsync(page, pageSize, view, sort, dir, await access.GetAsync(ct), ct);
 
         // Batch lookup: of the paged FailureIds, which ones have a Success=false
         // FixExecutionLog row since today-midnight? Drives the "Failed to
@@ -261,8 +278,11 @@ public class DataController(
     [HttpGet("monitored-jobs")]
     public async Task<IActionResult> GetMonitoredJobs(CancellationToken ct)
     {
-        var all  = await monitoredJobs.GetActiveWithRulesAsync(ct);
-        var dtos = all.Select(MonitoredJobDto.From).ToList();
+        var all     = await monitoredJobs.GetActiveWithRulesAsync(ct);
+        var visible = await access.GetVisibleJobIdsAsync(ct);
+        var dtos    = all
+            .Where(j => visible is null || visible.Contains(j.MonitoredJobId))
+            .Select(MonitoredJobDto.From).ToList();
         return Ok(dtos);
     }
 
@@ -278,6 +298,13 @@ public class DataController(
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var nowLocal = DateTime.Now;
         var recentCutoff = nowLocal.AddSeconds(-30);
+
+        // Worker liveness (workerAlive, aliveWindowSeconds, lastActivityAt) is a
+        // system fact computed over ALL jobs; the per-job parts (activeScans,
+        // recentScans, jobSummary, jobs) are limited to the caller's visible jobs.
+        var vis     = await access.GetAsync(ct);
+        var visible = await access.GetVisibleJobIdsAsync(ct);
+        bool Visible(int jobId) => visible is null || visible.Contains(jobId);
 
         // Single round-trip: project just the fields we need (no Includes), shapes flat.
         var rows = await db.MonitoredJobLeases
@@ -304,6 +331,7 @@ public class DataController(
         // Joined to MonitoredJobs so the client can render job name without another lookup.
         var recentScans = await db.ScanRunHistory
             .Where(h => h.CompletedAt >= recentCutoff && h.MonitoredJob != null)
+            .WhereJobVisible(db, vis, h => h.MonitoredJobId)
             .OrderByDescending(h => h.CompletedAt)
             .Take(20)
             .Select(h => new
@@ -354,7 +382,7 @@ public class DataController(
             .ToListAsync(ct);
 
         var jobs = new List<object>(jobShells.Count);
-        foreach (var j in jobShells)
+        foreach (var j in jobShells.Where(j => Visible(j.MonitoredJobId)))
         {
             // Job-level rollup (most recent run across all sources) — drives the
             // compact row's badge/duration/counts.
@@ -414,8 +442,11 @@ public class DataController(
             });
         }
 
-        var activeScans = rows
+        var leasedNow = rows
             .Where(r => r.LeasedBy != null && r.LeasedUntil.HasValue && r.LeasedUntil > nowLocal)
+            .ToList();
+        var activeScans = leasedNow
+            .Where(r => Visible(r.MonitoredJobId))
             .Select(r => new
             {
                 monitoredJobId = r.MonitoredJobId,
@@ -437,20 +468,21 @@ public class DataController(
             .Select(r => r.LastRunCompletedAt!.Value)
             .DefaultIfEmpty(DateTime.MinValue)
             .Max();
-        var lastActivityAt = activeScans.Count > 0
+        var lastActivityAt = leasedNow.Count > 0
             ? nowLocal
             : lastCompletion == DateTime.MinValue ? (DateTime?)null : lastCompletion;
 
-        var workerAlive = activeScans.Count > 0
+        var workerAlive = leasedNow.Count > 0
             || (lastActivityAt.HasValue
                 && (nowLocal - lastActivityAt.Value).TotalSeconds < aliveWindowSeconds);
 
+        var visibleRows = rows.Where(r => Visible(r.MonitoredJobId)).ToList();
         var jobSummary = new
         {
-            total   = rows.Count,
+            total   = visibleRows.Count,
             active  = activeScans.Count,
-            healthy = rows.Count(r => r.LastRunOutcome == JobRunOutcome.Success),
-            failing = rows.Count(r => r.LastRunOutcome.HasValue
+            healthy = visibleRows.Count(r => r.LastRunOutcome == JobRunOutcome.Success),
+            failing = visibleRows.Count(r => r.LastRunOutcome.HasValue
                                    && r.LastRunOutcome.Value != JobRunOutcome.Success),
         };
 
@@ -497,12 +529,13 @@ public class DataController(
             return BadRequest(new { Message = "bucketSize must be 'hour' or 'day'." });
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var failures = db.JobFailures.WhereJobVisible(db, await access.GetAsync(ct), f => f.MonitoredJobId);
 
         // Server-side group by truncated DetectedAt + ErrorTypeId. EF translates
         // DateTime constructors to SQL date-part expressions in modern providers.
         // For SQL Server we lean on DATEPART/DATEADD via a switch on bucket size.
         var rows = effectiveBucket == "hour"
-            ? await db.JobFailures
+            ? await failures
                 .Where(f => f.DetectedAt >= start)
                 .GroupBy(f => new
                 {
@@ -516,7 +549,7 @@ public class DataController(
                     count       = g.Count(),
                 })
                 .ToListAsync(ct)
-            : await db.JobFailures
+            : await failures
                 .Where(f => f.DetectedAt >= start)
                 .GroupBy(f => new
                 {
@@ -604,6 +637,7 @@ public class DataController(
         // GroupBy MonitoredJobId then join MonitoredJob for display name.
         // Filter MonitoredJobId IS NOT NULL — top-10 lists named jobs only.
         var rows = await db.JobFailures
+            .WhereJobVisible(db, await access.GetAsync(ct), f => f.MonitoredJobId)
             .Where(f => f.DetectedAt >= start && f.MonitoredJobId != null)
             .GroupBy(f => f.MonitoredJobId!.Value)
             .Select(g => new { monitoredJobId = g.Key, failureCount = g.Count() })
@@ -666,12 +700,13 @@ public class DataController(
         };
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var failures = db.JobFailures.WhereJobVisible(db, await access.GetAsync(ct), f => f.MonitoredJobId);
 
         // Flat per-failure projection (correlated .Any() subqueries translate
         // fine; the window keeps the in-memory classification cheap). We can't
         // express these counts inside a GROUP BY (SQL Server rejects aggregate-
         // over-subquery), so we classify in memory below.
-        var rows = await db.JobFailures
+        var rows = await failures
             .Where(f => f.DetectedAt >= windowStart)
             .Select(f => new
             {
@@ -713,7 +748,7 @@ public class DataController(
 
         // Failures detected BEFORE the window that are still open (not Resolved)
         // — the "older than this window and still open" footer count.
-        var olderOpen = await db.JobFailures.CountAsync(
+        var olderOpen = await failures.CountAsync(
             f => f.DetectedAt < windowStart && f.Status != JobStatus.Resolved, ct);
 
         return Ok(new
@@ -736,19 +771,22 @@ public class DataController(
     public async Task<IActionResult> GetDashboardStats(CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var vis      = await access.GetAsync(ct);
+        var failures = db.JobFailures.WhereJobVisible(db, vis, f => f.MonitoredJobId);
+        var fixLogs  = db.FixExecutionLogs.WhereJobVisible(db, vis, x => x.Failure!.MonitoredJobId);
 
-        var totalFailures   = await db.JobFailures.CountAsync(ct);
-        var active          = await db.JobFailures.CountAsync(f => f.Status == JobStatus.Failed, ct);
-        var resolved        = await db.JobFailures.CountAsync(f => f.Status == JobStatus.Resolved, ct);
-        var manualRequired  = await db.JobFailures.CountAsync(f => f.Status == JobStatus.ManualRequired, ct);
-        var unclassified    = await db.JobFailures.CountAsync(f => f.Status == JobStatus.Failed && f.ErrorTypeId == null, ct);
-        var awaitingAction  = await db.JobFailures.CountAsync(f => f.Status == JobStatus.Failed && f.ErrorTypeId != null, ct);
+        var totalFailures   = await failures.CountAsync(ct);
+        var active          = await failures.CountAsync(f => f.Status == JobStatus.Failed, ct);
+        var resolved        = await failures.CountAsync(f => f.Status == JobStatus.Resolved, ct);
+        var manualRequired  = await failures.CountAsync(f => f.Status == JobStatus.ManualRequired, ct);
+        var unclassified    = await failures.CountAsync(f => f.Status == JobStatus.Failed && f.ErrorTypeId == null, ct);
+        var awaitingAction  = await failures.CountAsync(f => f.Status == JobStatus.Failed && f.ErrorTypeId != null, ct);
 
-        var autoFixed       = await db.FixExecutionLogs
+        var autoFixed       = await fixLogs
             .Where(x => x.Success && x.TriggerType == TriggerType.AutoHeal)
             .Select(x => x.FailureId).Distinct().CountAsync(ct);
 
-        var manuallyFixed   = await db.FixExecutionLogs
+        var manuallyFixed   = await fixLogs
             .Where(x => x.Success && x.TriggerType == TriggerType.OperatorApproved)
             .Select(x => x.FailureId).Distinct().CountAsync(ct);
 
@@ -756,13 +794,13 @@ public class DataController(
         // "Today" = server-local midnight to now (DateTime.Today, not UTC) — matches
         // the local-time convention documented in CLAUDE.md.
         var todayStart      = DateTime.Today;
-        var resolvedToday   = await db.JobFailures.CountAsync(
+        var resolvedToday   = await failures.CountAsync(
             f => f.Status == JobStatus.Resolved && f.DetectedAt >= todayStart, ct);
-        var autoFixedToday  = await db.JobFailures
+        var autoFixedToday  = await failures
             .Where(f => f.DetectedAt >= todayStart)
             .CountAsync(f => db.FixExecutionLogs.Any(x =>
                 x.FailureId == f.FailureId && x.Success && x.TriggerType == TriggerType.AutoHeal), ct);
-        var manuallyFixedToday = await db.JobFailures
+        var manuallyFixedToday = await failures
             .Where(f => f.DetectedAt >= todayStart)
             .CountAsync(f => db.FixExecutionLogs.Any(x =>
                 x.FailureId == f.FailureId && x.Success && x.TriggerType == TriggerType.OperatorApproved), ct);
@@ -773,7 +811,7 @@ public class DataController(
         // so the KPI count and the drill-down list always agree. Note: a
         // single failure with three failed step logs counts as 1 here
         // (Distinct/Any), not 3 — matches operator's mental model.
-        var fixFailedToday = await db.JobFailures
+        var fixFailedToday = await failures
             .Where(f => f.Status == JobStatus.ManualRequired
                      && db.FixExecutionLogs.Any(x =>
                             x.FailureId == f.FailureId
@@ -788,7 +826,7 @@ public class DataController(
         // arm mirrors the override-then-default lookup. Matches the
         // `view=unconfigured` drill-down predicate exactly. `unclassified`
         // (computed above) is the first arm; `unconfiguredNoPolicy` is the rest.
-        var unconfigured = await db.JobFailures.CountAsync(f =>
+        var unconfigured = await failures.CountAsync(f =>
             f.Status == JobStatus.Failed
             && (f.ErrorTypeId == null
                 || !db.FixPolicyRules.Any(p => p.Enabled
@@ -844,7 +882,8 @@ public class DataController(
         }
 
         var paged = await scanRuns.GetPagedAsync(
-            monitoredJobId, scanSourceId, outcomeFilter, fromDate, toDate, page, pageSize, ct);
+            monitoredJobId, scanSourceId, outcomeFilter, fromDate, toDate, page, pageSize,
+            await access.GetAsync(ct), ct);
         var dtos  = paged.Items.Select(ScanRunDto.From).ToList();
         return Ok(new { paged.TotalCount, paged.TotalPages, paged.Page, paged.PageSize, Items = dtos });
     }
@@ -877,7 +916,7 @@ public class DataController(
             .AsNoTracking()
             .Include(a => a.Recommendation!).ThenInclude(r => r.ErrorType)
             .Include(a => a.Recommendation!).ThenInclude(r => r.Failure!).ThenInclude(f => f.MonitoredJob)
-            .AsQueryable();
+            .WhereJobVisible(db, await access.GetAsync(ct), a => a.Recommendation!.Failure!.MonitoredJobId);
 
         if (!string.IsNullOrWhiteSpace(operatorId))
             query = query.Where(a => a.OperatorId == operatorId);

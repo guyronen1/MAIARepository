@@ -1,4 +1,4 @@
-import { Component, effect, inject } from '@angular/core';
+import { Component, computed, effect, inject } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { TopBarComponent } from '../top-bar/top-bar.component';
 import { SideMenuComponent } from '../side-menu/side-menu.component';
@@ -7,6 +7,7 @@ import { NotificationService } from '../../core/services/notification.service';
 import { CommandPaletteComponent } from '../../shared/command-palette/command-palette.component';
 import { AssistantDrawerComponent } from '../assistant-drawer/assistant-drawer.component';
 import { AssistantService } from '../../core/services/assistant.service';
+import { AuthService } from '../../core/services/auth.service';
 
 @Component({
   selector: 'app-shell',
@@ -15,6 +16,13 @@ import { AssistantService } from '../../core/services/assistant.service';
   template: `
     <div class="shell">
       <app-top-bar />
+      <!-- Per-user job visibility: a user limited to assigned jobs with none assigned
+           sees empty screens everywhere — say why instead of looking broken. -->
+      @if (noJobsAssigned()) {
+        <div class="no-jobs-banner" role="status">
+          No monitored jobs are assigned to you, so there is nothing to show yet. Ask an administrator to assign jobs to your user.
+        </div>
+      }
       <div class="shell-body">
         <app-side-menu />
         <main class="shell-content">
@@ -49,6 +57,8 @@ import { AssistantService } from '../../core/services/assistant.service';
   styles: [`
     .shell { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     .shell-body { display: flex; flex: 1; overflow: hidden; }
+    .no-jobs-banner { padding: 8px 20px; font-size: 13px; background: var(--warning-bg); color: var(--warning);
+      border-bottom: 1px solid var(--border); }
     .shell-content { flex: 1; overflow-y: auto; background: var(--bg); display: flex; justify-content: flex-start; }
     .toast-stack { position: fixed; bottom: 18px; right: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 1000; }
     .toast { display: flex; align-items: center; gap: 12px; max-width: 360px;
@@ -67,6 +77,12 @@ export class ShellComponent {
   private _navHistory = inject(NavigationHistoryService);
   private notifications = inject(NotificationService);
   readonly assistant = inject(AssistantService);
+  private auth = inject(AuthService);
+
+  readonly noJobsAssigned = computed(() => {
+    const u = this.auth.currentUser();
+    return !!u && u.jobScope === 'assigned' && u.assignedJobCount === 0;
+  });
 
   constructor() {
     // Shell = signed-in area: load the assistant bundle once so the top-bar

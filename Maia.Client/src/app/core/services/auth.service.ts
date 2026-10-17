@@ -15,6 +15,11 @@ export interface CurrentUser {
   canSkipPasswordChange: boolean;
   /** Server appsettings `KnowledgeAssistant:Enabled` — show the AI assistant UI. Missing = false. */
   knowledgeAssistantEnabled: boolean;
+  /** Per-user job visibility: 'all' (Administrator or "All jobs") or 'assigned' (only
+   *  the jobs an admin ticked). UX only — the API filters every read the same way. */
+  jobScope: 'all' | 'assigned';
+  /** Number of assigned jobs when jobScope is 'assigned' (0 = sees nothing). */
+  assignedJobCount: number;
 }
 
 interface MeResponse {
@@ -24,6 +29,8 @@ interface MeResponse {
   mustChangePassword?: boolean;
   canSkipPasswordChange?: boolean;
   knowledgeAssistantEnabled?: boolean;
+  jobScope?: 'all' | 'assigned';
+  assignedJobCount?: number;
 }
 
 /**
@@ -54,6 +61,8 @@ export class AuthService {
         mustChangePassword: !!r.mustChangePassword,
         canSkipPasswordChange: !!r.canSkipPasswordChange,
         knowledgeAssistantEnabled: !!r.knowledgeAssistantEnabled,
+        jobScope: r.jobScope ?? 'all',
+        assignedJobCount: r.assignedJobCount ?? 0,
       })),
       tap(u => this.currentUser.set(u)),
     );
@@ -93,6 +102,8 @@ export class AuthService {
             mustChangePassword: !!r.mustChangePassword,
             canSkipPasswordChange: !!r.canSkipPasswordChange,
             knowledgeAssistantEnabled: !!r.knowledgeAssistantEnabled,
+            jobScope: r.jobScope ?? 'all',
+            assignedJobCount: r.assignedJobCount ?? 0,
           }
         : null),
       tap(u => this.currentUser.set(u)),

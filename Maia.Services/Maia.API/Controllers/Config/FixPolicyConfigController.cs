@@ -21,6 +21,7 @@ public class FixPolicyConfigController(
     ISqlFixScopeValidator              sqlFixScope,
     IAuditRepository                   audit,
     ICurrentUserAccessor               currentUser,
+    IJobAccessScope                    access,
     ILogger<FixPolicyConfigController> logger)
     : ConfigControllerBase(audit, currentUser, logger)
 {
@@ -186,6 +187,13 @@ public class FixPolicyConfigController(
         }
 
         var rules = await q.OrderBy(r => r.ErrorTypeId).ThenBy(r => r.MonitoredJobId).ToListAsync(ct);
+
+        // Per-user job visibility: JobType defaults are shared config (always listed);
+        // a per-job override is listed only when the caller can see that job.
+        var visible = await access.GetVisibleJobIdsAsync(ct);
+        if (visible is not null)
+            rules = rules.Where(r => r.MonitoredJobId is not int jobId || visible.Contains(jobId)).ToList();
+
         return Ok(rules.Select(r => new
         {
             r.RuleId, r.JobTypeId, r.ErrorTypeId, r.MonitoredJobId,
@@ -212,6 +220,8 @@ public class FixPolicyConfigController(
             .AsSplitQuery()
             .FirstOrDefaultAsync(p => p.RuleId == id, ct);
         if (r is null) return NotFound();
+        // A per-job override on a job the caller can't see is answered as not found.
+        if (r.MonitoredJobId is not null && !await access.CanSeeAsync(r.MonitoredJobId, ct)) return NotFound();
         return Ok(new
         {
             r.RuleId, r.JobTypeId, r.ErrorTypeId, r.MonitoredJobId,

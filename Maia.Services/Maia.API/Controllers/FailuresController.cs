@@ -25,7 +25,8 @@ namespace Maia.API.Controllers;
 public class FailuresController(
     IJobRepository        jobs,
     IAuditRepository      audit,
-    ICurrentUserAccessor  currentUser) : ControllerBase
+    ICurrentUserAccessor  currentUser,
+    IJobAccessScope       access) : ControllerBase
 {
     // Authenticated principal — guaranteed present (RequireOperator gates the action).
     private string Actor => currentUser.UserName!;
@@ -37,7 +38,8 @@ public class FailuresController(
         // (lets an auditor see "was AwaitingManualAction → Resolved" vs
         // "was Failed → Resolved" without joining other tables).
         var failure = await jobs.GetByIdAsync(id, ct);
-        if (failure is null)
+        // A failure on a job the operator can't see is answered as not found.
+        if (failure is null || !await access.CanSeeAsync(failure.MonitoredJobId, ct))
             return NotFound(new { Message = $"JobFailure {id} not found." });
 
         var priorStatus = failure.Status;

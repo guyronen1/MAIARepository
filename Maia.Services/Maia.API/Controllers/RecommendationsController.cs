@@ -31,7 +31,8 @@ public class RecommendationsController(
     IJobRepository                  jobs,
     IExecuteFixesUseCase            execute,
     IDbContextFactory<MaiaDbContext>  dbFactory,
-    ICurrentUserAccessor            currentUser) : ControllerBase
+    ICurrentUserAccessor            currentUser,
+    IJobAccessScope                 access) : ControllerBase
 {
     // Actor is the authenticated principal — guaranteed present here because the
     // controller requires RequireOperator (no anonymous reaches the action body).
@@ -67,7 +68,7 @@ public class RecommendationsController(
             .AsNoTracking()
             .FirstOrDefaultAsync(r => r.RecommendationId == id, ct);
 
-        if (rec is null)
+        if (rec is null || (rec.Failure is not null && !await access.CanSeeAsync(rec.Failure.MonitoredJobId, ct)))
             return NotFound(new { Message = $"Recommendation {id} not found." });
         if (rec.Failure is null)
             return NotFound(new { Message = $"Failure for recommendation {id} not found." });
@@ -132,7 +133,7 @@ public class RecommendationsController(
             .Include(r => r.ErrorType)
             .FirstOrDefaultAsync(r => r.RecommendationId == id, ct);
 
-        if (rec is null)
+        if (rec is null || !await CanSeeFailureAsync(db, rec.FailureId, ct))
             return NotFound(new { Message = $"Recommendation {id} not found." });
 
         var updated = await recommendations.SetApprovalAsync(id, approved, ct);
@@ -182,6 +183,18 @@ public class RecommendationsController(
 
         rec.OperatorApproved = approved;
         return Ok(RecommendationDto.From(rec));
+    }
+
+    /// <summary>Per-user job visibility: a recommendation on a job the operator can't
+    /// see is answered as not found (no existence leak).</summary>
+    private async Task<bool> CanSeeFailureAsync(MaiaDbContext db, int failureId, CancellationToken ct)
+    {
+        if (await access.GetVisibleJobIdsAsync(ct) is null) return true;
+        var owner = await db.JobFailures
+            .Where(f => f.FailureId == failureId)
+            .Select(f => new { f.MonitoredJobId })
+            .FirstOrDefaultAsync(ct);
+        return owner is not null && await access.CanSeeAsync(owner.MonitoredJobId, ct);
     }
 
     /// <summary>

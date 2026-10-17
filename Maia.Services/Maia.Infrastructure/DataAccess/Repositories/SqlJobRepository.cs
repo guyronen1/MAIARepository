@@ -3,6 +3,7 @@ using Maia.Core.Enums;
 using Maia.Core.Interfaces;
 using Maia.Core.Results;
 using Microsoft.EntityFrameworkCore;
+using Maia.Core.Security;
 
 namespace Maia.Infrastructure.DataAccess.Repositories;
 
@@ -104,13 +105,15 @@ public sealed class SqlJobRepository(IDbContextFactory<MaiaDbContext> factory) :
     }
 
     public async Task<PagedResult<JobFailure>> GetPagedAsync(
-        int page, int pageSize, string? view = null, string? sort = null, string? dir = null, CancellationToken ct = default)
+        int page, int pageSize, string? view = null, string? sort = null, string? dir = null,
+        JobVisibility? visibility = null, CancellationToken ct = default)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
         IQueryable<JobFailure> query = db.JobFailures
             .Include(j => j.JobType)
             .Include(j => j.ErrorType)
-            .Include(j => j.MonitoredJob);
+            .Include(j => j.MonitoredJob)
+            .WhereJobVisible(db, visibility, j => j.MonitoredJobId);
 
         // "fix-failed" window is today-midnight, matching the dashboard
         // "Fix Failures Today" KPI it drills into. Captured once so the EF

@@ -264,7 +264,8 @@ describe('ScanRuleDrawerComponent', () => {
     { name: 'RowGuid',    dataType: 'uniqueidentifier', isNullable: false, typeCategory: 'other' },
   ];
   const asAdmin = () => TestBed.inject(AuthService).currentUser.set(
-    { username: 'admin', role: 'Administrator', mustChangePassword: false, canSkipPasswordChange: false, knowledgeAssistantEnabled: false });
+    { username: 'admin', role: 'Administrator', mustChangePassword: false, canSkipPasswordChange: false, knowledgeAssistantEnabled: false,
+      jobScope: 'all', assignedJobCount: 0 });
   const http = () => TestBed.inject(HttpTestingController);
   const columnsReq = () => http().expectOne(r => r.url.endsWith('/config/scan-sources/5/columns'));
   const filesRule = (extra: object = {}) =>

@@ -15,20 +15,30 @@ namespace Maia.API.Controllers;
 /// No email/SMTP flows in v1 — password reset is admin-initiated and sets a temp
 /// password + MustChangePassword=true so the user rotates on next login. Created
 /// users are likewise born with MustChangePassword=true.
+///
+/// Job access (per-user job visibility): a non-admin user either sees every job
+/// ("All jobs", the default) or only the MonitoredJobs assigned to them. Admins always
+/// see everything, so their assignments are stored but have no effect.
+/// See <see cref="IJobAccessScope"/>.
 /// </summary>
 [ApiController]
 [Route("api/users")]
 [Authorize(Policy = "RequireAdmin")]
 public class UsersController(
     IUserRepository                users,
+    IMonitoredJobRepository        monitoredJobs,
     IPasswordHasher                hasher,
     IAuditRepository               audit,
     ICurrentUserAccessor           currentUser,
     ILogger<UsersController>       logger) : ControllerBase
 {
-    public sealed record CreateUserRequest(string Username, string Password, string Role);
+    /// <param name="AllJobs">Omitted = true (every job), so callers that don't know
+    /// about job access keep the old behaviour. The UI sends false + a job list.</param>
+    public sealed record CreateUserRequest(string Username, string Password, string Role,
+                                           bool? AllJobs = null, int[]? JobIds = null);
     public sealed record UpdateUserRequest(string Role, bool IsActive);
     public sealed record ResetPasswordRequest(string NewPassword);
+    public sealed record JobAccessRequest(bool AllJobs, int[]? JobIds);
 
     private string Actor => currentUser.UserName!;
 
@@ -37,6 +47,7 @@ public class UsersController(
     {
         // Project to safe fields (never expose PasswordHash) — the repo returns
         // full entities; the shape below is the API contract.
+        var jobCounts = await users.GetAssignedJobCountsAsync(ct);
         var rows = (await users.ListAsync(ct))
             .Select(u => new
             {
@@ -47,6 +58,8 @@ public class UsersController(
                 u.MustChangePassword,
                 u.CreatedAt,
                 u.LastLoginAt,
+                AllJobs  = !u.RestrictToAssignedJobs,
+                JobCount = jobCounts.GetValueOrDefault(u.UserId),
             });
         return Ok(rows);
     }
@@ -64,6 +77,11 @@ public class UsersController(
         if (await users.UsernameExistsAsync(req.Username.Trim(), ct))
             return Conflict(new { error = "DuplicateUsername", message = $"A user named '{req.Username}' already exists." });
 
+        var allJobs = req.AllJobs ?? true;
+        var jobIds  = (req.JobIds ?? []).Distinct().ToArray();
+        var jobNames = await monitoredJobs.GetNamesAsync(jobIds, ct);
+        if (UnknownJobError(jobIds, jobNames) is { } unknown) return unknown;
+
         var user = new User
         {
             Username           = req.Username.Trim(),
@@ -74,9 +92,12 @@ public class UsersController(
             CreatedAt          = DateTime.Now,
         };
         var userId = await users.AddAsync(user, ct);
+        if (!allJobs || jobIds.Length > 0)
+            await users.SetJobAccessAsync(userId, restrictToAssignedJobs: !allJobs, jobIds, ct);
 
         await WriteAudit(userId, "UserCreated",
-            $"Created user '{user.Username}' (Role={req.Role}, MustChangePassword=true)", ct);
+            $"Created user '{user.Username}' (Role={req.Role}, MustChangePassword=true, " +
+            $"AllJobs={allJobs}, Jobs={JobList(jobIds, jobNames)})", ct);
         return Ok(new { UserId = userId });
     }
 
@@ -128,6 +149,61 @@ public class UsersController(
         await WriteAudit(id, "UserPasswordReset",
             $"Reset password for user '{user.Username}' (MustChangePassword=true)", ct);
         return NoContent();
+    }
+
+    /// <summary>The user's job access: <c>{ allJobs, jobIds[] }</c>. For an
+    /// Administrator <c>allJobs</c> reflects the stored flag; admins see every job anyway.</summary>
+    [HttpGet("{id:int}/jobs")]
+    public async Task<IActionResult> GetJobAccess(int id, CancellationToken ct)
+    {
+        var user = await users.GetByIdAsync(id, ct);
+        if (user is null) return NotFound();
+        var jobIds = await users.GetAssignedJobIdsAsync(id, ct);
+        return Ok(new { AllJobs = !user.RestrictToAssignedJobs, JobIds = jobIds.Order().ToArray() });
+    }
+
+    /// <summary>Replace the user's job access: the "All jobs" switch plus the whole
+    /// assigned-job set. Audited as <c>UserJobAccessUpdated</c> with a before → after diff.</summary>
+    [HttpPut("{id:int}/jobs")]
+    public async Task<IActionResult> SetJobAccess(int id, [FromBody] JobAccessRequest req, CancellationToken ct)
+    {
+        var user = await users.GetByIdAsync(id, ct);
+        if (user is null) return NotFound();
+
+        var jobIds = (req.JobIds ?? []).Distinct().ToArray();
+        var before = await users.GetAssignedJobIdsAsync(id, ct);
+        var names  = await monitoredJobs.GetNamesAsync(jobIds.Concat(before), ct);
+        if (UnknownJobError(jobIds, names) is { } unknown) return unknown;
+
+        var beforeAll = !user.RestrictToAssignedJobs;
+        await users.SetJobAccessAsync(id, restrictToAssignedJobs: !req.AllJobs, jobIds, ct);
+
+        var changes = new List<string>();
+        if (beforeAll != req.AllJobs) changes.Add($"AllJobs: {beforeAll} → {req.AllJobs}");
+        if (!before.SetEquals(jobIds))
+            changes.Add($"Jobs: {JobList(before, names)} → {JobList(jobIds, names)}");
+        await WriteAudit(id, "UserJobAccessUpdated",
+            $"User '{user.Username}': " + (changes.Count == 0 ? "No changes" : string.Join(", ", changes)), ct);
+        return NoContent();
+    }
+
+    private BadRequestObjectResult? UnknownJobError(IEnumerable<int> jobIds, IReadOnlyDictionary<int, string> known)
+    {
+        var missing = jobIds.Where(j => !known.ContainsKey(j)).ToList();
+        return missing.Count == 0 ? null : BadRequest(new
+        {
+            error   = "UnknownJob",
+            message = $"Unknown monitored job id(s): {string.Join(", ", missing)}.",
+        });
+    }
+
+    /// <summary>Readable, stable job list for audit text: names sorted, "(none)" when empty.
+    /// A job deleted since assignment falls back to "Job {id}".</summary>
+    private static string JobList(IEnumerable<int> jobIds, IReadOnlyDictionary<int, string> names)
+    {
+        var list = jobIds.Select(j => names.GetValueOrDefault(j) ?? $"Job {j}")
+                         .Order(StringComparer.OrdinalIgnoreCase).ToList();
+        return list.Count == 0 ? "(none)" : string.Join(", ", list);
     }
 
     /// <summary>Parse a role name → RoleId (RoleId == (int)MaiaRole). Rejects numeric

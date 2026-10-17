@@ -471,3 +471,24 @@ Decisions:
 **Loading:** on open (immediately) and on Source Table edits (debounced 400 ms; `switchMap` cancels a stale answer). Successful lists are cached per (sourceId, table) for the drawer's lifetime. Failures aren't cached, since a connection that was down may be back.
 
 **Rejected:** a `<select multiple>` for Detail Columns (clunky, and it loses the order that the message lines follow); reading columns through `INFORMATION_SCHEMA` with a split schema/table (`OBJECT_ID` already applies the login's default-schema resolution the scan relies on).
+
+## Per-user job visibility — admin assigns jobs per user; one scope seam filters every read (2026-10-17)
+
+**Ask:** in the Users page an admin ticks which monitored jobs each user may see; a signed-in user then sees and manages only those jobs on the dashboard, failures, recommendations and config screens.
+
+**Decided with the operator:**
+- **Administrators see every job**; only Operators / Users are limited. Admins do the assigning, so they must see all.
+- **An explicit "All jobs" switch per user**, not "empty list = all" (couldn't express "sees nothing") nor "empty = nothing" (every existing user would go blank on deploy). Existing users backfill to All jobs, so rollout changes nothing until an admin narrows someone. New users created in the UI start limited with nothing ticked (the admin picks).
+- **Shared config stays read-only and visible** (error types, job types, global classification rules, JobType-default fix policies). Writes were already Admin-only, so nothing new was needed — only per-job items and the names of other jobs are filtered.
+
+**Design:**
+- **Stored inverted:** `Users.RestrictToAssignedJobs bit DEFAULT 0`. A `bool` with an EF `HasDefaultValue(true)` uses the DB default whenever the CLR value is `false`, so a new limited user would silently be saved as unrestricted. With default 0 = CLR default there is no sentinel trap, and the backfill needs no special SQL. The API still speaks `allJobs`.
+- **`IJobAccessScope` is the single seam**, scoped per request and resolved from the user row (not claims) so an admin's change applies on the user's next request, consistent with the session handler's live role lookup.
+- **SQL filter = correlated `EXISTS`** on `UserMonitoredJobs` spliced into the caller's predicate (`WhereJobVisible`), not `assignedIds.Contains(...)`. `EXISTS` is on the safe side of the no-`ROW_NUMBER` rule ("Dashboard timeout storm"), always reads fresh assignments, and avoids EF 8's `OPENJSON` id-list parameter. A test pins the translated SQL.
+- **404 for unseen items**, not 403: no existence leak, and the client toasts 403 as "no permission", which would be misleading.
+- **`worker-status`**: liveness (`workerAlive`, `aliveWindowSeconds`, `lastActivityAt`) is a system fact over all leases; only the per-job parts are scoped, so a limited user whose jobs are idle doesn't see the worker as dead.
+- **Classification-rule scope column**: links to jobs the user can't see collapse into `+N other jobs` instead of disappearing, so a job-scoped rule never reads as a JobType default.
+- **Not scoped, on purpose:** the global pipeline triggers and the approve-time `ExecuteFixesUseCase` drain process work the system or another operator already decided (the same thing a worker tick does) and return counts, not data. The admin audit log stays unfiltered.
+- **Regression risk:** a new endpoint that forgets the scope leaks rows silently, and `AuthorizationMatrixTests` can't catch it (row filter, not role check). Hence the CLAUDE.md invariant, `JobVisibilityFilterTests` and `JobAccessEndToEndTests`.
+
+**Verified:** 575 backend tests green (new: `JobAccessScopeTests` 6, `JobVisibilityFilterTests` 5, `JobAccessEndToEndTests` 5, plus matrix rows for `/api/users/{id}/jobs`). 132 frontend specs green (new `users.component.spec.ts` 4). Live against `MaiaDB_Test` on a temporary :5199 instance: a scoped operator (job 1002) got 67 of 814 failures, 1 of 9 jobs on worker-status / monitored-jobs, 404 on another job's failure status / source / reject / mark-resolved / scan, and 200 on its own. Every endpoint returned 200 on real SQL Server except `scan-runs`, which times out for admins too on the unchanged code (pre-existing, see FOLLOWUPS).

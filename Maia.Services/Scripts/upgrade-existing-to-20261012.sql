@@ -2,7 +2,7 @@
 -- MAIA upgrade-existing-to-20261012.sql
 -- Brings an EXISTING MAIA database (installed from schema-create.sql, the
 -- July 2026 deployment) up to the current schema - latest migration
--- 20261014200000_AllowNewDbConditionKinds - without losing data.
+-- 20261017180210_AddUserJobAccess - without losing data.
 --
 -- For a NEW, empty database use schema-clean.sql + seed-metadata.sql instead.
 --
@@ -12,7 +12,8 @@
 --   3. 20261012171955_AddScanCheckRuleConditions             - ScanCheckRuleConditions table
 --   3b. 20261014145610_AddScanCheckRuleIdToJobFailure        - JobFailures.ScanCheckRuleId
 --   3c. 20261014200000_AllowNewDbConditionKinds              - condition Kind allow-list + NotEquals/Contains/InList
---   4. __EFMigrationsHistory - created + all 35 migrations marked applied, so the
+--   3d. 20261017180210_AddUserJobAccess                      - Users.RestrictToAssignedJobs + UserMonitoredJobs
+--   4. __EFMigrationsHistory - created + all 36 migrations marked applied, so the
 --      next upgrade can be a plain `dotnet ef migrations script --idempotent`.
 --
 -- Idempotent: every step checks for its object first - safe to re-run, including
@@ -175,6 +176,33 @@ BEGIN
 END
 GO
 
+-- ── 3d. AddUserJobAccess (2026-10-17) ───────────────────────────────────────
+-- Per-user job visibility. Default 0 = "All jobs", so existing users see exactly
+-- what they saw before until an admin narrows them.
+IF COL_LENGTH(N'dbo.Users', N'RestrictToAssignedJobs') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[Users] ADD [RestrictToAssignedJobs] bit NOT NULL
+        CONSTRAINT [DF_Users_RestrictToAssignedJobs] DEFAULT CAST(0 AS bit);
+    PRINT N'Added Users.RestrictToAssignedJobs.';
+END
+GO
+
+IF OBJECT_ID(N'dbo.UserMonitoredJobs') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[UserMonitoredJobs] (
+        [UserId]         int NOT NULL,
+        [MonitoredJobId] int NOT NULL,
+        CONSTRAINT [PK_UserMonitoredJobs] PRIMARY KEY ([UserId], [MonitoredJobId]),
+        CONSTRAINT [FK_UserMonitoredJobs_MonitoredJobs_MonitoredJobId] FOREIGN KEY ([MonitoredJobId])
+            REFERENCES [dbo].[MonitoredJobs] ([MonitoredJobId]) ON DELETE CASCADE,
+        CONSTRAINT [FK_UserMonitoredJobs_Users_UserId] FOREIGN KEY ([UserId])
+            REFERENCES [dbo].[Users] ([UserId]) ON DELETE CASCADE
+    );
+    CREATE INDEX [IX_UserMonitoredJobs_MonitoredJobId] ON [dbo].[UserMonitoredJobs] ([MonitoredJobId]);
+    PRINT N'Created UserMonitoredJobs.';
+END
+GO
+
 -- ── 4. EF migration history - mark the schema as fully migrated ─────────────
 IF OBJECT_ID(N'dbo.__EFMigrationsHistory') IS NULL
 BEGIN
@@ -223,13 +251,14 @@ FROM (VALUES
     (N'20261012162748_AddDetailColumnsToScanCheckRule'),
     (N'20261012171955_AddScanCheckRuleConditions'),
     (N'20261014145610_AddScanCheckRuleIdToJobFailure'),
-    (N'20261014200000_AllowNewDbConditionKinds')
+    (N'20261014200000_AllowNewDbConditionKinds'),
+    (N'20261017180210_AddUserJobAccess')
 ) AS m (MigrationId)
 WHERE NOT EXISTS (SELECT 1 FROM [dbo].[__EFMigrationsHistory] h WHERE h.MigrationId = m.MigrationId);
 PRINT N'Migration history rows added: ' + CAST(@@ROWCOUNT AS nvarchar(10)) + N'.';
 GO
 
-PRINT N'Upgrade complete - schema is at 20261014200000_AllowNewDbConditionKinds.';
+PRINT N'Upgrade complete - schema is at 20261017180210_AddUserJobAccess.';
 GO
 
 SET NOEXEC OFF;

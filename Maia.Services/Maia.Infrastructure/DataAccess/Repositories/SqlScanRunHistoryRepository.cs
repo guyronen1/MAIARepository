@@ -4,6 +4,7 @@ using Maia.Core.Interfaces;
 using Maia.Core.Results;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Maia.Core.Security;
 
 namespace Maia.Infrastructure.DataAccess.Repositories;
 
@@ -25,6 +26,7 @@ public sealed class SqlScanRunHistoryRepository(IDbContextFactory<MaiaDbContext>
         DateTime? toDate,
         int page,
         int pageSize,
+        JobVisibility? visibility = null,
         CancellationToken ct = default)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
@@ -32,7 +34,8 @@ public sealed class SqlScanRunHistoryRepository(IDbContextFactory<MaiaDbContext>
         // (Tier 2.5). MonitoredJob still included for the job name.
         IQueryable<ScanRunHistory> q = db.ScanRunHistory
             .Include(r => r.MonitoredJob)
-            .Include(r => r.ScanSource);
+            .Include(r => r.ScanSource)
+            .WhereJobVisible(db, visibility, r => r.MonitoredJobId);
 
         if (monitoredJobId.HasValue) q = q.Where(r => r.MonitoredJobId == monitoredJobId.Value);
         if (scanSourceId.HasValue)   q = q.Where(r => r.ScanSourceId == scanSourceId.Value);

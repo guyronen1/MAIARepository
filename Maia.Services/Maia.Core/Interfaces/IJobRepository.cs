@@ -1,6 +1,7 @@
 ﻿using Maia.Core.Entities;
 using Maia.Core.Enums;
 using Maia.Core.Results;
+using Maia.Core.Security;
 
 namespace Maia.Core.Interfaces;
 
@@ -32,7 +33,8 @@ public interface IJobRepository
     /// </summary>
     /// <param name="sort">Sort key (whitelisted): id | job | errortype | detected | status.
     ///   Null/unknown → detected. <paramref name="dir"/> = "asc" | "desc" (default desc).</param>
-    Task<PagedResult<JobFailure>> GetPagedAsync(int page, int pageSize, string? view = null, string? sort = null, string? dir = null, CancellationToken ct = default);
+    /// <param name="visibility">Per-user job filter; null = every job.</param>
+    Task<PagedResult<JobFailure>> GetPagedAsync(int page, int pageSize, string? view = null, string? sort = null, string? dir = null, JobVisibility? visibility = null, CancellationToken ct = default);
 
     /// <summary>
     /// Given a set of <c>FailureId</c>s, return the subset that has at least

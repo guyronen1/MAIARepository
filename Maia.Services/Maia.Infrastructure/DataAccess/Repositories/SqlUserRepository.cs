@@ -63,4 +63,44 @@ public sealed class SqlUserRepository(IDbContextFactory<MaiaDbContext> factory) 
         return await db.Users.CountAsync(
             u => u.UserId != excludingUserId && u.IsActive && u.RoleId == adminRoleId, ct);
     }
+
+    public async Task<IReadOnlySet<int>> GetAssignedJobIdsAsync(int userId, CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var ids = await db.UserMonitoredJobs
+            .Where(a => a.UserId == userId)
+            .Select(a => a.MonitoredJobId)
+            .ToListAsync(ct);
+        return ids.ToHashSet();
+    }
+
+    public async Task<IReadOnlyDictionary<int, int>> GetAssignedJobCountsAsync(CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        return await db.UserMonitoredJobs
+            .GroupBy(a => a.UserId)
+            .Select(g => new { UserId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.UserId, x => x.Count, ct);
+    }
+
+    public async Task SetJobAccessAsync(
+        int userId, bool restrictToAssignedJobs, IReadOnlyCollection<int> jobIds, CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var user = await db.Users
+            .Include(u => u.JobAccess)
+            .FirstOrDefaultAsync(u => u.UserId == userId, ct)
+            ?? throw new InvalidOperationException($"User {userId} not found.");
+
+        user.RestrictToAssignedJobs = restrictToAssignedJobs;
+
+        // Diff against the current set so unchanged rows aren't deleted and re-added.
+        var wanted = jobIds.ToHashSet();
+        foreach (var row in user.JobAccess.Where(a => !wanted.Contains(a.MonitoredJobId)).ToList())
+            user.JobAccess.Remove(row);
+        foreach (var id in wanted.Except(user.JobAccess.Select(a => a.MonitoredJobId)).ToList())
+            user.JobAccess.Add(new UserMonitoredJob { UserId = userId, MonitoredJobId = id });
+
+        await db.SaveChangesAsync(ct);   // single SaveChanges = one implicit transaction
+    }
 }

@@ -14,9 +14,21 @@ export interface AppUser {
   mustChangePassword: boolean;
   createdAt: string;
   lastLoginAt: string | null;
+  /** Job access: true = sees every job ("All jobs"); false = only assigned jobs.
+   *  Administrators always see every job regardless. */
+  allJobs: boolean;
+  /** Number of assigned jobs (meaningful when allJobs is false). */
+  jobCount: number;
 }
 
-export interface CreateUserRequest { username: string; password: string; role: MaiaRole; }
+/** GET/PUT /api/users/{id}/jobs — the "All jobs" switch plus the assigned job ids. */
+export interface JobAccess { allJobs: boolean; jobIds: number[]; }
+
+export interface CreateUserRequest {
+  username: string; password: string; role: MaiaRole;
+  /** Omitted = server default (all jobs). */
+  allJobs?: boolean; jobIds?: number[];
+}
 export interface UpdateUserRequest { role: MaiaRole; isActive: boolean; }
 export interface ResetPasswordRequest { newPassword: string; }
 
@@ -40,5 +52,11 @@ export class UsersService {
   }
   resetPassword(id: number, req: ResetPasswordRequest): Observable<void> {
     return this.http.post<void>(`${this.base}/${id}/reset-password`, req);
+  }
+  getJobs(id: number): Observable<JobAccess> {
+    return this.http.get<JobAccess>(`${this.base}/${id}/jobs`);
+  }
+  setJobs(id: number, access: JobAccess): Observable<void> {
+    return this.http.put<void>(`${this.base}/${id}/jobs`, access);
   }
 }
